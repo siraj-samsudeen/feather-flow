@@ -117,25 +117,35 @@ rm -f "$INSTALL_DIR/install.sh"
 info "Installed to $INSTALL_DIR"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 4: Register skills directory in ~/.claude/settings.json
+# Step 4: Create symlinks in ~/.claude/skills/
 #
-# Uses python3 for safe JSON manipulation — available on macOS and most Linux.
+# Claude Code discovers skills from ~/.claude/skills/<name>/SKILL.md.
+# We symlink each feather skill directory so Claude Code finds them,
+# while the actual files live in ~/.claude/feather-flow/.
 # ─────────────────────────────────────────────────────────────────────────────
 
-info "Registering skills in Claude settings..."
+info "Creating skill symlinks in ~/.claude/skills/..."
 
-python3 -c "
-import json, pathlib
-p = pathlib.Path.home() / '.claude' / 'settings.json'
-s = json.loads(p.read_text()) if p.exists() else {}
-perms = s.setdefault('permissions', {})
-dirs = perms.setdefault('additionalDirectories', [])
-entry = str(pathlib.Path.home() / '.claude' / 'feather-flow' / 'skills')
-if entry not in dirs: dirs.append(entry)
-p.write_text(json.dumps(s, indent=2) + '\n')
-"
+SYMLINK_TARGET="$HOME/.claude/skills"
+mkdir -p "$SYMLINK_TARGET"
 
-info "Skills directory registered in ~/.claude/settings.json"
+LINK_COUNT=0
+for skill_dir in "$SKILLS_DIR"/feather:*/; do
+    skill_name="$(basename "$skill_dir")"
+    link_path="$SYMLINK_TARGET/$skill_name"
+
+    # Remove existing symlink or directory if present
+    if [ -L "$link_path" ]; then
+        rm "$link_path"
+    elif [ -d "$link_path" ]; then
+        rm -rf "$link_path"
+    fi
+
+    ln -s "$skill_dir" "$link_path"
+    LINK_COUNT=$((LINK_COUNT + 1))
+done
+
+info "$LINK_COUNT skill symlinks created"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 5: Clean up temp files (remote install only)

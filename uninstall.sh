@@ -3,13 +3,31 @@ set -e
 
 echo "This will uninstall feather-flow by removing:"
 echo "  - ~/.claude/feather-flow/"
-echo "  - ~/.claude/feather-flow/skills from settings.json additionalDirectories"
-echo "  - Any old feather skills from ~/.claude/skills/ (directories starting with 'feather:')"
+echo "  - feather:* symlinks from ~/.claude/skills/"
 echo ""
 read -p "Continue? [y/N] " confirm
 if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
   echo "Aborted."
   exit 0
+fi
+
+# Remove feather:* symlinks from ~/.claude/skills/
+removed=0
+for link in "$HOME/.claude/skills"/feather:*; do
+  if [ -L "$link" ]; then
+    rm "$link"
+    echo "Removed symlink: $(basename "$link")"
+    removed=$((removed + 1))
+  elif [ -d "$link" ]; then
+    rm -rf "$link"
+    echo "Removed directory: $(basename "$link")"
+    removed=$((removed + 1))
+  fi
+done
+if [ "$removed" -eq 0 ]; then
+  echo "No feather skills found in ~/.claude/skills/."
+else
+  echo "Removed $removed feather skills."
 fi
 
 # Remove feather-flow directory
@@ -18,33 +36,6 @@ if [ -d "$HOME/.claude/feather-flow" ]; then
   echo "Removed ~/.claude/feather-flow/"
 else
   echo "~/.claude/feather-flow/ not found, skipping."
-fi
-
-# Remove feather-flow/skills from additionalDirectories in settings.json
-python3 -c "
-import json, pathlib
-p = pathlib.Path.home() / '.claude' / 'settings.json'
-if not p.exists(): exit()
-s = json.loads(p.read_text())
-perms = s.get('permissions', {})
-dirs = perms.get('additionalDirectories', [])
-entry = str(pathlib.Path.home() / '.claude' / 'feather-flow' / 'skills')
-if entry in dirs: dirs.remove(entry)
-p.write_text(json.dumps(s, indent=2) + '\n')
-"
-echo "Cleaned up settings.json."
-
-# Remove old feather skills from ~/.claude/skills/
-found_old=false
-for dir in "$HOME/.claude/skills"/feather:*; do
-  if [ -d "$dir" ]; then
-    rm -rf "$dir"
-    echo "Removed old skill: $(basename "$dir")"
-    found_old=true
-  fi
-done
-if [ "$found_old" = false ]; then
-  echo "No old feather skills found in ~/.claude/skills/."
 fi
 
 echo ""
