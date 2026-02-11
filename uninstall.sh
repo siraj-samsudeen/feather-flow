@@ -26,7 +26,8 @@ import json, pathlib
 p = pathlib.Path.home() / '.claude' / 'settings.json'
 if not p.exists(): exit()
 s = json.loads(p.read_text())
-dirs = s.get('additionalDirectories', [])
+perms = s.get('permissions', {})
+dirs = perms.get('additionalDirectories', [])
 entry = str(pathlib.Path.home() / '.claude' / 'feather-flow' / 'skills')
 if entry in dirs: dirs.remove(entry)
 p.write_text(json.dumps(s, indent=2) + '\n')

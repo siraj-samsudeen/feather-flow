@@ -128,7 +128,8 @@ python3 -c "
 import json, pathlib
 p = pathlib.Path.home() / '.claude' / 'settings.json'
 s = json.loads(p.read_text()) if p.exists() else {}
-dirs = s.setdefault('additionalDirectories', [])
+perms = s.setdefault('permissions', {})
+dirs = perms.setdefault('additionalDirectories', [])
 entry = str(pathlib.Path.home() / '.claude' / 'feather-flow' / 'skills')
 if entry not in dirs: dirs.append(entry)
 p.write_text(json.dumps(s, indent=2) + '\n')
