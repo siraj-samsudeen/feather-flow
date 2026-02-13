@@ -1,6 +1,6 @@
 ---
 name: feather:setup-tdd-guard
-description: Set up TDD Guard with Vitest to enforce test-first development. Blocks implementation code until tests exist. Use when the user asks to set up TDD guard, configure TDD enforcement, install tdd-guard, enable test-first workflow, or add pre-tool-use hooks for test-driven development.
+description: Sets up TDD Guard with Vitest to enforce test-first development. Blocks implementation code until tests exist. Use when the user asks to set up TDD guard, configure TDD enforcement, install tdd-guard, enable test-first workflow, or add pre-tool-use hooks for test-driven development.
 ---
 
 # Set Up TDD Guard
@@ -28,7 +28,7 @@ git status  # Must be clean (no uncommitted changes)
 
 **After smoke test passes (step 10b blocks the write):**
 ```bash
-git add -A
+git add vitest.config.ts .claude/settings.json src/test/setup.ts package.json package-lock.json .gitignore
 git commit -m "Set up TDD Guard with Vitest"
 ```
 
@@ -105,6 +105,8 @@ export default defineConfig({
 - `setupFiles` - For jest-dom matchers
 - `coverage.thresholds` - **Fails tests if coverage drops below 100%**
 - `coverage.exclude` - Ignores test files, config, and generated code
+
+**Adapt to your stack:** The config above assumes React + Convex. Remove `@vitejs/plugin-react` and `@testing-library/react` for non-React projects. Remove `convex/_generated/` from coverage exclusions if not using Convex.
 
 ### 4. Create Test Setup File
 
@@ -330,7 +332,7 @@ EOF
 chmod +x .git/hooks/pre-commit
 ```
 
-**Why this matters:** Without enforcement, coverage checks get skipped. This was discovered when an agent committed code without running coverage first.
+**Why:** Without enforcement, agents may commit code without running coverage first.
 
 **Legitimate bypass cases:**
 - WIP commits: `git commit --no-verify -m "WIP: incomplete"`
@@ -346,7 +348,7 @@ The `--no-verify` flag is standard git behavior and requires explicit intent to 
 ### Hook not working
 - `/clear` does not reload hooks. Must start a new session: `/exit` then `claude -c`, or close and reopen.
 - Verify global CLI: `command -v tdd-guard && tdd-guard --version`. If not found, install: `npm install -g tdd-guard`.
-- Verify hooks loaded: run `/hooks` in Claude Code and confirm all three hooks (PreToolUse, UserPromptSubmit, SessionStart) are listed.
+- Verify hooks loaded: run `/hooks` in Claude Code and confirm both hooks (PreToolUse, SessionStart) are listed.
 - `tdd-guard` reads stdin from hook context; it may hang when run directly in a terminal. Use the smoke test (step 10b) to confirm.
 - Do **not** use `npx tdd-guard` as the hook command. The CLI must be installed globally.
 
