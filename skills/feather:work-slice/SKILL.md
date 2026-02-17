@@ -66,18 +66,22 @@ Use `/feather:derive-tests`:
 
 With tdd-guard hook enforced:
 
-#### RED Phase
-1. Write test for first scenario
-2. **VERIFY IT FAILS** - run tests, show output
-3. Commit: `git commit -m "RED: [test description]"`
+For each scenario:
 
-#### GREEN Phase
+#### RED
+1. Write test for the scenario
+2. **VERIFY IT FAILS** — run tests, show output
+
+#### GREEN
 1. Write minimal code to pass
-2. **VERIFY IT PASSES** - run tests, show output
-3. Commit: `git commit -m "GREEN: [implementation description]"`
+2. **VERIFY IT PASSES** — run tests, show output
+3. **Commit both test + implementation together:**
+   `git commit -m "[SLICE-ID]: [scenario description]"`
+
+The pre-commit hook runs tests, so commits are only allowed when the tree is green. RED and GREEN always land in the same commit.
 
 #### Repeat
-Continue RED→GREEN for each scenario until all pass.
+Continue RED→GREEN→commit for each scenario until all pass.
 
 ### Step 5: Verify Coverage
 
@@ -222,21 +226,19 @@ npm run lint                   # Lint errors
 2. **TDD hook must be active** - Can't circumvent with words
 3. **100% coverage required** - No exceptions
 4. **Must STOP after completion** - Human-in-the-loop
-5. **RED before GREEN** - Hook enforces this
+5. **RED before GREEN, commit at GREEN** - Hook enforces test-first; pre-commit hook ensures commits only when tree is green
 
 ## Git Workflow
 
-Each TDD cycle gets atomic commits:
+Each TDD cycle (RED→GREEN) is committed together once tests pass:
 
 ```bash
-# RED phase
-git add src/components/TodoList.test.tsx
-git commit -m "RED: todo creation should persist to database"
-
-# GREEN phase
-git add src/components/TodoList.tsx
-git commit -m "GREEN: implement todo creation with Convex mutation"
+# After GREEN — commit test + implementation together
+git add src/components/TodoList.test.tsx src/components/TodoList.tsx
+git commit -m "TODO-1: todo creation persists to database"
 ```
+
+The pre-commit hook runs `npm run test:coverage`, so the commit only succeeds when the tree is green. No separate RED commits.
 
 After slice complete:
 ```bash
@@ -279,17 +281,15 @@ Deriving tests...
 
 TDD Loop:
 
-RED: Login form renders
-  → Test written, running... FAIL (expected)
-  → Committed: "RED: login form should render"
+Scenario 1: Login form renders
+  RED:   Test written, running... FAIL (expected)
+  GREEN: Implementation written, running... PASS
+  → Committed: "AUTH-1: login form renders"
 
-GREEN: Login form renders
-  → Implementation written, running... PASS
-  → Committed: "GREEN: implement login form component"
-
-RED: Login submits credentials
-  → Test written, running... FAIL (expected)
-  → Committed: "RED: login should submit credentials"
+Scenario 2: Login submits credentials
+  RED:   Test written, running... FAIL (expected)
+  GREEN: Implementation written, running... PASS
+  → Committed: "AUTH-1: login submits credentials"
 
 ... [continues for all scenarios]
 
