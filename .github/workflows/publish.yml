@@ -1,0 +1,52 @@
+name: Publish to npm
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Compare versions and auto-bump if needed
+        id: version
+        run: |
+          LOCAL=$(node -p "require('./package.json').version")
+          REMOTE=$(npm view feather-flow version 2>/dev/null || echo "0.0.0")
+          echo "local=$LOCAL" >> "$GITHUB_OUTPUT"
+          echo "remote=$REMOTE" >> "$GITHUB_OUTPUT"
+
+          if [ "$LOCAL" = "$REMOTE" ]; then
+            echo "Versions match ($LOCAL) — auto-bumping patch"
+            npm version patch --no-git-tag-version
+            NEW=$(node -p "require('./package.json').version")
+            echo "$NEW" > VERSION
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+            echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version already bumped ($LOCAL vs $REMOTE) — publishing as-is"
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+
+      - name: Commit version bump back to main
+        if: steps.version.outputs.bumped == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json VERSION
+          git commit -m "chore: bump to v${{ steps.version.outputs.new }} [skip ci]"
+          git push

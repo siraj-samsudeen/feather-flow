@@ -13,7 +13,7 @@ const cacheDir = path.join(installDir, 'cache');
 const cacheFile = path.join(cacheDir, 'update-check.json');
 const versionFile = path.join(installDir, 'VERSION');
 
-const CACHE_TTL = 24 * 60 * 60; // 24 hours in seconds
+const CACHE_TTL = 6 * 60 * 60; // 6 hours in seconds
 
 // ── Sync: read cached result and notify if update available ──
 
