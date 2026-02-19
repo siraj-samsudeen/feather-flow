@@ -19,16 +19,16 @@ Read the installed version:
 cat ~/.claude/feather-flow/VERSION
 ```
 
-Check the latest published version:
-
-```bash
-npm view feather-flow version 2>/dev/null
-```
-
-If `npm view` fails (package not published yet), try fetching from GitHub:
+Check the latest published version from GitHub:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/siraj-samsudeen/feather-flow/main/VERSION
+```
+
+If the GitHub fetch fails, fall back to npm:
+
+```bash
+npm view feather-flow version 2>/dev/null
 ```
 
 **If versions match:** Tell the user "You're on the latest version (vX.Y.Z)" and stop.
@@ -54,19 +54,13 @@ Wait for confirmation. If they decline, stop.
 ### Step 4: Download new version
 
 ```bash
-cd /tmp && npm pack feather-flow 2>/dev/null
-```
-
-If npm pack fails (package not published), clone from GitHub instead:
-
-```bash
 cd /tmp && rm -rf feather-flow-update && git clone --depth 1 https://github.com/siraj-samsudeen/feather-flow.git feather-flow-update
 ```
 
-Extract the package if using npm pack:
+If git clone fails, fall back to npm:
 
 ```bash
-cd /tmp && mkdir -p feather-flow-update && tar -xzf feather-flow-*.tgz -C feather-flow-update --strip-components=1
+cd /tmp && npm pack feather-flow 2>/dev/null && mkdir -p feather-flow-update && tar -xzf feather-flow-*.tgz -C feather-flow-update --strip-components=1
 ```
 
 The new files are now in `/tmp/feather-flow-update/`.

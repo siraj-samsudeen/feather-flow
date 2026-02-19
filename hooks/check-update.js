@@ -46,6 +46,7 @@ if (!skipBackground) {
 
   const child = spawn(process.execPath, ['-e', `
     const fs = require('fs');
+    const https = require('https');
     const { execSync } = require('child_process');
 
     const cacheFile = ${JSON.stringify(cacheFile)};
@@ -56,23 +57,48 @@ if (!skipBackground) {
       installed = fs.readFileSync(versionFile, 'utf8').trim();
     } catch (_) {}
 
-    let latest = null;
-    try {
-      latest = execSync('npm view feather-flow version', {
-        encoding: 'utf8',
-        timeout: 10000,
-        windowsHide: true
-      }).trim();
-    } catch (_) {}
+    function fetchGitHub() {
+      return new Promise((resolve, reject) => {
+        https.get('https://raw.githubusercontent.com/siraj-samsudeen/feather-flow/main/VERSION', {
+          timeout: 10000
+        }, (res) => {
+          if (res.statusCode !== 200) return reject(new Error('HTTP ' + res.statusCode));
+          let data = '';
+          res.on('data', (chunk) => data += chunk);
+          res.on('end', () => resolve(data.trim()));
+        }).on('error', reject);
+      });
+    }
 
-    const result = {
-      update_available: latest && installed !== latest,
-      installed,
-      latest: latest || 'unknown',
-      checked: Math.floor(Date.now() / 1000)
-    };
+    function fetchNpm() {
+      try {
+        return execSync('npm view feather-flow version', {
+          encoding: 'utf8',
+          timeout: 10000,
+          windowsHide: true
+        }).trim();
+      } catch (_) {
+        return null;
+      }
+    }
 
-    fs.writeFileSync(cacheFile, JSON.stringify(result));
+    (async () => {
+      let latest = null;
+      try {
+        latest = await fetchGitHub();
+      } catch (_) {
+        latest = fetchNpm();
+      }
+
+      const result = {
+        update_available: latest && installed !== latest,
+        installed,
+        latest: latest || 'unknown',
+        checked: Math.floor(Date.now() / 1000)
+      };
+
+      fs.writeFileSync(cacheFile, JSON.stringify(result));
+    })();
   `], {
     stdio: 'ignore',
     windowsHide: true,
