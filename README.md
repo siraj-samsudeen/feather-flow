@@ -36,6 +36,16 @@ git clone https://github.com/siraj-samsudeen/feather-flow.git && cd feather-flow
 Note: The bash installer doesn't include manifest tracking or interactive merge on update.
 </details>
 
+<details>
+<summary>Alternative: Vercel Skills CLI</summary>
+
+```bash
+npx skills add siraj-samsudeen/feather-flow
+```
+
+This installs skills directly from GitHub. You get working skills but not the manifest tracking, update notifications, or interactive merge that the npm installer provides.
+</details>
+
 ## Quick Start
 
 After installing, start with:
