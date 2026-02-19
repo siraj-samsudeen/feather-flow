@@ -4,33 +4,37 @@ A lightweight, TDD-enforced development workflow for Claude Code.
 
 ## Why feather-flow
 
-Most workflow tools for AI coding assistants are heavy — dozens of dependencies, complex configuration, steep learning curves. feather-flow takes the opposite approach: TDD-enforced quality gates at every step, so you ship working code instead of debugging your tooling. It ships as 21 skills with zero dependencies — pure markdown, no Node.js, no build step.
+Most workflow tools for AI coding assistants are heavy — dozens of dependencies, complex configuration, steep learning curves. feather-flow takes the opposite approach: TDD-enforced quality gates at every step, so you ship working code instead of debugging your tooling. It ships as 21 skills with zero dependencies — pure markdown skills, zero runtime dependencies.
 
 ## Comparison
 
 | | feather-flow | GSD |
 |---|---|---|
-| Skills/Commands | 21 | 35+ commands, 15 agents, 37 workflows |
-| Install | `curl \| bash` | npm + Node.js |
-| Dependencies | None | Node.js, npm |
+| Skills/Commands | 23 | 35+ commands, 15 agents, 37 workflows |
+| Install | `npx feather-flow` | npm + Node.js |
+| Dependencies | Node.js 18+ (for install only) | Node.js, npm |
 | Config needed | None | config.json with 20+ options |
 | Best for | Quick projects, learning | Enterprise teams, complex orchestration |
 
 ## Install
 
-**One-line install:**
-
 ```bash
-curl -fsSL https://raw.githubusercontent.com/siraj-samsudeen/feather-flow/main/install.sh | bash
+npx feather-flow
 ```
 
-**From clone:**
+This installs skills to `~/.claude/feather-flow/`, creates symlinks, and sets up background update notifications.
+
+Restart Claude Code, then type `/feather:help` to get started.
+
+<details>
+<summary>Alternative: install from source</summary>
 
 ```bash
 git clone https://github.com/siraj-samsudeen/feather-flow.git && cd feather-flow && ./install.sh
 ```
 
-After either method, restart Claude Code, then type `/feather:help` to get started.
+Note: The bash installer doesn't include manifest tracking or interactive merge on update.
+</details>
 
 ## Quick Start
 
@@ -51,7 +55,7 @@ Break work into vertical slices, each independently shippable:
 
 `/feather:slice-project` → `/feather:work-slice` (repeat) → `/feather:finish`
 
-## All 21 Skills
+## All 23 Skills
 
 | Skill | Phase | What it does |
 |---|---|---|
@@ -77,15 +81,18 @@ Break work into vertical slices, each independently shippable:
 | `/feather:isolate-work` | Utility | Create isolated workspace (worktree/branch) |
 | `/feather:create-issue` | Utility | Create GitHub issue from context |
 | `/feather:polish` | Utility | Quick quality improvements |
+| `/feather:update` | Utility | Interactive update with local mod detection |
 
 ## Update / Uninstall
 
-**Update:** Run the install command again — it detects the existing version and upgrades.
+**Update:** Inside Claude Code, run `/feather:update` — it shows what changed, detects your local modifications, and walks you through an interactive merge.
+
+You'll also see a notification at session start when an update is available.
 
 **Uninstall:**
 
 ```bash
-~/.claude/feather-flow/uninstall.sh
+npx feather-flow uninstall
 ```
 
 ## Built on Superpowers

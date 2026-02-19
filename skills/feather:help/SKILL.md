@@ -102,6 +102,7 @@ For larger projects spanning multiple sessions:
 |-------|-------------|
 | `/feather:workflow` | Full workflow documentation |
 | `/feather:help` | This help (you are here) |
+| `/feather:update` | Check for updates, interactive merge |
 
 ## Core Principles
 

@@ -4,8 +4,19 @@ All notable changes to feather-flow will be documented in this file.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-02-17
+
+### Added
+- **npm-based installer** — `npx feather-flow` replaces `curl | bash` as the primary install method
+- **`feather:update`** — new skill for interactive updates with local modification detection and per-file merge choices
+- **Manifest tracking** — SHA256 hashes of all installed files enable local modification detection
+- **Background update notifications** — SessionStart hook checks npm registry daily and notifies when updates are available
+- **`bin/cli.js`** — zero-dependency Node.js CLI (install, uninstall, version commands)
+
 ### Changed
 - **`feather:setup-tdd-guard`** is now stack-agnostic — installs only vitest, tdd-guard-vitest, and @vitest/coverage-v8. No React/Convex dependencies.
+- **`install.sh`** — deprecated in favor of `npx feather-flow` (still works as fallback)
+- Version bumped to 1.1.0
 
 ### Added
 - **`feather:setup-react-testing`** — new add-on skill for React projects. Installs @testing-library/react, jsdom, @vitejs/plugin-react, and configures vitest for component testing. Requires `feather:setup-tdd-guard` as prerequisite.

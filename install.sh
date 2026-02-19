@@ -2,13 +2,22 @@
 set -e
 
 # ─────────────────────────────────────────────────────────────────────────────
-# feather-flow installer
+# feather-flow installer (DEPRECATED)
+#
+# Prefer: npx feather-flow
+#
+# The npm installer provides manifest-based tracking, interactive merge on
+# update (/feather:update), and background update notifications.
+#
+# This bash installer is kept as a fallback for environments without Node.js.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/siraj-samsudeen/feather-flow/main/install.sh | bash
 #   -- or --
 #   git clone https://github.com/siraj-samsudeen/feather-flow.git && cd feather-flow && bash install.sh
 # ─────────────────────────────────────────────────────────────────────────────
+
+printf "\033[1;33mNote:\033[0m Prefer \033[1mnpx feather-flow\033[0m for install/update (includes interactive merge + update notifications).\n\n"
 
 REPO="siraj-samsudeen/feather-flow"
 INSTALL_DIR="$HOME/.claude/feather-flow"
