@@ -16,25 +16,25 @@ Most workflow tools for AI coding assistants are heavy — dozens of dependencie
 | Config needed | None | config.json with 20+ options |
 | Best for | Quick projects, learning | Enterprise teams, complex orchestration |
 
-## Install
+## Getting Started
+
+**Install:**
 
 ```bash
 npx feather-flow
 ```
 
-This installs skills to `~/.claude/feather-flow/`, creates symlinks, and sets up background update notifications.
+Restart Claude Code, then type `/feather:help` to see all skills or `/feather:workflow` to start a guided workflow.
 
-Restart Claude Code, then type `/feather:help` to get started.
+**Update:** You'll see a notification at session start when a new version is available. Run `/feather:update` inside Claude Code — it shows what changed, detects your local modifications, and walks you through an interactive merge.
 
-<details>
-<summary>Alternative: install from source</summary>
+**Uninstall:** `npx feather-flow uninstall`
 
-```bash
-git clone https://github.com/siraj-samsudeen/feather-flow.git && cd feather-flow && ./install.sh
-```
+**What you get:**
 
-Note: The bash installer doesn't include manifest tracking or interactive merge on update.
-</details>
+- All skills available as `/feather:*` commands in Claude Code
+- Automatic daily check for new versions (notifies you at session start)
+- Update preserves any skills you've customized locally
 
 <details>
 <summary>Alternative: Vercel Skills CLI</summary>
@@ -43,15 +43,8 @@ Note: The bash installer doesn't include manifest tracking or interactive merge 
 npx skills add siraj-samsudeen/feather-flow
 ```
 
-This installs skills directly from GitHub. You get working skills but not the manifest tracking, update notifications, or interactive merge that the npm installer provides.
+Installs skills directly from GitHub. You get working skills but no manifest tracking, no update notifications, and no interactive merge.
 </details>
-
-## Quick Start
-
-After installing, start with:
-
-- `/feather:help` — See all available skills and when to use each
-- `/feather:workflow` — The main entry point that guides you through the full development flow
 
 ## The Two Modes
 
@@ -92,18 +85,6 @@ Break work into vertical slices, each independently shippable:
 | `/feather:create-issue` | Utility | Create GitHub issue from context |
 | `/feather:polish` | Utility | Quick quality improvements |
 | `/feather:update` | Utility | Interactive update with local mod detection |
-
-## Update / Uninstall
-
-**Update:** Inside Claude Code, run `/feather:update` — it shows what changed, detects your local modifications, and walks you through an interactive merge.
-
-You'll also see a notification at session start when an update is available.
-
-**Uninstall:**
-
-```bash
-npx feather-flow uninstall
-```
 
 ## Built on Superpowers
 
