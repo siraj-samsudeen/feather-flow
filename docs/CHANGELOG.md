@@ -4,6 +4,8 @@ All notable changes to feather-flow will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-02-20
+
 ### Fixed
 - **`feather:update` zsh bug** — inline `node -e` scripts caused zsh `!` history expansion errors (#4)
 - **`feather:update` noisy UX** — rewritten as a UX script that shows clean summaries instead of step-by-step code narration (#4)
@@ -17,6 +19,9 @@ All notable changes to feather-flow will be documented in this file.
 ### Changed
 - **`bin/cli.js`** — refactored to use shared `bin/lib/manifest.js` module (no behavior change)
 - **`hooks/check-update.js`** — cache TTL changed from 6 hours to 24 hours, notification limited to once per day
+
+[Unreleased]: https://github.com/siraj-samsudeen/feather-flow/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/siraj-samsudeen/feather-flow/releases/tag/v1.2.0
 
 ## [1.1.0] - 2026-02-17
 
