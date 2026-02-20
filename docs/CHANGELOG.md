@@ -4,6 +4,8 @@ All notable changes to feather-flow will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-02-20
+
 ### Changed
 - **`feather:update` zero-prompt UX** — consolidated into 2 node scripts with `allowed-tools` frontmatter, eliminating all permission prompts
 - **`feather:update` clearer merge question** — "Keep mine / Take upstream" replaced with "Keep your version?" yes/no
@@ -16,7 +18,8 @@ All notable changes to feather-flow will be documented in this file.
 ### Fixed
 - **Kept files overwritten on subsequent updates** — manifest now stores upstream hash for kept files so they're always detected as modified (#4)
 
-[Unreleased]: https://github.com/siraj-samsudeen/feather-flow/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/siraj-samsudeen/feather-flow/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/siraj-samsudeen/feather-flow/releases/tag/v1.2.2
 [1.2.1]: https://github.com/siraj-samsudeen/feather-flow/releases/tag/v1.2.1
 
 ## [1.2.0] - 2026-02-20
