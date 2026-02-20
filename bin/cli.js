@@ -7,8 +7,8 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const crypto = require('crypto');
 const readline = require('readline');
+const { sha256, walkFiles, copyDirRecursive, rmRecursive, generateManifest } = require('./lib/manifest');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -44,42 +44,6 @@ function info(msg) { console.log(`${BLUE}==>${RESET} ${msg}`); }
 function warn(msg) { console.log(`${YELLOW}warning:${RESET} ${msg}`); }
 function error(msg) { console.error(`${RED}error:${RESET} ${msg}`); process.exit(1); }
 
-function sha256(content) {
-  return crypto.createHash('sha256').update(content).digest('hex');
-}
-
-function copyDirRecursive(src, dest) {
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      copyDirRecursive(srcPath, destPath);
-    } else {
-      fs.copyFileSync(srcPath, destPath);
-    }
-  }
-}
-
-function rmRecursive(target) {
-  fs.rmSync(target, { recursive: true, force: true });
-}
-
-/** Collect all files under dir, relative to base */
-function walkFiles(dir, base) {
-  base = base || dir;
-  let results = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      results = results.concat(walkFiles(full, base));
-    } else {
-      results.push(path.relative(base, full));
-    }
-  }
-  return results;
-}
-
 function ask(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
@@ -88,33 +52,6 @@ function ask(question) {
       resolve(answer.trim().toLowerCase());
     });
   });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Manifest
-// ─────────────────────────────────────────────────────────────────────────────
-
-function generateManifest(installDir, version) {
-  const files = {};
-  const trackDirs = ['skills', 'hooks'];
-
-  for (const dirName of trackDirs) {
-    const dirPath = path.join(installDir, dirName);
-    if (!fs.existsSync(dirPath)) continue;
-    for (const relFile of walkFiles(dirPath, installDir)) {
-      const content = fs.readFileSync(path.join(installDir, relFile));
-      files[relFile] = sha256(content);
-    }
-  }
-
-  const manifest = {
-    version,
-    installedAt: new Date().toISOString(),
-    files,
-  };
-
-  fs.writeFileSync(MANIFEST_FILE, JSON.stringify(manifest, null, 2) + '\n');
-  return manifest;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -281,7 +218,7 @@ async function install() {
   info(`${linkCount} skill symlinks created`);
 
   // Generate manifest
-  const manifest = generateManifest(INSTALL_DIR, newVersion);
+  const manifest = generateManifest(INSTALL_DIR, newVersion, MANIFEST_FILE);
   info(`Manifest generated with ${Object.keys(manifest.files).length} tracked files`);
 
   // Patch settings.json

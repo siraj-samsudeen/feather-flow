@@ -13,21 +13,25 @@ const cacheDir = path.join(installDir, 'cache');
 const cacheFile = path.join(cacheDir, 'update-check.json');
 const versionFile = path.join(installDir, 'VERSION');
 
-const CACHE_TTL = 6 * 60 * 60; // 6 hours in seconds
+const CACHE_TTL = 24 * 60 * 60; // 24 hours in seconds
 
-// ── Sync: read cached result and notify if update available ──
+// ── Sync: read cached result and notify if update available (once per day) ──
 
 try {
   if (fs.existsSync(cacheFile)) {
     const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-    if (cache.update_available && cache.installed && cache.latest) {
+    const today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+    if (cache.update_available && cache.installed && cache.latest && cache.notified_date !== today) {
       process.stdout.write(
         `feather-flow update available: v${cache.installed} → v${cache.latest}. Run /feather:update to upgrade.\n`
       );
+      // Mark as notified today so we don't prompt again
+      cache.notified_date = today;
+      fs.writeFileSync(cacheFile, JSON.stringify(cache));
     }
   }
 } catch (_) {
-  // Cache read failed — not critical
+  // Cache read/write failed — not critical
 }
 
 // ── Async: spawn background process to check npm registry ──
