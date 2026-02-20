@@ -1,3 +1,4 @@
 node_modules/
 *.tgz
 cache/
+.DS_Store
