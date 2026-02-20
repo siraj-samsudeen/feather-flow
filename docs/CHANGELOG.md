@@ -4,8 +4,13 @@ All notable changes to feather-flow will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-02-20
+
 ### Fixed
 - **Kept files overwritten on subsequent updates** — manifest now stores upstream hash for kept files so they're always detected as modified (#4)
+
+[Unreleased]: https://github.com/siraj-samsudeen/feather-flow/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/siraj-samsudeen/feather-flow/releases/tag/v1.2.1
 
 ## [1.2.0] - 2026-02-20
 
