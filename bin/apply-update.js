@@ -7,7 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { walkFiles, readManifest, generateManifest } = require('./lib/manifest');
+const { sha256, walkFiles, readManifest, generateManifest } = require('./lib/manifest');
 
 const args = process.argv.slice(2);
 const installDir = args[0];
@@ -89,6 +89,20 @@ if (fs.existsSync(binSrc)) {
 // Regenerate manifest
 const newVersion = fs.readFileSync(path.join(installDir, 'VERSION'), 'utf8').trim();
 const newManifest = generateManifest(installDir, newVersion);
+
+// For kept files, store the UPSTREAM hash so they're detected as modified next time
+if (keepFiles.size > 0) {
+  for (const file of keepFiles) {
+    const upstreamPath = path.join(newVersionDir, file);
+    if (fs.existsSync(upstreamPath)) {
+      newManifest.files[file] = sha256(fs.readFileSync(upstreamPath));
+    }
+  }
+  fs.writeFileSync(
+    path.join(installDir, 'manifest.json'),
+    JSON.stringify(newManifest, null, 2) + '\n'
+  );
+}
 
 console.log(JSON.stringify({
   updated,

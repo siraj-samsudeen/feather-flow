@@ -4,6 +4,9 @@ All notable changes to feather-flow will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Kept files overwritten on subsequent updates** — manifest now stores upstream hash for kept files so they're always detected as modified (#4)
+
 ## [1.2.0] - 2026-02-20
 
 ### Fixed
