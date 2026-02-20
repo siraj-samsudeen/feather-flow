@@ -110,3 +110,9 @@ console.log(JSON.stringify({
   totalTracked: Object.keys(newManifest.files).length,
   version: newVersion,
 }));
+
+// Clean up temp directory if requested
+if (args.includes('--cleanup')) {
+  const { rmRecursive } = require('./lib/manifest');
+  rmRecursive(newVersionDir);
+}

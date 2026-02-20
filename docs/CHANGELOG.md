@@ -4,6 +4,13 @@ All notable changes to feather-flow will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **`feather:update` zero-prompt UX** — consolidated into 2 node scripts with `allowed-tools` frontmatter, eliminating all permission prompts
+- **`feather:update` clearer merge question** — "Keep mine / Take upstream" replaced with "Keep your version?" yes/no
+
+### Added
+- **`bin/update-check.js`** — single preflight script combining version check, download, and modification detection
+
 ## [1.2.1] - 2026-02-20
 
 ### Fixed

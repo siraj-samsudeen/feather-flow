@@ -1,6 +1,7 @@
 ---
 name: feather:update
 description: Check for feather-flow updates and apply them interactively, preserving local skill modifications.
+allowed-tools: Bash(node *), Read
 ---
 
 # Feather Update
@@ -16,51 +17,48 @@ described below.
 
 - `INSTALL_DIR` = `~/.claude/feather-flow`
 - `TMP_DIR` = `/tmp/feather-flow-update`
-- `SCRIPTS_DIR` = `INSTALL_DIR/bin` if it contains `check-modifications.js`, otherwise `TMP_DIR/bin` (bootstrap: the user's install may not have the bin/ scripts yet)
+- `SCRIPTS_DIR` = `INSTALL_DIR/bin` if it contains `update-check.js`, otherwise `TMP_DIR/bin` (bootstrap: the user's install may not have the bin/ scripts yet)
 
-## Phase 1: Version check
+## Phase 1: Preflight check
 
 Run silently:
 ```bash
-cat ~/.claude/feather-flow/VERSION 2>/dev/null
+node {SCRIPTS_DIR}/update-check.js
 ```
-```bash
-curl -fsSL https://raw.githubusercontent.com/siraj-samsudeen/feather-flow/main/VERSION 2>/dev/null
-```
-If curl fails, fallback: `npm view feather-flow version 2>/dev/null`
 
-**If versions match**, show the user:
-> You're on the latest version (v{version}).
+Parse the JSON output and handle each status:
 
-Stop.
-
-**If no installed version**, show the user:
+**If `not_installed`**, show the user:
 > feather-flow is not installed. Run `npx feather-flow` to install.
 
 Stop.
 
-## Phase 2: Download
+**If `check_failed`**, show the user:
+> Could not check for updates. Check your internet connection and try again.
 
-Run silently:
-```bash
-rm -rf /tmp/feather-flow-update && git clone --depth 1 https://github.com/siraj-samsudeen/feather-flow.git /tmp/feather-flow-update 2>/dev/null
-```
+Stop.
 
-If git clone fails, fallback silently:
-```bash
-cd /tmp && npm pack feather-flow 2>/dev/null && mkdir -p feather-flow-update && tar -xzf feather-flow-*.tgz -C feather-flow-update --strip-components=1
-```
+**If `up_to_date`**, show the user:
+> You're on the latest version (v{version}).
 
-If both fail, tell the user the download failed and stop.
+Stop.
 
-## Phase 3: Show what's new and confirm
+**If `download_failed`**, show the user:
+> Failed to download the update. Check your internet connection and try again.
 
-Read `TMP_DIR/docs/CHANGELOG.md`. Extract only the sections between the
-installed version and the latest version. Condense to key bullet points.
+Stop.
+
+**If `update_available`**, continue to Phase 2.
+
+## Phase 2: Show what's new and confirm
+
+From the preflight JSON, extract `changelog`, `localVersion`, and `remoteVersion`.
+Parse the changelog markdown — extract only the sections between the installed
+version and the latest version. Condense to key bullet points.
 
 Show the user:
 
-> **feather-flow v{latest} available** (you have v{installed})
+> **feather-flow v{remoteVersion} available** (you have v{localVersion})
 >
 > **What's new:**
 > - {condensed bullet point of each notable change}
@@ -71,17 +69,9 @@ Show the user:
 Wait for confirmation. If declined, run `rm -rf /tmp/feather-flow-update`
 silently and stop.
 
-## Phase 4: Check modifications
+## Phase 3: Handle modifications
 
-Determine SCRIPTS_DIR: check if `INSTALL_DIR/bin/check-modifications.js`
-exists. If yes, use `INSTALL_DIR/bin`. If not, use `TMP_DIR/bin`.
-
-Run silently:
-```bash
-node {SCRIPTS_DIR}/check-modifications.js {INSTALL_DIR} {TMP_DIR}
-```
-
-Parse the JSON output.
+From the preflight JSON, extract `modifications`.
 
 **If `legacy: true`** (no manifest — legacy bash install), show the user:
 > This is a legacy install without modification tracking.
@@ -89,52 +79,44 @@ Parse the JSON output.
 >
 > Proceed with clean update?
 
-If yes, proceed to Phase 5 with empty `--keep`. If no, clean up and stop.
+If yes, proceed to Phase 4 with empty `--keep`. If no, clean up and stop.
 
-**If no files are modified**, proceed directly to Phase 5 with empty `--keep`.
+**If no files are modified**, proceed directly to Phase 4 with empty `--keep`.
 
 **If files are modified**, show the user a summary:
 
 > {N} file(s) have local modifications:
 
-Then for **each** modified file, show a semantic summary of the key
-difference (read both versions to understand what changed — don't just show
-a raw diff). Ask the user:
+Then for **each** modified file, read both versions (local and upstream in
+TMP_DIR) to understand what changed. Show a semantic summary — don't just
+show a raw diff. Ask the user:
 
 > **{filepath}**
 >   Your version: {brief description of what the local version does differently}
 >   Upstream: {brief description of what the new upstream version does differently}
 >
-> Keep mine / Take upstream
+> **Keep your version?**
+> - Yes — keep your local changes
+> - No — overwrite with the new upstream version
 
-If the user wants to see the full diff before deciding, run
-`diff {INSTALL_DIR}/{file} {TMP_DIR}/{file}` and show the output, then ask again.
-
-Collect the list of files to keep.
+Collect the list of files to keep (those where the user said Yes).
 
 **If deleted files exist**, ask once:
 > You deleted {N} file(s) that exist in the new version. Restore them?
 
-## Phase 5: Apply update
+## Phase 4: Apply update
 
 Build the `--keep` argument from user choices (comma-separated paths of files
 the user chose to keep). If no files to keep, omit the flag.
 
 Run silently:
 ```bash
-node {SCRIPTS_DIR}/apply-update.js {INSTALL_DIR} {TMP_DIR} --keep "{keepList}"
+node {SCRIPTS_DIR}/apply-update.js {INSTALL_DIR} {TMP_DIR} --cleanup --keep "{keepList}"
 ```
 
-## Phase 6: Clean up and report
+Parse the JSON output and show the user:
 
-Run silently:
-```bash
-rm -rf /tmp/feather-flow-update
-```
-
-Show the user:
-
-> **Update complete** (v{old} → v{new}).
+> **Update complete** (v{localVersion} → v{remoteVersion}).
 > {updated} files updated, {skipped} files kept as-is.
 >
 > Restart Claude Code to pick up changes.
