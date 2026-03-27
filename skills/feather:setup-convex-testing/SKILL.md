@@ -1,52 +1,19 @@
 ---
 name: feather:setup-convex-testing
-description: "Checklist: Is Convex test infrastructure set up? Verify or create convex-test deps, vitest Convex settings, convex/test.setup.ts. Add-on to feather:setup-react-testing — run that first."
+description: "Checklist: Is Convex test infrastructure set up? Verify or create convex-test deps, vitest Convex settings, convex/test.setup.ts, and optional @convex-dev/auth support. Add-on to feather:setup-react-testing — run that first."
 ---
 
 # Set Up Convex Testing
+
+> **Testing Philosophy:** See [feather-testing-convex/TESTING-PHILOSOPHY.md](https://github.com/siraj-samsudeen/feather-testing-convex/blob/main/TESTING-PHILOSOPHY.md) for the integration-first approach, MECE framework, and decision tree.
+>
+> **API Reference & Examples:** See the [feather-testing-convex README](https://github.com/siraj-samsudeen/feather-testing-convex/blob/main/README.md) for fixtures, Session DSL, before/after examples, and setup files.
 
 Verify or create the Convex-specific test infrastructure for React + Convex integration testing using [feather-testing-convex](https://www.npmjs.com/package/feather-testing-convex).
 
 **Dual-purpose:** Use this checklist to set up Convex testing from scratch OR to diagnose why existing Convex tests won't run.
 
 **Prerequisite:** `/feather:setup-react-testing` must be completed first. This skill adds Convex-specific pieces on top of the React testing environment.
-
-## ⚠️ Philosophy: Integration Tests First
-
-**Do NOT write separate backend unit tests and mocked component tests.** The feather-testing-convex library enables true integration tests that test both layers together.
-
-### ❌ Anti-Pattern: Isolated Unit Tests
-```tsx
-// DON'T: Backend-only test
-test("todos.list returns data", async () => {
-  const t = convexTest(schema, modules);
-  // ... 15 lines of setup
-  const todos = await t.query(api.todos.list, {});
-  expect(todos).toHaveLength(1);
-});
-
-// DON'T: Component test with mocked backend
-vi.mock("convex/react", () => ({ useQuery: vi.fn() }));
-test("TodoList renders", () => {
-  vi.mocked(useQuery).mockReturnValue([{ text: "Buy milk" }]);
-  render(<TodoList />);
-  expect(screen.getByText("Buy milk")).toBeInTheDocument();
-});
-```
-
-### ✅ Correct Pattern: Integration Tests
-```tsx
-// DO: One test covers both backend + component
-test("shows seeded data", async ({ client, seed }) => {
-  await seed("todos", { text: "Buy milk", completed: false });
-  renderWithConvex(<TodoList />, client);
-  expect(await screen.findByText("Buy milk")).toBeInTheDocument();
-});
-```
-
-**Use mocks ONLY for:** loading spinners, error states — transient states that can't be produced with a real backend.
-
----
 
 ## Checklist
 
@@ -125,7 +92,42 @@ export const test = createConvexTest(schema, modules);
 export { renderWithConvex };
 ```
 
-### ☐ 4. At least one test passes
+### ☐ 4. (If using @convex-dev/auth) Auth testing support
+
+**Skip this step if your project doesn't use `@convex-dev/auth`.**
+
+**Install:**
+```bash
+npm install -D @convex-dev/auth
+```
+
+**Add vitest plugin** to `vitest.config.ts` plugins:
+```typescript
+import { convexTestProviderPlugin } from "feather-testing-convex/vitest-plugin";
+
+export default defineConfig({
+  plugins: [react(), convexTestProviderPlugin()],
+  // ... rest unchanged
+});
+```
+`ConvexTestAuthProvider` imports from an internal `@convex-dev/auth` path; the plugin adds a resolve alias so Vite can find it. Without it: `ERR_PACKAGE_PATH_NOT_EXPORTED`.
+> Upstream fix requested: [convex-auth#281](https://github.com/get-convex/convex-auth/issues/281).
+
+**Export `renderWithConvexAuth`** from `convex/test.setup.ts`:
+```typescript
+import { createConvexTest, renderWithConvex, renderWithConvexAuth } from "feather-testing-convex";
+// ...
+export { renderWithConvex, renderWithConvexAuth };
+```
+
+**Common mistakes:**
+- Missing vitest plugin → `ERR_PACKAGE_PATH_NOT_EXPORTED`. Plugin goes in `vitest.config.ts`, not test files.
+- Using `signIn`/`signOut` without `renderWithConvexAuth` — plain `ConvexTestProvider` doesn't wire auth actions.
+- Expecting `signIn()` to trigger backend auth — it only toggles local UI state for component testing.
+
+> **Auth Testing Examples:** See the [feather-testing-convex README](https://github.com/siraj-samsudeen/feather-testing-convex/blob/main/README.md#5-auth-state-testing) sections 5 (Auth State Testing), 6 (Sign In/Sign Out Flows), and 7 (Sign-In Error Simulation).
+
+### ☐ 5. At least one test passes
 
 **Run:**
 ```bash
@@ -134,7 +136,7 @@ npx vitest run
 
 **If no tests exist, create one to verify the setup.**
 
-Pick one example below. You don't need both.
+Pick one example below. You don't need all of them.
 
 #### Backend-only test (query + seed)
 
@@ -175,7 +177,20 @@ describe("TodoList", () => {
 });
 ```
 
-### ☐ 5. Coverage excludes Convex generated code (optional)
+#### Auth test (if step 4 was completed)
+
+```tsx
+import { test, renderWithConvexAuth } from "../../convex/test.setup";
+import { screen } from "@testing-library/react";
+import { expect } from "vitest";
+
+test("shows authenticated view", async ({ client }) => {
+  renderWithConvexAuth(<App />, client);
+  expect(await screen.findByText("Welcome back")).toBeInTheDocument();
+});
+```
+
+### ☐ 6. Coverage excludes Convex generated code (optional)
 
 **Check:** `vitest.config.ts` coverage exclusions include `convex/_generated/`.
 
@@ -191,41 +206,6 @@ coverage: {
 
 ---
 
-## Fixtures Reference
-
-`createConvexTest(schema, modules, options?)` returns a custom `test` function with these fixtures:
-
-| Fixture | Description |
-|---------|-------------|
-| `testClient` | Raw convex-test client (unauthenticated) |
-| `userId` | ID of an auto-created user (string) |
-| `client` | Authenticated client for the auto-created user |
-| `seed(table, data)` | Insert a document. Auto-fills `userId` unless `data` includes an explicit `userId` (explicit wins). Returns the document ID. |
-| `createUser()` | Create another user, return authenticated client with `.userId` property. |
-
-### Options
-
-```typescript
-// Custom users table name (default: "users")
-export const test = createConvexTest(schema, modules, { usersTable: "profiles" });
-```
-
-### Additional Helpers
-
-- `wrapWithConvex(children, client)` — JSX wrapper for custom rendering
-- `renderWithConvex(ui, client)` — Testing Library render with Convex provider
-
-## Query Behavior
-
-Queries run **once** at component mount (one-shot). UI does not re-render after a mutation.
-
-- Assert backend state directly: `await client.query(api.items.list, {})`
-- See updated UI: unmount and remount the component
-- See `/feather:review-convex-tests` references for workarounds
-
----
-
 ## Next Steps
 
-- **Auth testing** (`<Authenticated>`, `useAuthActions()`, signIn/signOut) → use `/feather:add-convex-auth-testing`
 - **Review test quality** (patterns, anti-patterns, best practices) → use `/feather:review-convex-tests`

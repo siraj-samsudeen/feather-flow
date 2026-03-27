@@ -100,8 +100,7 @@ For larger projects spanning multiple sessions:
 
 | Skill | When to Use |
 |-------|-------------|
-| `/feather:setup-convex-testing` | Add Convex integration testing (after setup-react-testing) |
-| `/feather:add-convex-auth-testing` | Add auth testing (`<Authenticated>`, `useConvexAuth`) |
+| `/feather:setup-convex-testing` | Add Convex integration testing + optional auth support (after setup-react-testing) |
 | `/feather:review-convex-tests` | Review test quality (10-point checklist) |
 
 ### Reference
@@ -153,8 +152,7 @@ Before using slice workflow, ensure TDD infrastructure:
 ```bash
 /feather:setup-tdd-guard          # Core: hooks + coverage (required for all projects)
 /feather:setup-react-testing      # React: jsdom + testing-library (if React project)
-/feather:setup-convex-testing     # Convex: convex-test + feather-testing-convex (if Convex project)
-/feather:add-convex-auth-testing  # Convex auth: <Authenticated>, useConvexAuth (if using Convex Auth)
+/feather:setup-convex-testing     # Convex: convex-test + feather-testing-convex + optional auth (if Convex project)
 ```
 
 Core enables:

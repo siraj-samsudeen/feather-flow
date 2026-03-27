@@ -236,7 +236,7 @@ For larger projects with multiple features spanning multiple sessions:
 | Pre-commit hook | Git pre-commit | `git commit` if any check fails |
 | Vitest threshold | Coverage config | Tests fail if coverage drops below 100% |
 
-**Setup:** Run `/feather:setup-tdd-guard` before starting slice work. For React projects, also run `/feather:setup-react-testing`. For Convex projects, also run `/feather:setup-convex-testing` (and `/feather:add-convex-auth-testing` if using Convex Auth).
+**Setup:** Run `/feather:setup-tdd-guard` before starting slice work. For React projects, also run `/feather:setup-react-testing`. For Convex projects, also run `/feather:setup-convex-testing` (includes optional `@convex-dev/auth` support in step 4).
 
 ## Feedback Tracking
 
@@ -339,8 +339,7 @@ feather:workflow (THIS - the map)
      │   └── /feather:polish                    → Fixed issues
      │
      └── Convex Testing (add-on)
-         ├── /feather:setup-convex-testing       → convex/test.setup.ts, Convex deps
-         ├── /feather:add-convex-auth-testing    → Auth provider, vitest plugin
+         ├── /feather:setup-convex-testing       → convex/test.setup.ts, Convex deps, optional auth
          └── /feather:review-convex-tests        → 10-point quality checklist
 ```
 
