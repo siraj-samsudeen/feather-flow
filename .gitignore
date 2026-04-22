@@ -13,6 +13,8 @@ feather_discover_state.json
 .env
 .DS_Store
 .coverage
+.testmondata
+.testmondata-journal
 .nvmrc
 repomix-output.xml
 .playwright-mcp/
