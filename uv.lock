@@ -206,7 +206,7 @@ wheels = [
 
 [[package]]
 name = "feather-etl"
-version = "0.1.3"
+version = "0.2.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "duckdb" },

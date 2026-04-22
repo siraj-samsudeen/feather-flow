@@ -19,3 +19,4 @@ feather_discover_state.json
 repomix-output.xml
 .playwright-mcp/
 .superpowers/
+.pytest_cache

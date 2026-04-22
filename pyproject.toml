@@ -1,8 +1,7 @@
 [project]
 name = "feather-etl"
-version = "0.1.3"
-description = "Config-driven ETL for heterogeneous ERP sources → local DuckDB"
-readme = "README.md"
+version = "0.2.0-dev"
+description = "Config-driven ETL for heterogeneous ERP sources → local DuckDB (code-reorg rewrite)"
 license = "MIT"
 authors = [
     { name = "Siraj Samsudeen", email = "mailsiraj@gmail.com" }
@@ -18,6 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Database",
 ]
 dependencies = [
@@ -35,7 +35,6 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/siraj-samsudeen/feather-etl"
 Repository = "https://github.com/siraj-samsudeen/feather-etl"
-Issues = "https://github.com/siraj-samsudeen/feather-etl/issues"
 
 [project.scripts]
 feather = "feather_etl.cli:app"
@@ -48,43 +47,78 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/feather_etl"]
 include = ["src/feather_etl/resources/**"]
+exclude = [
+    "src/feather_etl/**/*_test.py",
+    "src/feather_etl/**/scenarios/**",
+    "src/feather_etl/testing/**",
+]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
     "tests/",
-    "scripts/",
-    "docs/",
     ".claude/",
-    ".codegraph/",
-    ".planning/",
 ]
 
 [dependency-groups]
 dev = [
-    "poethepoet>=0.44.0",
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "poethepoet>=0.44.0",
     "pytest-testmon>=2.2.0",
     "pytest-watcher>=0.6.3",
 ]
 
-[tool.poe.tasks.cov]
-help = "Run tests matching <keyword> with branch coverage for feather_etl.<keyword>, then open the HTML report."
-shell = "pytest -k ${keyword} -rs --cov-branch --cov=feather_etl.${keyword} --cov-report=term-missing --cov-report=html ; open htmlcov/index.html"
-args = [{ name = "keyword", positional = true, required = true }]
-
 [tool.poe.tasks.cov-all]
-help = "Branch coverage across the whole feather_etl package, then open the HTML report."
-shell = "pytest -rs --cov-branch --cov=feather_etl --cov-report=term-missing --cov-report=html ; open htmlcov/index.html"
+help = "HTML coverage report across feather_etl, opened in browser. Default pytest already shows term-missing."
+shell = "pytest -rs --cov-report=html ; open htmlcov/index.html"
 
 [tool.poe.tasks.tw]
-help = "Watch mode: re-run only tests affected by saved changes (Jest-like). Extra args go to pytest, e.g. `poe tw -k transforms`."
-cmd = "ptw . --now --testmon -q"
+help = "Watch mode with testmon — re-run only tests affected by saved changes (Jest-like). No coverage gate."
+cmd = "ptw . --now --testmon -q --no-cov"
 
 [tool.poe.tasks.tw-all]
-help = "Watch mode without testmon: re-run the full suite on every change."
-cmd = "ptw . --now -q"
+help = "Watch mode without testmon — re-run the full suite on every change. No coverage gate."
+cmd = "ptw . --now -q --no-cov"
 
-[tool.poe.tasks.tw-reset]
-help = "Delete the testmon dependency cache (use when watch mode skips tests it shouldn't)."
-shell = "rm -f .testmondata .testmondata-journal"
+[tool.pytest.ini_options]
+testpaths = ["src", "tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--import-mode=importlib",
+    "--cov=src/feather_etl",
+    "--cov-branch",
+    "--cov-report=term-missing",
+    "--cov-fail-under=100",
+]
+
+[tool.coverage.run]
+source = ["src/feather_etl"]
+omit = [
+    "src/feather_etl/**/*_test.py",
+    "src/feather_etl/**/scenarios/**",
+    "src/feather_etl/testing/**",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+src = ["src"]
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "D100", # missing module docstring
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D100"]
+"**/*_test.py" = ["D100"]

@@ -1,66 +1,63 @@
-# feather-etl — agent context
+# feather-etl — code-reorg rewrite worktree
 
-Config-driven Python ETL for heterogeneous ERP sources → local DuckDB.
+This is a **rewrite branch** of feather-etl, not main. The main branch
+has a working ETL tool with ~720 tests; this branch starts empty and
+rebuilds it feature-by-feature under the V3 package-layout convention.
 
-**Full project context:** `.claude/rules/feather-etl-project.md`
-**Requirements:** `docs/prd.md`
-**Architecture (codebase):** `README.md`
-**Architecture (warehouse model):** `docs/architecture/warehouse-layers.md` — four-layer Bronze/Silver/Gold/Departmental-Data-Marts model. Read before writing any transform SQL.
-**Personas:** `docs/personas.md` — Builder, Analyst, artifact consumers. Cite by version in every feature spec.
-**Work conventions:** `docs/CONTRIBUTING.md`
+**Read first:** [`docs/ORIENTATION.md`](docs/ORIENTATION.md).
 
-## Where to find things
+**Placement convention:** [`docs/conventions/package-layout.md`](docs/conventions/package-layout.md).
 
-All project documentation lives under `docs/`. Start with [`docs/README.md`](docs/README.md) — it is the top-level map. Each sub-folder (`architecture/`, `conventions/`, `issues/`) has its own `README.md` hub listing every doc in that folder with a one-line summary. Read the relevant hub before reading individual docs, and update the hub when you add a new doc.
+**Reference source:** the `main` branch at `../../..` holds the existing
+implementation. Open it to study *behavior* — never to copy code.
+
+## Current status
+
+- [ ] Feature 1 — `feather init`
+- [ ] Feature 2 — `feather validate`
+- [ ] Feature 3 — `feather discover`
+- [ ] Feature 4 — `feather run`
+- [ ] Rest — `setup` / `status` / `history` / `cache` / `view`
 
 ## Before you write a single line of code
 
-Run the test suite and confirm green:
-
 ```bash
-uv run pytest -q               # currently: 720 tests
+uv sync
+uv run pytest -q
 ```
 
-If anything is red before you touch anything, report immediately.
+At scaffold time, three tests run (two invariants + one CLI smoke
+test). All must pass. If pytest reports anything else — or any fail —
+stop and investigate before proceeding.
+
+## Dev commands
+
+- `uv run pytest -q` — full suite with 100% branch coverage gate.
+- `uv run poe tw` — watch mode with testmon (Jest-like; re-runs only
+  affected tests on save). No coverage gate — use for iteration.
+- `uv run poe tw-all` — watch mode without testmon (full suite on
+  every save). Fall back here if `tw` skips tests it shouldn't.
+- `uv run poe cov-all` — HTML coverage report, opens in browser.
 
 ---
 
-# Standing workflow preferences for superpowers skills
+# Workflow preferences
 
-Superpowers skills honor CLAUDE.md preferences over their built-in defaults. The
-rules below apply to every invocation of `/brainstorming`, `/writing-plans`,
-`/subagent-driven-development`, and `/finishing-a-development-branch` when
-working in this repo.
+Same as main's superpowers conventions:
 
-The patched versions of `brainstorming/SKILL.md` and `writing-plans/SKILL.md`
-live vendored in `.claude/skills/`. See `.claude/skills/README.md` for
-provenance and how to re-sync with upstream.
+- **After spec approval**, use Subagent-Driven Development. Announce
+  and proceed:
+  > "Plan complete. Proceeding with Subagent-Driven execution."
+  Inline execution only on explicit user request.
 
-## After spec approval
+- **Sub-worktrees for feature specs** use branch `feature/<slug>` where
+  `<slug>` = the plan filename minus the `YYYY-MM-DD-` prefix and
+  `.md` suffix. The `using-git-worktrees` skill handles naming.
 
-Do NOT ask "Subagent-Driven vs Inline Execution." Always use Subagent-Driven
-Development. Announce and proceed:
+- **Spec review gate is preserved.** `/brainstorming` writes a spec;
+  the user approves it before any plan or implementation. The
+  autopilot starts only after approval.
 
-> "Plan complete. Proceeding with Subagent-Driven execution."
-
-Inline execution is used only on explicit user request ("use executing-plans
-instead").
-
-## Branch setup
-
-Before dispatching the first implementer subagent: automatically create a git
-worktree on branch `feature/<slug>`, where `<slug>` = the plan filename minus
-the `YYYY-MM-DD-` prefix and `.md` suffix. Do not ask; do not present options.
-
-The worktree is created via the `superpowers:using-git-worktrees` skill (not
-plain `git checkout -b`), so implementation work stays isolated from the main
-workspace.
-
-Plain in-place branching is used only on explicit user request ("stay in this
-workspace" or "don't use a worktree").
-
-## Spec review gate is preserved
-
-The spec review gate in `brainstorming` (user approves the written spec before
-implementation begins) is kept. All other questions in that flow are also kept
-as defined by the skill. The autopilot starts ONLY after the spec is approved.
+No `.claude/skills/` overrides in this worktree — use the global
+superpowers skills. If a patched behavior becomes necessary, copy the
+vendored skill from main at `../../../.claude/skills/`.

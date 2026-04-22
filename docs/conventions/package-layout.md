@@ -4,10 +4,10 @@ This document defines **where files live** in the feather-etl repo —
 what package owns what, how tests colocate with code, and what lands
 in `core/` versus a feature package.
 
-**Scope:** repo-level package layout only. For in-file organization
-(section banners, stepdown rule, docstring CONTENTS blocks), see
-[code-layout.md](code-layout.md) — the two conventions are
-complementary and neither supersedes the other.
+**Scope:** repo-level package layout only. For in-file organization, see
+the three rules in `docs/ORIENTATION.md` (docstring + public-first
+stepdown + <150 lines); rules 1 and 3 are enforced by
+`tests/invariants/test_file_style.py`.
 
 **Audience:** team members and AI agents making structural changes
 to the repo. Read this before adding a new module, moving a file, or
@@ -343,9 +343,7 @@ re-litigate if not written down:
 
 ## Related
 
-- [`code-layout.md`](code-layout.md) — in-file organization (section
-  banners, stepdown rule, docstring CONTENTS).
-- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — work conventions
-  (plan docs, review docs, commit style).
+- [`../ORIENTATION.md`](../ORIENTATION.md) — mission, ground rules,
+  in-file style rules, feature migration order.
 - [`../../CLAUDE.md`](../../CLAUDE.md) — agent context + workflow
-  preferences.
+  preferences for this worktree.

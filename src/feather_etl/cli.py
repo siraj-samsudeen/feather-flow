@@ -1,37 +1,16 @@
-"""feather CLI — thin wrapper over config, pipeline, state, and sources."""
+"""feather CLI entrypoint — empty Typer app registry.
+
+No commands are registered yet. Each command will land in its own
+package under `commands/<name>/` and register itself into `app` via a
+`register(app)` function called from here.
+"""
 
 from __future__ import annotations
 
 import typer
 
-from feather_etl.commands.cache import register as register_cache
-from feather_etl.commands.discover import register as register_discover
-from feather_etl.commands.history import register as register_history
-from feather_etl.commands.init import register as register_init
-from feather_etl.commands.run import register as register_run
-from feather_etl.commands.setup import register as register_setup
-from feather_etl.commands.status import register as register_status
-from feather_etl.commands.view import register as register_view
-from feather_etl.commands.validate import register as register_validate
-
-app = typer.Typer(name="feather", help="feather-etl: config-driven ETL")
+app = typer.Typer(help="feather-etl — config-driven ETL for heterogeneous sources.")
 
 
-@app.callback()
-def main(
-    ctx: typer.Context,
-    json: bool = typer.Option(False, "--json", help="Output as NDJSON"),
-) -> None:
-    """feather-etl: config-driven ETL."""
-    ctx.ensure_object(dict)["json_mode"] = json
-
-
-register_init(app)
-register_validate(app)
-register_discover(app)
-register_view(app)
-register_setup(app)
-register_run(app)
-register_history(app)
-register_status(app)
-register_cache(app)
+if __name__ == "__main__":  # pragma: no cover
+    app()
