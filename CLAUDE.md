@@ -41,6 +41,26 @@ stop and investigate before proceeding.
 
 ---
 
+# Conversation style
+
+- **One item at a time always.** Never bundle multiple decisions or
+  questions into a single response. Pick one thread, resolve it, then
+  move to the next. This applies to both explore mode and
+  implementation conversations.
+
+# Feature design rules
+
+- **80/20 rule.** Before adding any behavior, ask: is this in the vital
+  few or the trivial many? Drop anything that adds complexity without
+  proportional user value. e.g. Prefer skip-if-exists over merge logic.
+  Prefer stamp-and-move-on over detect-and-adapt.
+
+- **Slice audit.** A vertical slice is the smallest unit that adds a
+  user-visible capability. Test: "can a user sit down and exercise the
+  result of this slice, and it does one more useful thing than before?"
+  If a sub-piece isn't exercisable end-to-end on its own, it's not a
+  separate slice — merge it with its dependency.
+
 # Workflow preferences
 
 Same as main's superpowers conventions:
