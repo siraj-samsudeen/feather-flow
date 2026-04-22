@@ -6,7 +6,8 @@ If you're about to write code, a spec, or a plan for feather-etl, skim the relev
 
 ## Contents
 
-- [`code-layout.md`](code-layout.md) — hybrid file-layout template combining DHH TOC banners, Clean Code stepdown rule, and agent-first greppable section labels. Applies to every non-trivial module. Read before making layout changes to existing files or before introducing a new file larger than ~100 lines.
+- [`package-layout.md`](package-layout.md) — repo-level package layout: where files live, the three-axis model (sources / destinations / commands) + `core/`, placement rules, test colocation, `tests/structural/` tier, `src/feather_etl/testing/` sub-package, and the required `pyproject.toml` changes. Read before adding a new module, moving a file, or creating a new command or source type.
+- [`code-layout.md`](code-layout.md) — hybrid in-file organization template combining DHH TOC banners, Clean Code stepdown rule, and agent-first greppable section labels. Applies to every non-trivial module. Read before making layout changes to existing files or before introducing a new file larger than ~100 lines.
 - [`spec-template.md`](spec-template.md) — canonical structure for feature design specs under `docs/superpowers/specs/`. Embodies seven cross-project principles (form-follows-grain, roles-to-documents-mapping, scope-describes-outcomes, spec-sections-natural-shape, spec-sections-pull-unique-weight, terrain-not-procedure, senior-lead-voice). Mirrored from Siraj's cross-project vault; this in-repo copy is the source of truth.
 
 ## When to add a doc here

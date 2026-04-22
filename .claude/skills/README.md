@@ -1,10 +1,11 @@
 # Vendored superpowers skills
 
-This directory holds **patched copies** of two skills from the
+This directory holds **patched copies** of three skills from the
 [superpowers](https://github.com/obra/superpowers) plugin:
 
 - [`brainstorming/SKILL.md`](brainstorming/SKILL.md)
 - [`writing-plans/SKILL.md`](writing-plans/SKILL.md)
+- [`using-git-worktrees/SKILL.md`](using-git-worktrees/SKILL.md)
 
 They are vendored (not modified in-place at the plugin install site) so the
 whole team gets identical agent behavior — a teammate clones the repo and
@@ -13,13 +14,19 @@ their Claude Code picks up these versions automatically.
 ## Why vendor, not just override in CLAUDE.md
 
 CLAUDE.md preferences can tweak behavior at the margins, but they can't
-restructure a skill. Two of this project's customizations do restructure:
+restructure a skill. Three of this project's customizations do restructure:
 
 - **writing-plans** — inserts a new *Plan Preflight* review gate between
   self-review and execution handoff, and replaces the "Subagent-Driven vs
   Inline" choice prompt with an autopilot.
 - **brainstorming** — adds an atomic-tasks rule and a reference to the
   project's spec template.
+- **using-git-worktrees** — adds a new Step 0 that discovers existing
+  worktree conventions via `git worktree list` before picking a directory,
+  adds `.claude/worktrees/` to the recognized directory list, adds an
+  explicit branch-naming step that reads CLAUDE.md (so project conventions
+  like `feature/<slug>` win over tool defaults like `claude/<random>`),
+  and switches the Python setup path from `poetry` to `uv`.
 
 These are structural edits to the skill files themselves. Vendoring makes
 them explicit and reviewable, and stops teammates from getting surprise
@@ -28,7 +35,7 @@ behavior differences when upstream changes.
 The other superpowers skills (test-driven-development, debugging,
 verification-before-completion, subagent-driven-development, etc.) are
 unchanged from upstream — we do NOT vendor them. Teammates should install
-the superpowers plugin normally and get the full skill set; the two
+the superpowers plugin normally and get the full skill set; the three
 vendored copies take precedence in this repo.
 
 ## What was patched
