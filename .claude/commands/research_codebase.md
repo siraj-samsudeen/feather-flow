@@ -111,14 +111,16 @@ Once questions are approved:
 
    The header's commit SHA exists so a future reader can tell whether the doc is still fresh.
 
-7. **Commit just this file** (not a sweep of the whole working tree):
-   ```bash
-   git add docs/superpowers/research/<YYYY-MM-DD>-<slug>.md
-   git commit -m "docs(research): <slug>"
-   ```
+7. **Announce** in chat — do NOT commit. The user reviews first, then commits themselves if they want the doc tracked:
 
-8. **Announce** in chat:
-   > Research saved to `docs/superpowers/research/<YYYY-MM-DD>-<slug>.md`. Run `/brainstorming` when you're ready to start design — pass this path as context.
+   > Research saved to `docs/superpowers/research/<YYYY-MM-DD>-<slug>.md`. Review it, then commit if you want it tracked:
+   >
+   > ```bash
+   > git add docs/superpowers/research/<YYYY-MM-DD>-<slug>.md
+   > git commit -m "docs(research): <slug>"
+   > ```
+   >
+   > Run `/brainstorming` when you're ready to start design — pass this path as context.
 
 ---
 
@@ -129,6 +131,6 @@ Once questions are approved:
 - Invoke `brainstorming`, `writing-plans`, or any implementation skill
 - Edit any file outside `docs/superpowers/research/`
 - Run tests or modify source code
-- Sweep-commit unrelated working-tree changes
+- Commit the research doc, or any other file — review and commit are the user's job
 
 The command ends after Phase 3.
