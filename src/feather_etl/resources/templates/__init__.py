@@ -1,0 +1,1 @@
+"""Init scaffold templates."""
