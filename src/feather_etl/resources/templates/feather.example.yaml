@@ -1,0 +1,59 @@
+# feather.example.yaml — reference for all supported source types.
+# Copy the relevant block into feather.yaml and fill in your values.
+
+sources:
+
+  # --- DuckDB ---
+  # - type: duckdb
+  #   name: my_duckdb
+  #   path: ./data/my.duckdb
+
+  # --- CSV ---
+  # - type: csv
+  #   name: my_csv
+  #   path: ./data/
+
+  # --- SQLite ---
+  # - type: sqlite
+  #   name: my_sqlite
+  #   path: ./data/my.db
+
+  # --- Excel ---
+  # - type: excel
+  #   name: my_excel
+  #   path: ./data/my.xlsx
+
+  # --- JSON ---
+  # - type: json
+  #   name: my_json
+  #   path: ./data/
+
+  # --- SQL Server ---
+  # - type: sqlserver
+  #   name: my_sqlserver
+  #   host: localhost
+  #   port: 1433
+  #   user: sa
+  #   password: ${SQLSERVER_PASSWORD}
+  #   databases:
+  #     - my_database
+
+  # --- PostgreSQL ---
+  # - type: postgres
+  #   name: my_postgres
+  #   host: localhost
+  #   port: 5432
+  #   user: postgres
+  #   password: ${POSTGRES_PASSWORD}
+  #   databases:
+  #     - my_database
+
+  # --- MySQL ---
+  # - type: mysql
+  #   name: my_mysql
+  #   host: localhost
+  #   port: 3306
+  #   user: root
+  #   password: ${MYSQL_PASSWORD}
+  #   databases:
+  #     - my_database

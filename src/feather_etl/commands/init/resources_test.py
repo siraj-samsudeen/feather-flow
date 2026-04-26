@@ -47,3 +47,12 @@ def test_pyproject_toml_content() -> None:
     content = pkg.joinpath("pyproject.toml").read_text(encoding="utf-8")
     assert "{name}" in content, "pyproject.toml missing {name} placeholder"
     assert "feather-etl>=0.1.0" in content, "pyproject.toml missing feather-etl dependency"
+
+
+def test_feather_example_yaml_content() -> None:
+    pkg = importlib.resources.files("feather_etl.resources.templates")
+    content = pkg.joinpath("feather.example.yaml").read_text(encoding="utf-8")
+    for source_type in ["duckdb", "csv", "sqlite", "excel", "json", "sqlserver", "postgres", "mysql"]:
+        assert f"type: {source_type}" in content, f"feather.example.yaml missing source type {source_type!r}"
+    for field in ["type", "name", "host", "port", "user", "password", "databases"]:
+        assert field in content, f"feather.example.yaml sqlserver block missing field {field!r}"
