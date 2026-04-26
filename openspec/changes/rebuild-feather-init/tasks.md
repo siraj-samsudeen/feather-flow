@@ -6,7 +6,7 @@
 - [x] 1.4 Fill `.env.example` template; test: all eight var names present (`SQLSERVER_HOST/PORT/USER/PASSWORD`, `POSTGRES_HOST/PORT/USER/PASSWORD`)
 - [x] 1.5 Fill `pyproject.toml` template; test: `{name}` placeholder present, `feather-etl>=0.1.0` dependency present
 - [x] 1.6 Fill `feather.example.yaml` template; test: all eight source type keywords present; sqlserver block has `type`, `name`, `host`, `port`, `user`, `password`, `databases` fields
-- [ ] 1.7 Create `commands/init/core.py` with `init_project(path, name) → InitResult`; test: creates directory if missing, writes all five files, `pyproject.toml` contains actual name (not `{name}` literal)
+- [x] 1.7 Create `commands/init/core.py` with `init_project(path, name) → InitResult`; test: creates directory if missing, writes all five files, `pyproject.toml` contains actual name (not `{name}` literal)
 - [ ] 1.8 Create `commands/init/cli.py` and register in `cli.py`; test A: `feather init my-proj` creates directory and files; test B: `feather init .` inside a named CWD writes CWD basename as `name` in `pyproject.toml`
 
 ## 2. Slice: Idempotent init
