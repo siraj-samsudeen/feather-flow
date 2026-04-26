@@ -17,3 +17,9 @@ def test_all_templates_reachable() -> None:
     pkg = importlib.resources.files("feather_etl.resources.templates")
     for name in _TEMPLATES:
         assert pkg.joinpath(name).is_file(), f"template {name!r} missing from package"
+
+
+def test_feather_yaml_content() -> None:
+    pkg = importlib.resources.files("feather_etl.resources.templates")
+    content = pkg.joinpath("feather.yaml").read_text(encoding="utf-8")
+    assert content == "sources: []\n"
