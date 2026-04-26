@@ -40,3 +40,10 @@ def test_env_example_content() -> None:
         "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_USER", "POSTGRES_PASSWORD",
     ]:
         assert var in content, f".env.example missing variable {var!r}"
+
+
+def test_pyproject_toml_content() -> None:
+    pkg = importlib.resources.files("feather_etl.resources.templates")
+    content = pkg.joinpath("pyproject.toml").read_text(encoding="utf-8")
+    assert "{name}" in content, "pyproject.toml missing {name} placeholder"
+    assert "feather-etl>=0.1.0" in content, "pyproject.toml missing feather-etl dependency"

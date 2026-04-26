@@ -1,0 +1,9 @@
+[project]
+name = "{name}"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["feather-etl>=0.1.0"]
+
+# For local dev: uncomment below, adjust path, then run `uv sync`
+# [tool.uv.sources]
+# feather-etl = { path = "../feather-etl", editable = true }
