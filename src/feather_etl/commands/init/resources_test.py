@@ -23,3 +23,10 @@ def test_feather_yaml_content() -> None:
     pkg = importlib.resources.files("feather_etl.resources.templates")
     content = pkg.joinpath("feather.yaml").read_text(encoding="utf-8")
     assert content == "sources: []\n"
+
+
+def test_gitignore_content() -> None:
+    pkg = importlib.resources.files("feather_etl.resources.templates")
+    content = pkg.joinpath(".gitignore").read_text(encoding="utf-8")
+    for entry in ["*.duckdb", "*.duckdb.wal", "feather_validation.json", ".env", "__pycache__/", ".venv/"]:
+        assert entry in content, f".gitignore missing entry {entry!r}"

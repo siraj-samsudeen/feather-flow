@@ -1,0 +1,6 @@
+*.duckdb
+*.duckdb.wal
+feather_validation.json
+.env
+__pycache__/
+.venv/

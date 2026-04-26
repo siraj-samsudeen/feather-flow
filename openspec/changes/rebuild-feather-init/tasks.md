@@ -2,7 +2,7 @@
 
 - [x] 1.1 Create `src/feather_etl/resources/templates/` with five empty files (`feather.yaml`, `pyproject.toml`, `.env.example`, `.gitignore`, `feather.example.yaml`); add `resources_test.py` asserting all five are reachable via `importlib.resources`
 - [x] 1.2 Fill `feather.yaml` template; test: content equals exactly `sources: []`
-- [ ] 1.3 Fill `.gitignore` template; test: all six entries present (`*.duckdb`, `*.duckdb.wal`, `feather_validation.json`, `.env`, `__pycache__/`, `.venv/`)
+- [x] 1.3 Fill `.gitignore` template; test: all six entries present (`*.duckdb`, `*.duckdb.wal`, `feather_validation.json`, `.env`, `__pycache__/`, `.venv/`)
 - [ ] 1.4 Fill `.env.example` template; test: all eight var names present (`SQLSERVER_HOST/PORT/USER/PASSWORD`, `POSTGRES_HOST/PORT/USER/PASSWORD`)
 - [ ] 1.5 Fill `pyproject.toml` template; test: `{name}` placeholder present, `feather-etl>=0.1.0` dependency present
 - [ ] 1.6 Fill `feather.example.yaml` template; test: all eight source type keywords present; sqlserver block has `type`, `name`, `host`, `port`, `user`, `password`, `databases` fields
