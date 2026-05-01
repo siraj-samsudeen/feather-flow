@@ -1,6 +1,6 @@
 {
   "name": "feather-flow",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Lightweight TDD-enforced development workflow for Claude Code",
   "bin": {
     "feather-flow": "bin/cli.js"
