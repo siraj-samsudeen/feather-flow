@@ -4,6 +4,41 @@ All notable changes to feather-flow will be documented in this file.
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-05-01
+
+### Fixed
+- **Install symlinks not created** — `bin/cli.js` filtered skills by the
+  old `feather:` (colon) prefix, so v2.0.0's `feather-*` (hyphen) skills
+  were copied but never symlinked into `~/.claude/skills/`. Skill
+  discovery now keys on the presence of a `SKILL.md` file in each
+  subdirectory of `skills/`, which is the actual definition of "skill".
+- **Stale install messaging** — "Getting started" pointed at deleted
+  skills (`/feather:help`, `/feather:workflow`, `/feather:update`).
+  Updated to point at `/feather-flow` and the three pipeline skills.
+- **Update notification** referenced the deleted `/feather:update`
+  skill. Now suggests `npx feather-flow` as the upgrade command.
+
+### Changed
+- **Publish workflow trigger:** switched from `on: push: branches: [main]`
+  with version auto-bump to `on: push: tags: ['v*']` with a tag-vs-package
+  consistency check. Releases now happen only when a `v*` tag is pushed,
+  not on every commit to main. Eliminates the rebase race during manual
+  releases and stops publishing undocumented patch versions for
+  non-release commits.
+- **`release-feather-flow` skill:** Step 6 simplified — no longer needs
+  the `git pull --rebase` workaround for the auto-bump that no longer
+  happens.
+- **Uninstall** detects feather-flow symlinks by their target (links
+  pointing into the install dir) rather than by name prefix, so it
+  correctly cleans up both old `feather:*` and new `feather-*` symlinks.
+- **README** rewritten for the four-skill pipeline. Removed the v1
+  "Simple Mode / Slice Mode" framing and the table of 23 deleted skills.
+- **ACKNOWLEDGMENTS** rewritten — v1 per-skill attribution tables
+  (covering removed skills) replaced with a focused note on the
+  Superpowers-derived visual-companion pattern in `feather-brainstorm`.
+  v1 attribution preserved in git at tag v1.2.7 for anyone tracing
+  lineage.
+
 ## [2.0.0] - 2026-05-01
 
 ### Changed (BREAKING)
@@ -55,7 +90,8 @@ A migration guide will follow if there is demand.
 ### Fixed
 - **Kept files overwritten on subsequent updates** — manifest now stores upstream hash for kept files so they're always detected as modified (#4)
 
-[Unreleased]: https://github.com/siraj-samsudeen/feather-flow/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/siraj-samsudeen/feather-flow/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/siraj-samsudeen/feather-flow/releases/tag/v2.0.1
 [2.0.0]: https://github.com/siraj-samsudeen/feather-flow/releases/tag/v2.0.0
 [1.2.2]: https://github.com/siraj-samsudeen/feather-flow/releases/tag/v1.2.2
 [1.2.1]: https://github.com/siraj-samsudeen/feather-flow/releases/tag/v1.2.1
