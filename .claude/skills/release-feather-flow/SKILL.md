@@ -75,33 +75,23 @@ git commit -m "{version}"
 
 ### Step 6: Tag and push
 
-Pull first to incorporate any remote changes (the publish workflow may have
-auto-bumped the version on the previous push):
+Push the changelog + version commits, then create and push the tag.
+The tag push is what triggers the publish workflow:
 
 ```bash
-git pull --rebase origin main
-```
-
-If there are rebase conflicts (likely in VERSION and package.json from the
-auto-bump), resolve them by keeping our version (1.2.0 or whatever we're
-releasing), then `git add` and `git rebase --continue`.
-
-Then tag and push:
-```bash
+git push origin main
 git tag v{version}
-git push origin main --tags
+git push origin v{version}
 ```
 
-If the tag already exists on remote (from a pre-rebase push attempt), force-update it:
-```bash
-git push origin --force v{version}
-```
+(As of v2.0.1 the publish workflow triggers on `v*` tag pushes only —
+no auto-bump, no rebase dance. Pushing main alone does not publish.)
 
 ### Step 7: Verify npm publish
 
-The repo uses trusted publishing via GitHub Actions (`publish.yml`). The tag
-push in Step 6 triggers the publish automatically. Do NOT run `npm publish`
-manually.
+The repo uses trusted publishing via GitHub Actions (`publish.yml`). The
+tag push in Step 6 triggers the publish automatically. Do NOT run
+`npm publish` manually.
 
 Wait 30 seconds, then verify:
 ```bash

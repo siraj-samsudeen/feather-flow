@@ -2,50 +2,23 @@
 
 ## Superpowers by Jesse Vincent
 
-Several feather-flow skills are derived from or inspired by [Superpowers](https://github.com/obra/superpowers) by Jesse Vincent, licensed under MIT (v4.1.1).
+feather-flow's visual-companion pattern in `feather-brainstorm` —
+deciding per-question whether a design choice is best discussed in
+text or as side-by-side HTML mockups — is adapted from
+[Superpowers](https://github.com/obra/superpowers) by Jesse Vincent
+(MIT, v4.1.1). The implementation is self-contained (static HTML
+opened with `open`/`xdg-open`, no server) but the conceptual pattern
+of structured option presentation comes from there.
 
-### Directly Derived (>80% content match)
+The rest of the v2.0 four-skill pipeline — `feather-brainstorm`,
+`feather-spec`, `feather-execute-task`, `feather-flow` — was authored
+independently for this project.
 
-| Feather Skill | Superpowers Source | Notes |
-|---|---|---|
-| `feather:finish` | `finishing-a-development-branch` | Near-verbatim port + verification gate |
-| `feather:write-tests` | `test-driven-development` | Verbatim + database mutation examples |
+### Note on v1.x attribution
 
-### Heavily Derived (50-80%)
-
-| Feather Skill | Superpowers Source | Notes |
-|---|---|---|
-| `feather:execute` | `executing-plans` | Core workflow + subagent review gates |
-| `feather:create-plan` | `writing-plans` | Refocused on behavioral specs (no code) |
-
-### Inspired By (20-50%)
-
-| Feather Skill | Superpowers Source | Notes |
-|---|---|---|
-| `feather:work-slice` | `subagent-driven-development` | Reimagined as executable TDD enforcement |
-| `feather:isolate-work` | `using-git-worktrees` | Extended with branch-only option |
-| `feather:verify` | `verification-before-completion` | Structured as Checkpoint 2 + feedback |
-
-### Conceptual Successors
-
-| Feather Skill | Superpowers Source | Notes |
-|---|---|---|
-| `feather:help` | `using-superpowers` | New architecture, shared philosophy |
-| `feather:workflow` | `using-superpowers` | New architecture, shared philosophy |
-
-### Entirely Original (no Superpowers ancestry)
-
-The following skills were created independently:
-
-- `feather:create-design`
-- `feather:create-spec`
-- `feather:create-ui-mockup`
-- `feather:review-design`
-- `feather:derive-tests`
-- `feather:slice-project`
-- `feather:add-slice`
-- `feather:pause-slice`
-- `feather:resume-slice`
-- `feather:create-issue`
-- `feather:polish`
-- `feather:setup-tdd-guard`
+feather-flow v1.x shipped 23 skills with broader Superpowers ancestry
+(direct-derivation tables for skills like `feather:execute`,
+`feather:create-plan`, `feather:write-tests`, etc.). Those skills were
+removed in the v2.0 rewrite. The original v1 attribution remains in
+the git history at tag [v1.2.7](https://github.com/siraj-samsudeen/feather-flow/tree/v1.2.7/ACKNOWLEDGMENTS.md)
+for anyone tracing lineage.

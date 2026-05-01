@@ -196,7 +196,11 @@ async function install() {
   let linkCount = 0;
 
   for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !entry.name.startsWith('feather:')) continue;
+    if (!entry.isDirectory()) continue;
+    // A directory is a skill if it contains a SKILL.md.
+    // This replaces the prior `feather:` prefix check, which broke after
+    // the v2.0.0 rename to hyphenated names (feather-brainstorm, etc.).
+    if (!fs.existsSync(path.join(skillsDir, entry.name, 'SKILL.md'))) continue;
 
     const linkPath = path.join(SKILLS_LINK_DIR, entry.name);
     const targetPath = path.join(skillsDir, entry.name);
@@ -233,13 +237,16 @@ async function install() {
   console.log('  Getting started:');
   console.log('');
   console.log('    1. Open Claude Code in any project');
-  console.log('    2. Type /feather:help to see all commands');
-  console.log('    3. Type /feather:workflow to start a guided workflow');
+  console.log('    2. Type /feather-flow for the pipeline overview');
+  console.log('    3. Or describe a feature and Claude picks the right skill:');
+  console.log('         feather-brainstorm  → expand a vague idea');
+  console.log('         feather-spec        → author capability/screen specs');
+  console.log('         feather-execute-task → build one task at a time');
   console.log('');
   console.log(`  Installed to:  ${INSTALL_DIR}`);
   console.log(`  Skills dir:    ${skillsDir}`);
   console.log('');
-  console.log('  To update later, run: /feather:update (inside Claude Code)');
+  console.log('  To update later, run: npx feather-flow');
   console.log('');
 }
 
@@ -259,8 +266,14 @@ function uninstall() {
   if (fs.existsSync(SKILLS_LINK_DIR)) {
     let removed = 0;
     for (const entry of fs.readdirSync(SKILLS_LINK_DIR, { withFileTypes: true })) {
-      if (entry.name.startsWith('feather:') && entry.isSymbolicLink()) {
-        fs.unlinkSync(path.join(SKILLS_LINK_DIR, entry.name));
+      if (!entry.isSymbolicLink()) continue;
+      const linkPath = path.join(SKILLS_LINK_DIR, entry.name);
+      // Remove if the symlink points into our install dir, regardless of
+      // the symlink's own name (handles old `feather:*` and new `feather-*`).
+      let target = '';
+      try { target = fs.readlinkSync(linkPath); } catch (_) { continue; }
+      if (target.startsWith(INSTALL_DIR)) {
+        fs.unlinkSync(linkPath);
         removed++;
       }
     }

@@ -1,97 +1,71 @@
 # feather-flow
 
-A lightweight, TDD-enforced development workflow for Claude Code.
+An opinionated capability-delivery workflow for Claude Code: from a vague
+idea to a merged PR, gated at every step.
 
 ## Why feather-flow
 
-Most workflow tools for AI coding assistants are heavy — dozens of dependencies, complex configuration, steep learning curves. feather-flow takes the opposite approach: TDD-enforced quality gates at every step, so you ship working code instead of debugging your tooling. It ships as 24 skills with zero dependencies — pure markdown skills, zero runtime dependencies.
+Most workflow tools for AI coding assistants either give you a single
+mega-prompt or a sprawling library of micro-skills. feather-flow is in
+between: **one pipeline, four skills**, each with a specific job, designed
+to keep the human in the loop at decision points and the agent fast at
+execution.
 
-## Comparison
+The four skills:
 
-| | feather-flow | GSD |
+| Stage | Skill | What it does |
 |---|---|---|
-| Skills/Commands | 23 | 35+ commands, 15 agents, 37 workflows |
-| Install | `npx feather-flow` | npm + Node.js |
-| Dependencies | Node.js 18+ (for install only) | Node.js, npm |
-| Config needed | None | config.json with 20+ options |
-| Best for | Quick projects, learning | Enterprise teams, complex orchestration |
+| **Discover** | `feather-brainstorm` | Expands a vague idea into a structured discussion log — captures your words verbatim, no paraphrasing, with optional HTML mockups for layout questions |
+| **Specify** | `feather-spec` | Authors capability/design/screen/component specs and a prove-engine-first task list — using EARS patterns and stable IDs |
+| **Build** | `feather-execute-task` | Runs one task at a time with a gate at every step: mini-plan → execute → verify → tick → ask. Six-category finding classifier surfaces divergences instead of silently fixing them |
+| **Orient** | `feather-flow` | Pipeline overview and starting point if you're entering mid-flow |
 
-## Getting Started
-
-**Install:**
+## Install
 
 ```bash
 npx feather-flow
 ```
 
-Restart Claude Code, then type `/feather:help` to see all skills or `/feather:workflow` to start a guided workflow.
+That's it. Restart Claude Code and start with `/feather-flow` for the
+overview, or describe what you want to build and Claude will pick the
+right skill automatically.
 
-**Update:** You'll see a notification at session start when a new version is available. Run `/feather:update` inside Claude Code — it shows what changed, detects your local modifications, and walks you through an interactive merge.
+**Update:** You'll see a notification at session start when a new version
+is available. Run `npx feather-flow` again to upgrade — it preserves any
+local skill modifications.
 
 **Uninstall:** `npx feather-flow uninstall`
 
-**What you get:**
+## Where to start
 
-- All skills available as `/feather:*` commands in Claude Code
-- Automatic daily check for new versions (notifies you at session start)
-- Update preserves any skills you've customized locally
+| You have | Run |
+|---|---|
+| A vague idea or pain point | `/feather-brainstorm` |
+| A clear feature in mind | `/feather-spec` |
+| `brainstorm.md` already written | `/feather-spec` |
+| All spec artifacts, ready to build | `/feather-execute-task` |
+| Mid-implementation pivot | `/feather-brainstorm` (pivot entry point) |
 
-<details>
-<summary>Alternative: Vercel Skills CLI</summary>
+## What feather-flow values
 
-```bash
-npx skills add siraj-samsudeen/feather-flow
-```
-
-Installs skills directly from GitHub. You get working skills but no manifest tracking, no update notifications, and no interactive merge.
-</details>
-
-## The Two Modes
-
-**Simple Mode** — For small features (< 1 day):
-
-`/feather:workflow` guides you through: design → spec → tests → plan → execute → verify → finish
-
-**Slice Mode** — For larger projects (multi-day):
-
-Break work into vertical slices, each independently shippable:
-
-`/feather:slice-project` → `/feather:work-slice` (repeat) → `/feather:finish`
-
-## All 23 Skills
-
-| Skill | Phase | What it does |
-|---|---|---|
-| `/feather:workflow` | Guide | Main entry point — walks you through the full flow |
-| `/feather:help` | Guide | Shows all skills with usage guidance |
-| `/feather:create-design` | Design | Generate system design from requirements |
-| `/feather:review-design` | Design | Review and critique a design |
-| `/feather:create-ui-mockup` | Design | Create ASCII UI mockups |
-| `/feather:create-spec` | Spec | Write behavioral specification with test hooks |
-| `/feather:derive-tests` | Spec | Derive test cases from spec |
-| `/feather:write-tests` | Test | Write tests from derived test cases (TDD) |
-| `/feather:setup-tdd-guard` | Test | Configure TDD enforcement (any stack) |
-| `/feather:setup-react-testing` | Test | Add React testing environment |
-| `/feather:setup-convex-testing` | Test | Add Convex integration testing (add-on to react-testing) |
-| `/feather:add-convex-auth-testing` | Test | Add auth testing for Convex components |
-| `/feather:review-convex-tests` | Test | 10-point quality checklist for Convex tests |
-| `/feather:create-plan` | Plan | Create implementation plan from spec |
-| `/feather:execute` | Execute | Execute plan with quality gates |
-| `/feather:verify` | Verify | Run verification checkpoint |
-| `/feather:finish` | Finish | Complete branch (merge/PR/keep) |
-| `/feather:slice-project` | Slice | Break project into vertical slices |
-| `/feather:work-slice` | Slice | Work on a single slice (TDD-enforced) |
-| `/feather:add-slice` | Slice | Add a new slice to existing project |
-| `/feather:pause-slice` | Slice | Pause current slice work |
-| `/feather:resume-slice` | Slice | Resume paused slice |
-| `/feather:isolate-work` | Utility | Create isolated workspace (worktree/branch) |
-| `/feather:create-issue` | Utility | Create GitHub issue from context |
-| `/feather:polish` | Utility | Quick quality improvements |
-| `/feather:update` | Utility | Interactive update with local mod detection |
+- **Your words over rephrasing.** brainstorm.md quotes you verbatim.
+  Reframing is explicitly disallowed.
+- **Specs as user-perspective. Tasks as developer-perspective.**
+  The spec describes what the user can do; the task list describes
+  what the developer builds.
+- **Prove the engine first.** Task ordering puts a hardcoded UI
+  triggering the full pipeline before any UX polish.
+- **Verification classifies findings.** Test failure, spec divergence,
+  spec ambiguity, cross-cutting issue, scope creep, unrelated bug —
+  each gets a different response, never silently absorbed.
+- **The user owns the loop.** Agent never auto-continues to the next
+  task. One task per cycle, ask before the next.
 
 ## Built on Superpowers
 
-Several feather-flow skills are derived from [Superpowers](https://github.com/obra/superpowers) by Jesse Vincent (MIT). See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for detailed attribution.
+The visual companion pattern in `feather-brainstorm` is adapted from
+[Superpowers](https://github.com/obra/superpowers) by Jesse Vincent
+(MIT). See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for attribution.
 
 ## License
 

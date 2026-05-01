@@ -23,7 +23,7 @@ try {
     const today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
     if (cache.update_available && cache.installed && cache.latest && cache.notified_date !== today) {
       process.stdout.write(
-        `feather-flow update available: v${cache.installed} → v${cache.latest}. Run /feather:update to upgrade.\n`
+        `feather-flow update available: v${cache.installed} → v${cache.latest}. Run \`npx feather-flow\` to upgrade.\n`
       );
       // Mark as notified today so we don't prompt again
       cache.notified_date = today;

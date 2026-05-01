@@ -1,11 +1,21 @@
 name: Publish to npm
 
+# Triggers on tag push only (e.g. `git push origin v2.0.1`).
+# The release skill drives this — it bumps the version, tags, and pushes.
+# Pushing a tag is the explicit "publish this version" signal.
+#
+# Prior versions of this workflow triggered on every push to main and
+# auto-bumped the patch version when local matched npm. That caused
+# rebase conflicts during manual releases (the auto-commit landed on
+# origin between the version bump and the tag push) and produced
+# undocumented patch versions for non-release commits like docs fixes.
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v*'
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 jobs:
@@ -19,34 +29,15 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Compare versions and auto-bump if needed
-        id: version
+      - name: Verify tag matches package.json version
         run: |
-          LOCAL=$(node -p "require('./package.json').version")
-          REMOTE=$(npm view feather-flow version 2>/dev/null || echo "0.0.0")
-          echo "local=$LOCAL" >> "$GITHUB_OUTPUT"
-          echo "remote=$REMOTE" >> "$GITHUB_OUTPUT"
-
-          if [ "$LOCAL" = "$REMOTE" ]; then
-            echo "Versions match ($LOCAL) — auto-bumping patch"
-            npm version patch --no-git-tag-version
-            NEW=$(node -p "require('./package.json').version")
-            echo "$NEW" > VERSION
-            echo "bumped=true" >> "$GITHUB_OUTPUT"
-            echo "new=$NEW" >> "$GITHUB_OUTPUT"
-          else
-            echo "Version already bumped ($LOCAL vs $REMOTE) — publishing as-is"
-            echo "bumped=false" >> "$GITHUB_OUTPUT"
+          TAG="${GITHUB_REF#refs/tags/v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag ($TAG) does not match package.json version ($PKG)"
+            exit 1
           fi
+          echo "Publishing v$PKG (tag matches)"
 
       - name: Publish to npm
         run: npm publish --provenance --access public
-
-      - name: Commit version bump back to main
-        if: steps.version.outputs.bumped == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json VERSION
-          git commit -m "chore: bump to v${{ steps.version.outputs.new }} [skip ci]"
-          git push
