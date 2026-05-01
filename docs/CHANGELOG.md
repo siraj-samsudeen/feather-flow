@@ -4,6 +4,43 @@ All notable changes to feather-flow will be documented in this file.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-01
+
+### Changed (BREAKING)
+- **Skill set rewritten as a 4-skill pipeline.** All previous `feather:*`
+  (colon-prefixed) skills are removed. The new pipeline is:
+  `feather-brainstorm` → `feather-spec` → `feather-execute-task`,
+  with `feather-flow` as the orchestrator/overview skill.
+- **Stable-ID scheme:** requirement prefix changed from `R` to `RQ`
+  (e.g. `A1.RQ1`) to disambiguate from risk `R1` in design.md.
+
+### Added
+- **`feather-brainstorm`** — horizon-expansion skill that captures the
+  user's words verbatim (no paraphrasing), with an HTML visual companion
+  for layout decisions (uses `open`/`xdg-open`, no external server).
+- **`feather-spec`** — single canonical reference for capability/design/
+  screen/component/tasks artifacts, EARS patterns, stable IDs, and the
+  prove-engine-first task ordering.
+- **`feather-execute-task`** — gated task execution loop
+  (mini-plan → execute → verify → tick → ask), with a six-category
+  finding classifier (task fix, divergence, ambiguity, cross-cutting,
+  scope creep, unrelated bug).
+- **`feather-flow`** — overview skill for pipeline orientation and
+  starting mid-pipeline.
+- **`skills/feather-spec/references/example-todo.md`** — canonical
+  minimal-mode example.
+
+### Removed
+- All 46 prior `feather:*` (colon-prefix) skill files, including the
+  Convex-testing additions from v1.2.6 (those will be revisited
+  separately if still needed).
+
+### Migration
+Anyone with a project initialized on v1.x will not find the old
+`feather:*` skills after upgrading. The replacement skills are not
+drop-in equivalents; they are a different model of the workflow.
+A migration guide will follow if there is demand.
+
 ## [1.2.2] - 2026-02-20
 
 ### Changed
@@ -18,7 +55,8 @@ All notable changes to feather-flow will be documented in this file.
 ### Fixed
 - **Kept files overwritten on subsequent updates** — manifest now stores upstream hash for kept files so they're always detected as modified (#4)
 
-[Unreleased]: https://github.com/siraj-samsudeen/feather-flow/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/siraj-samsudeen/feather-flow/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/siraj-samsudeen/feather-flow/releases/tag/v2.0.0
 [1.2.2]: https://github.com/siraj-samsudeen/feather-flow/releases/tag/v1.2.2
 [1.2.1]: https://github.com/siraj-samsudeen/feather-flow/releases/tag/v1.2.1
 
