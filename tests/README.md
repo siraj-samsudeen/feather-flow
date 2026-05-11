@@ -23,7 +23,7 @@ For any new or existing test, ask in order:
    etc. — see the list below).
 2. **Does it exercise 2+ modules from `src/feather_etl/` through a
    pipeline-level API** (e.g., `pipeline.run_pipeline()`,
-   `cache.run_cache()`)? → `tests/integration/`. File chosen by
+   `extract.run_extract()`)? → `tests/integration/`. File chosen by
    feature/capability (`test_incremental.py`, `test_schema_drift.py`,
    etc.).
 3. **Otherwise — exercises a single module's functions/classes** →
@@ -52,7 +52,7 @@ journey:
 | `test_09_schema_drift.py` | added/removed/type-changed columns |
 | `test_10_error_handling.py` | partial failure, exit codes, stream routing |
 | `test_11_path_resolution.py` | CWD independence, absolute `--config` |
-| `test_12_cache.py` | `feather cache` |
+| `test_12_extract.py` | `feather extract` |
 | `test_13_multi_source.py` | multiple `sources:` entries |
 | `test_14_status.py` | `feather status` |
 | `test_15_history.py` | `feather history` |

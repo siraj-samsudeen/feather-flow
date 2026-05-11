@@ -1,4 +1,9 @@
-"""`feather cache` command — dev-only local bronze pull."""
+"""`feather extract` command — dev-only local bronze pull.
+
+Renamed from `feather cache` per the feather-transform change.
+The internal `_cache_watermarks` state table is unchanged; only the
+CLI verb and its module path were renamed.
+"""
 
 from __future__ import annotations
 
@@ -9,18 +14,18 @@ import typer
 from feather_etl.commands._common import _load_and_validate
 
 
-def cache(
+def extract(
     config: Path = typer.Option("feather.yaml", "--config"),
     table: str | None = typer.Option(
         None,
         "--table",
-        help="Comma-separated bronze table names to cache. "
+        help="Comma-separated bronze table names to extract. "
         "Default: all curated tables.",
     ),
     source: str | None = typer.Option(
         None,
         "--source",
-        help="Comma-separated source_db values to cache. "
+        help="Comma-separated source_db values to extract. "
         "Default: all sources in curation.",
     ),
     refresh: bool = typer.Option(
@@ -30,7 +35,7 @@ def cache(
     ),
 ) -> None:
     """Pull curated source tables into bronze (dev-only)."""
-    from feather_etl.cache import run_cache
+    from feather_etl.extract import run_extract
 
     curation_path = Path(config).resolve().parent / "discovery" / "curation.json"
     if not curation_path.exists():
@@ -45,7 +50,7 @@ def cache(
 
     if cfg.mode == "prod":
         typer.echo(
-            "feather cache is a dev-only tool. "
+            "feather extract is a dev-only tool. "
             "Remove 'mode: prod' or unset FEATHER_MODE=prod to use it.",
             err=True,
         )
@@ -89,7 +94,7 @@ def cache(
     if requested_sources:
         tables = [t for t in tables if t.database in requested_sources]
 
-    results = run_cache(cfg, tables, cfg.config_dir, refresh=refresh)
+    results = run_extract(cfg, tables, cfg.config_dir, refresh=refresh)
 
     # Grouped-by-source_db output
     from collections import defaultdict
@@ -98,7 +103,7 @@ def cache(
     for r in results:
         groups[r.source_db].append(r)
 
-    typer.echo("Mode: dev (cache)")
+    typer.echo("Mode: dev (extract)")
     total_success = 0
     total_cached = 0
     total_failed = 0
@@ -153,4 +158,4 @@ def _lookup_source_name(cfg, source_db: str) -> str:
 
 
 def register(app: typer.Typer) -> None:
-    app.command(name="cache")(cache)
+    app.command(name="extract")(extract)

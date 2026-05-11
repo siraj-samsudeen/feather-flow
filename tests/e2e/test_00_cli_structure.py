@@ -33,7 +33,7 @@ def test_cli_registers_expected_commands_on_app() -> None:
         "run",
         "history",
         "status",
-        "cache",
+        "extract",
     }
 
 
@@ -47,7 +47,7 @@ def test_command_modules_expose_register_functions() -> None:
         "run",
         "history",
         "status",
-        "cache",
+        "extract",
     ]
 
     for module_name in module_names:
@@ -57,16 +57,39 @@ def test_command_modules_expose_register_functions() -> None:
         assert callable(module.register)
 
 
-def test_feather_help_lists_cache(project, cli):
+def test_feather_help_lists_extract(project, cli):
     result = cli("--help", config=False)
     assert result.exit_code == 0
-    assert "cache" in result.output
+    assert "extract" in result.output
 
 
-def test_feather_cache_help_renders(project, cli):
+def test_feather_help_does_not_list_cache(project, cli):
+    """Positive proof of the hard rename `feather cache` -> `feather extract`:
+    the legacy verb name MUST NOT appear in the top-level help command list.
+    Spec: openspec/changes/feather-transform/specs/extract-verb-rename/spec.md.
+    """
+    result = cli("--help", config=False)
+    assert result.exit_code == 0
+    # Restrict the check to Click's command-list section: lines that start
+    # with two spaces but not four (Click formats commands as "  <name>  ...").
+    command_lines = [
+        line
+        for line in result.output.splitlines()
+        if line.startswith("  ") and not line.startswith("    ")
+    ]
+    joined = " ".join(command_lines)
+    # Whole-word match so words containing 'cache' inside help strings can't
+    # produce a false positive.
+    assert "cache" not in joined.split(), (
+        f"`cache` must not appear in the command list. Lines:\n"
+        + "\n".join(command_lines)
+    )
+
+
+def test_feather_extract_help_renders(project, cli):
     import re
 
-    result = cli("cache", "--help")
+    result = cli("extract", "--help")
     assert result.exit_code == 0
     # Strip ANSI escape sequences added by Rich so flag names aren't
     # split across styling boundaries (e.g. "-\x1b[0m\x1b[36m-table").

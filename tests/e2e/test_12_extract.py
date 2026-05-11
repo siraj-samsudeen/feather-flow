@@ -1,12 +1,15 @@
-"""Workflow stage 12: feather cache.
+"""Workflow stage 12: feather extract.
 
-Scenarios here exercise `feather cache` across:
-- basic extraction to parquet cache
+Scenarios here exercise `feather extract` across:
+- basic extraction to bronze
 - prod-mode hard-error guard
 - missing curation.json pre-check
 - --table / --source selectors
 - --refresh flag (force re-extract)
 - grouped output format
+
+Renamed from test_12_cache.py per the feather-transform change
+(verb `feather cache` -> `feather extract`).
 """
 
 from __future__ import annotations
@@ -38,13 +41,13 @@ def _setup_two_tables(project):
 
 
 # ---------------------------------------------------------------------------
-# Basic cache extraction
+# Basic extraction
 # ---------------------------------------------------------------------------
 
 
 def test_cold_run_extracts_tables(project, cli):
     _setup_single_table(project)
-    result = cli("cache")
+    result = cli("extract")
     assert result.exit_code == 0
     assert "extracted" in result.output
 
@@ -63,7 +66,7 @@ def test_rejects_yaml_mode_prod(project, cli):
     )
     project.write_curation([("icube", "icube.InventoryGroup", "inv")])
 
-    result = cli("cache")
+    result = cli("extract")
     assert result.exit_code == 2
     assert "dev-only" in result.output
 
@@ -71,7 +74,7 @@ def test_rejects_yaml_mode_prod(project, cli):
 def test_rejects_feather_mode_env_prod(project, cli, monkeypatch):
     monkeypatch.setenv("FEATHER_MODE", "prod")
     _setup_single_table(project)
-    result = cli("cache")
+    result = cli("extract")
     assert result.exit_code == 2
     assert "dev-only" in result.output
 
@@ -90,7 +93,7 @@ def test_errors_with_curation_path_when_missing(project, cli):
         destination={"path": "./feather_data.duckdb"},
     )
 
-    result = cli("cache")
+    result = cli("extract")
     assert result.exit_code == 2
     assert "curation.json" in result.output
     assert "feather discover" in result.output
@@ -103,7 +106,7 @@ def test_errors_with_curation_path_when_missing(project, cli):
 
 def test_table_filter_restricts_extraction(project, cli):
     _setup_two_tables(project)
-    result = cli("cache", "--table", "icube_inv")
+    result = cli("extract", "--table", "icube_inv")
     assert result.exit_code == 0
 
     rows = project.query(
@@ -117,7 +120,7 @@ def test_table_filter_restricts_extraction(project, cli):
 def test_source_filter_restricts_extraction(project, cli):
     _setup_two_tables(project)
     # Only one source_db here (icube); this also confirms the filter accepts it.
-    result = cli("cache", "--source", "icube")
+    result = cli("extract", "--source", "icube")
     assert result.exit_code == 0
 
     rows = project.query(
@@ -130,7 +133,7 @@ def test_source_filter_restricts_extraction(project, cli):
 
 def test_table_and_source_intersect(project, cli):
     _setup_two_tables(project)
-    result = cli("cache", "--table", "icube_inv", "--source", "icube")
+    result = cli("extract", "--table", "icube_inv", "--source", "icube")
     assert result.exit_code == 0
 
     rows = project.query(
@@ -142,7 +145,7 @@ def test_table_and_source_intersect(project, cli):
 
 def test_unknown_table_errors_with_valid_list(project, cli):
     _setup_two_tables(project)
-    result = cli("cache", "--table", "no_such_table")
+    result = cli("extract", "--table", "no_such_table")
     assert result.exit_code == 2
     assert "no_such_table" in result.output
     assert "icube_inv" in result.output
@@ -151,7 +154,7 @@ def test_unknown_table_errors_with_valid_list(project, cli):
 
 def test_unknown_source_errors_with_valid_list(project, cli):
     _setup_two_tables(project)
-    result = cli("cache", "--source", "nope")
+    result = cli("extract", "--source", "nope")
     assert result.exit_code == 2
     assert "nope" in result.output
     assert "icube" in result.output
@@ -166,17 +169,17 @@ def test_refresh_forces_re_extraction(project, cli):
     _setup_single_table(project)
 
     # Cold run
-    r1 = cli("cache")
+    r1 = cli("extract")
     assert r1.exit_code == 0
     assert "1 extracted" in r1.output
 
     # Warm run — should be cached
-    r2 = cli("cache")
+    r2 = cli("extract")
     assert r2.exit_code == 0
     assert "1 cached" in r2.output
 
     # Refresh — should re-extract
-    r3 = cli("cache", "--refresh")
+    r3 = cli("extract", "--refresh")
     assert r3.exit_code == 0
     assert "1 extracted" in r3.output
 
@@ -199,12 +202,12 @@ def test_grouped_output_with_failure_expansion(project, cli):
         ]
     )
 
-    result = cli("cache")
+    result = cli("extract")
     # Non-zero exit because of the failed table
     assert result.exit_code == 1
     out = result.output
 
-    assert "Mode: dev (cache)" in out
+    assert "Mode: dev (extract)" in out
     # Grouped: a line starts with "icube" (source_db), has counts
     assert "icube" in out
     # Summary: totals across groups

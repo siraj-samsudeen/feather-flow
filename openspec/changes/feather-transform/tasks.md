@@ -15,15 +15,15 @@
 
 ## 3. Rename `cache` → `extract` (folds in issue #55)
 
-- [ ] 3.1 Confirm the file inventory from 1.5 — `commands/cache.py` exists; `feather_etl/cache.py` may or may not. Adjust the rename scope accordingly.
-- [ ] 3.2 `git mv src/feather_etl/commands/cache.py src/feather_etl/commands/extract.py`. Rename the `cache()` function to `extract()` and update the `app.command(name="cache")` registration to `name="extract"`.
-- [ ] 3.3 If `src/feather_etl/cache.py` exists at top-level, `git mv` it to `src/feather_etl/extract.py` and rename `run_cache()` to `run_extract()`. Update the import inside the renamed command module.
-- [ ] 3.4 Update `src/feather_etl/cli.py`: remove the `cache` registration; add the `extract` registration. No alias.
-- [ ] 3.5 Update every internal import referencing the old paths (`from feather_etl.cache import ...` → `from feather_etl.extract import ...`; `from feather_etl.commands.cache import ...` → likewise).
-- [ ] 3.6 Rename test files: `tests/test_cache*.py` → `tests/test_extract*.py`. Update test function names and import paths.
-- [ ] 3.7 Add a test asserting `feather cache` returns a "no such command" error from Typer (positive proof of the hard rename — no alias slipped in).
-- [ ] 3.8 Run `uv run pytest -q`. All renamed tests must pass; no test refers to `cache` anymore (grep to confirm).
-- [ ] 3.9 Commit the rename as its own diff so the rename is reviewable in isolation from later semantic work.
+- [x] 3.1 Confirm the file inventory from 1.5 — `commands/cache.py` exists; `feather_etl/cache.py` may or may not. Adjust the rename scope accordingly. Both files existed; both renamed.
+- [x] 3.2 `git mv src/feather_etl/commands/cache.py src/feather_etl/commands/extract.py`. Rename the `cache()` function to `extract()` and update the `app.command(name="cache")` registration to `name="extract"`.
+- [x] 3.3 If `src/feather_etl/cache.py` exists at top-level, `git mv` it to `src/feather_etl/extract.py` and rename `run_cache()` to `run_extract()`. Update the import inside the renamed command module. Also renamed `CacheResult` -> `ExtractResult` (return type of `run_extract`) since leaving it as `CacheResult` would have been misleading.
+- [x] 3.4 Update `src/feather_etl/cli.py`: remove the `cache` registration; add the `extract` registration. No alias.
+- [x] 3.5 Update every internal import referencing the old paths (`from feather_etl.cache import ...` → `from feather_etl.extract import ...`; `from feather_etl.commands.cache import ...` → likewise). Also updated `tests/integration/test_architecture_purity.py` (CORE_MODULES list) and `tests/README.md` (doc example).
+- [x] 3.6 Rename test files: `tests/test_cache*.py` → `tests/test_extract*.py`. Update test function names and import paths. Three files moved via `git mv`. Output strings inside e2e test changed from `Mode: dev (cache)` to `Mode: dev (extract)` to match the renamed verb context.
+- [x] 3.7 Add a test asserting `feather cache` returns a "no such command" error from Typer (positive proof of the hard rename — no alias slipped in). Added `TestNoCacheAlias` in `tests/unit/commands/test_extract.py` (three tests: cache not registered, extract registered, top-level help lists extract not cache) plus `test_feather_help_does_not_list_cache` in `tests/e2e/test_00_cli_structure.py`.
+- [x] 3.8 Run `uv run pytest -q`. All renamed tests must pass; no test refers to `cache` anymore (grep to confirm). **817 passing.** Zero module imports / public-symbol references survive; the only remaining "feather cache" strings are intentional docstrings explaining the rename and the no-alias assertion messages.
+- [x] 3.9 Commit the rename as its own diff so the rename is reviewable in isolation from later semantic work.
 
 ## 4. Add `_runs.trigger` column and history filter
 
