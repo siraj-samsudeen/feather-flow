@@ -54,9 +54,9 @@
 
 ## 6. Advisory bronze-dependency check
 
-- [ ] 6.1 Add `check_bronze_dependencies(con, transforms) -> list[str]` to `transforms.py`. Returns a list of warning strings, one per silver transform whose `-- depends_on: bronze.<table>` is missing from `information_schema.tables`.
-- [ ] 6.2 If the returned list has more than five entries, collapse into a single summary string: `f"WARNING: {N} bronze dependencies missing — run `feather extract` first"`. Otherwise emit one `WARNING:` line per missing dep.
-- [ ] 6.3 Pytest covers: zero missing → empty list; one missing → one warning; six missing → one summary; mixed silver-without-depends_on and silver-with-depends_on → only the latter is checked.
+- [x] 6.1 Add `check_bronze_dependencies(con, transforms) -> list[str]` to `transforms.py`. Returns a list of warning strings, one per silver transform whose `-- depends_on: bronze.<table>` is missing from `information_schema.tables`.
+- [x] 6.2 If the returned list has more than five entries, collapse into a single summary string: `f"WARNING: {N} bronze dependencies missing — run `feather extract` first"`. Otherwise emit one `WARNING:` line per missing dep. **Collapse logic lives in the transform command (Section 7), not the helper — the helper returns the raw list, the caller renders/collapses.**
+- [x] 6.3 Pytest covers: zero missing → empty list; one missing → one warning; six missing → one summary; mixed silver-without-depends_on and silver-with-depends_on → only the latter is checked. **7 unit tests in `tests/unit/test_bronze_check.py`.**
 
 ## 7. New `feather transform` command
 

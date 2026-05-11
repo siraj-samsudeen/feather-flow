@@ -274,6 +274,50 @@ def rebuild_materialized_gold(
     return results
 
 
+def check_bronze_dependencies(
+    con: duckdb.DuckDBPyConnection,
+    transforms: list[TransformMeta],
+) -> list[str]:
+    """Return a warning string for each unmet ``bronze.<table>`` dependency.
+
+    Inspects every silver transform's ``-- depends_on:`` declarations and
+    checks each ``bronze.<table>`` reference against the destination's
+    ``information_schema.tables`` (filtered to the ``bronze`` schema).
+
+    Returns one warning string per unmet dependency, in the order discovered.
+    The caller decides whether to render each entry as its own line or
+    collapse the list into a summary — that presentation concern is not the
+    helper's job. Returns an empty list when every declared bronze dep is
+    present (or when no silver transform declares any bronze dep).
+
+    Only ``depends_on`` entries whose schema is exactly ``bronze`` are
+    checked. Cross-transform deps (``silver.X``, ``gold.X``) are out of scope
+    for this helper — the topological sorter in ``build_execution_order``
+    already validates those.
+    """
+    # Build the set of available bronze tables in a single query.
+    rows = con.execute(
+        "SELECT table_schema || '.' || table_name "
+        "FROM information_schema.tables "
+        "WHERE table_schema = 'bronze'"
+    ).fetchall()
+    available: set[str] = {row[0] for row in rows}
+
+    warnings: list[str] = []
+    for t in transforms:
+        if t.schema != "silver":
+            continue
+        for dep in t.depends_on:
+            if not dep.startswith("bronze."):
+                continue
+            if dep not in available:
+                warnings.append(
+                    f"WARNING: bronze dependency missing: {dep} "
+                    f"(run `feather extract` first)"
+                )
+    return warnings
+
+
 def run_transforms(config) -> list[TransformResult]:
     """Run discovered silver/gold transforms against the destination DuckDB.
 
