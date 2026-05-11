@@ -96,6 +96,146 @@ class TestMySQLFromYaml:
 
 
 # ---------------------------------------------------------------------------
+# MySQLSource — _connect_kwargs charset/use_unicode (issue #52)
+# ---------------------------------------------------------------------------
+
+
+class TestMySQLConnectKwargs:
+    """Without ``charset=utf8mb4`` and ``use_unicode=True``, mysql-connector
+    returns VARCHAR/TEXT column values as ``bytes`` rather than ``str``,
+    which forces pyarrow to materialise the column as ``binary()`` even
+    when the schema declares ``string()`` — landing every text column in
+    destination DuckDB as BLOB. See issue #52."""
+
+    def test_host_form_sets_charset_and_use_unicode(self):
+        from feather_etl.sources.mysql import MySQLSource
+
+        src = MySQLSource.from_yaml(
+            {
+                "name": "wh",
+                "type": "mysql",
+                "host": "db.example.com",
+                "user": "u",
+                "password": "p",
+                "database": "warehouse",
+            },
+            Path("."),
+        )
+        assert src._connect_kwargs["charset"] == "utf8mb4"
+        assert src._connect_kwargs["use_unicode"] is True
+
+    def test_databases_list_form_sets_charset_and_use_unicode(self):
+        """The multi-DB form must also carry charset settings — when
+        ``resolve_source`` binds a child per ``source_db``, the child is
+        built via the same ``from_yaml`` host branch."""
+        from feather_etl.sources.mysql import MySQLSource
+
+        src = MySQLSource.from_yaml(
+            {
+                "name": "Rama",
+                "type": "mysql",
+                "host": "h",
+                "user": "u",
+                "password": "p",
+                "databases": ["A", "B"],
+            },
+            Path("."),
+        )
+        assert src._connect_kwargs["charset"] == "utf8mb4"
+        assert src._connect_kwargs["use_unicode"] is True
+
+    def test_connection_string_form_leaves_charset_to_user(self):
+        """``connection_string`` is user-owned verbatim. We don't inject
+        charset there — operators using an explicit connection string are
+        responsible for including ``charset=utf8mb4;use_unicode=True`` in
+        the string themselves."""
+        from feather_etl.sources.mysql import MySQLSource
+
+        src = MySQLSource.from_yaml(
+            {
+                "name": "wh",
+                "type": "mysql",
+                "connection_string": "host=raw;database=verbatim",
+            },
+            Path("."),
+        )
+        assert src._connect_kwargs == {}
+
+
+# ---------------------------------------------------------------------------
+# MySQLSource — _mysql_field_type_to_arrow flag-aware mapping (issue #52)
+# ---------------------------------------------------------------------------
+
+
+class TestMySQLFieldTypeToArrow:
+    """mysql-connector overloads type code 252 for both ``BLOB`` and
+    ``TEXT``; the family more broadly straddles binary/text variants for
+    codes 249/250/251. The ``FieldFlag.BINARY`` bit on
+    ``cursor.description[i][7]`` is the only discriminator."""
+
+    def test_blob_with_binary_flag_maps_to_binary(self):
+        import pyarrow as pa
+        from mysql.connector.constants import FieldFlag
+
+        from feather_etl.sources.mysql import _mysql_field_type_to_arrow
+
+        # type code 252 = BLOB/TEXT, BINARY flag set → real binary
+        assert _mysql_field_type_to_arrow(252, FieldFlag.BINARY) == pa.binary()
+
+    def test_blob_without_binary_flag_maps_to_string(self):
+        """The TEXT case: same type code 252, but no BINARY flag."""
+        import pyarrow as pa
+
+        from feather_etl.sources.mysql import _mysql_field_type_to_arrow
+
+        assert _mysql_field_type_to_arrow(252, 0) == pa.string()
+
+    def test_tiny_blob_family_respects_binary_flag(self):
+        import pyarrow as pa
+        from mysql.connector.constants import FieldFlag
+
+        from feather_etl.sources.mysql import _mysql_field_type_to_arrow
+
+        # 249 = TINY_BLOB / TINYTEXT
+        assert _mysql_field_type_to_arrow(249, FieldFlag.BINARY) == pa.binary()
+        assert _mysql_field_type_to_arrow(249, 0) == pa.string()
+        # 250 = MEDIUM_BLOB / MEDIUMTEXT
+        assert _mysql_field_type_to_arrow(250, FieldFlag.BINARY) == pa.binary()
+        assert _mysql_field_type_to_arrow(250, 0) == pa.string()
+        # 251 = LONG_BLOB / LONGTEXT
+        assert _mysql_field_type_to_arrow(251, FieldFlag.BINARY) == pa.binary()
+        assert _mysql_field_type_to_arrow(251, 0) == pa.string()
+
+    def test_var_string_maps_to_string(self):
+        """Code 253 = VAR_STRING (the actual VARCHAR wire type). Always string."""
+        import pyarrow as pa
+
+        from feather_etl.sources.mysql import _mysql_field_type_to_arrow
+
+        assert _mysql_field_type_to_arrow(253, 0) == pa.string()
+
+    def test_string_maps_to_string(self):
+        """Code 254 = STRING (CHAR). Always string."""
+        import pyarrow as pa
+
+        from feather_etl.sources.mysql import _mysql_field_type_to_arrow
+
+        assert _mysql_field_type_to_arrow(254, 0) == pa.string()
+
+    def test_numeric_codes_ignore_flags(self):
+        """The flag bit is only meaningful for the BLOB family; numeric
+        types must keep their declared mapping regardless of flags."""
+        import pyarrow as pa
+        from mysql.connector.constants import FieldFlag
+
+        from feather_etl.sources.mysql import _mysql_field_type_to_arrow
+
+        # code 3 = LONG → int64 regardless of flags
+        assert _mysql_field_type_to_arrow(3, 0) == pa.int64()
+        assert _mysql_field_type_to_arrow(3, FieldFlag.BINARY) == pa.int64()
+
+
+# ---------------------------------------------------------------------------
 # MySQLSource — unit tests (no DB needed)
 # ---------------------------------------------------------------------------
 

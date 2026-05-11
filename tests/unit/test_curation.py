@@ -131,16 +131,41 @@ class TestLoadCuration:
 
 class TestResolveSource:
     def test_resolves_source_by_databases_list(self):
+        """Multi-DB sources (``databases:[...]`` with ``database=None``) are
+        config containers: ``resolve_source`` returns a freshly-bound child
+        with ``database=source_db``, not the parent. This is what lets cache
+        and run open connections that aren't in MySQL's "no database
+        selected" state (issue #51)."""
+        from pathlib import Path
+
         from feather_etl.curation import resolve_source
+        from feather_etl.sources.mysql import MySQLSource
 
-        mock_src = MagicMock()
-        mock_src.name = "Rama"
-        mock_src.database = None
-        mock_src.databases = ["Gofrugal", "SAP", "ZAKYA"]
-        mock_src.type = "sqlserver"
+        parent = MySQLSource.from_yaml(
+            {
+                "name": "Rama",
+                "type": "mysql",
+                "host": "db.example.com",
+                "user": "u",
+                "password": "p",
+                "databases": ["Gofrugal", "SAP", "ZAKYA"],
+            },
+            Path("."),
+        )
+        assert parent.database is None  # parent is unbound
 
-        result = resolve_source("Gofrugal", [mock_src])
-        assert result == mock_src
+        result = resolve_source("Gofrugal", [parent])
+
+        # Child, not parent — bound to the requested DB.
+        assert result is not parent
+        assert isinstance(result, MySQLSource)
+        assert result.database == "Gofrugal"
+        # Child carries the DB into _connect_kwargs so connections land
+        # with a default schema set.
+        assert result._connect_kwargs["database"] == "Gofrugal"
+        # Same host/credentials propagate.
+        assert result.host == "db.example.com"
+        assert result.user == "u"
 
     def test_resolves_source_by_single_database(self):
         from feather_etl.curation import resolve_source
@@ -194,3 +219,49 @@ class TestResolveSource:
 
         with pytest.raises(ValueError, match="ambiguous.*matches multiple sources"):
             resolve_source("sales", [src_a, src_b])
+
+    def test_multi_db_child_name_disambiguates_parent(self):
+        """The child source returned for a multi-DB parent gets a synthetic
+        ``__<db>`` suffix on its name so log/error output can distinguish
+        which DB an operation was bound to."""
+        from pathlib import Path
+
+        from feather_etl.curation import resolve_source
+        from feather_etl.sources.mysql import MySQLSource
+
+        parent = MySQLSource.from_yaml(
+            {
+                "name": "Rama",
+                "type": "mysql",
+                "host": "h",
+                "user": "u",
+                "password": "p",
+                "databases": ["A", "B"],
+            },
+            Path("."),
+        )
+        result = resolve_source("A", [parent])
+        assert result.name == "Rama__A"
+
+    def test_single_db_match_returns_parent_identity(self):
+        """Single-DB sources (``database:`` set) are returned unchanged —
+        no child is built, identity is preserved. Confirms ``_bind_db``
+        only triggers on the multi-DB branch."""
+        from pathlib import Path
+
+        from feather_etl.curation import resolve_source
+        from feather_etl.sources.mysql import MySQLSource
+
+        parent = MySQLSource.from_yaml(
+            {
+                "name": "wh",
+                "type": "mysql",
+                "host": "h",
+                "user": "u",
+                "password": "p",
+                "database": "warehouse",
+            },
+            Path("."),
+        )
+        result = resolve_source("warehouse", [parent])
+        assert result is parent

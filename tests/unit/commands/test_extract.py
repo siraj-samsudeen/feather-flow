@@ -37,6 +37,32 @@ class TestLookupSourceName:
         cfg = _FakeCfg(sources=[_FakeSource(name="erp", database="erp")])
         assert _lookup_source_name(cfg, "nonexistent_db") == "nonexistent_db"
 
+    def test_multi_db_source_returns_parent_name_not_child_suffix(self):
+        """For ``databases:[...]`` sources, ``resolve_source`` returns a
+        per-DB child whose ``.name`` is the synthesized ``<parent>__<db>``.
+        ``_lookup_source_name`` must show the operator the parent name they
+        wrote in YAML, not the internal disambiguator."""
+        from pathlib import Path
+
+        from feather_etl.commands.extract import _lookup_source_name
+        from feather_etl.sources.mysql import MySQLSource
+
+        parent = MySQLSource.from_yaml(
+            {
+                "name": "RamaMySQL",
+                "type": "mysql",
+                "host": "h",
+                "user": "u",
+                "password": "p",
+                "databases": ["mi_db", "core_db"],
+            },
+            Path("."),
+        )
+        cfg = _FakeCfg(sources=[parent])
+        # Operator wrote ``RamaMySQL`` — that's what they should see.
+        assert _lookup_source_name(cfg, "mi_db") == "RamaMySQL"
+        assert _lookup_source_name(cfg, "core_db") == "RamaMySQL"
+
 
 class TestNoCacheAlias:
     """Positive proof of the hard rename: `feather cache` is gone, with no

@@ -147,12 +147,18 @@ def extract(
 
 
 def _lookup_source_name(cfg, source_db: str) -> str:
-    """Find the YAML source 'name' corresponding to a source_db."""
+    """Find the YAML source 'name' corresponding to a source_db.
+
+    For multi-DB sources, ``resolve_source`` returns a per-DB child whose
+    ``.name`` is the synthesized ``<parent>__<db>``. We prefer the parent
+    name (stored on ``_parent_name`` by ``curation._bind_db``) so the CLI
+    output keeps showing the source the operator wrote.
+    """
     from feather_etl.curation import resolve_source
 
     try:
         src = resolve_source(source_db, cfg.sources)
-        return src.name
+        return getattr(src, "_parent_name", src.name)
     except ValueError:
         return source_db
 

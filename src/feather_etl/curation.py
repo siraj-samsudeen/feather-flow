@@ -20,6 +20,51 @@ def _sanitize_bronze_name(source_db: str, alias: str) -> str:
     return _UNSAFE_CHARS.sub("_", raw)
 
 
+def _bind_db(matched: object, source_db: str) -> object:
+    """If ``matched`` is a multi-DB source (``databases:[...]`` with
+    ``database is None``), return a child source freshly bound to
+    ``source_db``. Otherwise return ``matched`` unchanged.
+
+    Multi-DB sources are config containers: their ``_connect_kwargs`` carry
+    no ``database`` key, so any connection opened on them lands the client
+    in MySQL's "no database selected" state (or the equivalent for other
+    flavors). The curation loop already knows which DB each table belongs
+    to, so we bind here, exactly as ``expand_db_sources`` does for the
+    discover loop (``sources/expand.py:54-65``).
+
+    Single-DB sources (``database:`` set) and file sources are returned
+    as-is — identity is preserved.
+    """
+    databases = getattr(matched, "databases", None)
+    if not databases:
+        return matched
+    if getattr(matched, "database", None) is not None:
+        return matched
+
+    child = type(matched).from_yaml(
+        {
+            "name": f"{matched.name}__{source_db}",
+            "type": matched.type,
+            "host": matched.host,
+            "port": matched.port,
+            "user": matched.user,
+            "password": matched.password,
+            "database": source_db,
+        },
+        Path("."),
+    )
+    child._explicit_name = getattr(matched, "_explicit_name", False)
+    # Preserve the parent's YAML ``name`` so CLI output and logs can still
+    # show the source the operator wrote, not the synthetic ``__<db>``
+    # disambiguator. ``commands/cache.py:_lookup_source_name`` reads this.
+    child._parent_name = matched.name
+    # Propagate any tuning the parent carried that isn't part of
+    # ``from_yaml``'s kwargs (batch_size today; future settings here).
+    if hasattr(matched, "batch_size"):
+        child.batch_size = matched.batch_size
+    return child
+
+
 def resolve_source(source_db: str, sources: list) -> object:
     """Find the source that owns the given database name.
 
@@ -27,6 +72,11 @@ def resolve_source(source_db: str, sources: list) -> object:
     1. source.database == source_db (single-database source)
     2. source_db in source.databases (multi-database source)
     3. source.name == source_db (file sources — no database concept)
+
+    For multi-DB matches (rule 2), returns a child source freshly bound to
+    ``source_db`` via ``_bind_db`` — so callers can call ``extract()`` /
+    ``detect_changes()`` without manually threading the database. The
+    parent multi-DB source is a config container only.
 
     Raises ValueError if no match or ambiguous match.
     """
@@ -52,7 +102,7 @@ def resolve_source(source_db: str, sources: list) -> object:
         raise ValueError(
             f"source_db '{source_db}' is ambiguous — matches multiple sources: {names}"
         )
-    return matches[0]
+    return _bind_db(matches[0], source_db)
 
 
 def load_curation_tables(config_dir: Path) -> list[TableConfig]:

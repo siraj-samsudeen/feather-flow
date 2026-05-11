@@ -8,11 +8,18 @@ from typing import ClassVar
 
 import mysql.connector
 import pyarrow as pa
+from mysql.connector.constants import FieldFlag
 
 from feather_etl.sources import ChangeResult, StreamSchema
 from feather_etl.sources.database_source import DatabaseSource
 
-# mysql.connector FieldType constants → PyArrow type
+# mysql.connector FieldType constants → PyArrow type.
+#
+# BLOB-family codes (249/250/251/252) are intentionally absent: mysql-connector
+# reuses code 252 for both ``BLOB`` and ``TEXT``, and the family more broadly
+# overlaps with their binary/text variants. The only discriminator is the
+# ``FieldFlag.BINARY`` bit on the per-column ``cursor.description`` tuple, so
+# those codes are handled dynamically in ``_mysql_field_type_to_arrow``.
 _MYSQL_FIELD_TYPE_MAP: dict[int, pa.DataType] = {
     0: pa.float64(),  # DECIMAL
     1: pa.int8(),  # TINY
@@ -30,13 +37,13 @@ _MYSQL_FIELD_TYPE_MAP: dict[int, pa.DataType] = {
     15: pa.string(),  # VARCHAR
     16: pa.bool_(),  # BIT
     246: pa.float64(),  # NEWDECIMAL
-    249: pa.binary(),  # TINY_BLOB
-    250: pa.binary(),  # MEDIUM_BLOB
-    251: pa.binary(),  # LONG_BLOB
-    252: pa.binary(),  # BLOB
     253: pa.string(),  # VAR_STRING
     254: pa.string(),  # STRING
 }
+
+# BLOB / TEXT family — code 252 is shared between BLOB and TEXT, 249/250/251
+# similarly straddle TINYBLOB↔TINYTEXT etc. Disambiguated by FieldFlag.BINARY.
+_BLOB_TYPE_CODES: frozenset[int] = frozenset({249, 250, 251, 252})
 
 # INFORMATION_SCHEMA DATA_TYPE string → PyArrow type
 _MYSQL_INFO_SCHEMA_TYPE_MAP: dict[str, pa.DataType] = {
@@ -74,8 +81,18 @@ _MYSQL_INFO_SCHEMA_TYPE_MAP: dict[str, pa.DataType] = {
 }
 
 
-def _mysql_field_type_to_arrow(type_code: int) -> pa.DataType:
-    """Map a mysql.connector FieldType code to a PyArrow type."""
+def _mysql_field_type_to_arrow(type_code: int, flags: int = 0) -> pa.DataType:
+    """Map a mysql.connector FieldType code (+ field flags) to a PyArrow type.
+
+    ``flags`` is the bitmask from ``cursor.description[i][7]``. It only
+    matters for the BLOB family (codes 249-252), which mysql-connector
+    overloads: ``FieldFlag.BINARY`` (=128) set → genuine binary column
+    (``BLOB``, ``VARBINARY``); unset → text column (``TEXT``,
+    ``TINYTEXT``, ``MEDIUMTEXT``, ``LONGTEXT``). All other type codes
+    ignore ``flags``.
+    """
+    if type_code in _BLOB_TYPE_CODES:
+        return pa.binary() if flags & FieldFlag.BINARY else pa.string()
     return _MYSQL_FIELD_TYPE_MAP.get(type_code, pa.string())
 
 
@@ -136,7 +153,18 @@ class MySQLSource(DatabaseSource):
             conn_str = explicit_conn
             connect_kwargs: dict = {}
         elif host:
-            connect_kwargs = {"host": host, "port": port}
+            # charset=utf8mb4 + use_unicode=True ensure mysql-connector returns
+            # string columns as Python ``str`` rather than ``bytes``. Without
+            # them, the C extension's default behaviour makes pyarrow infer
+            # ``binary()`` for VARCHAR/TEXT columns even though our schema
+            # declares ``string()`` — landing every text column in destination
+            # DuckDB as BLOB. See issue #52.
+            connect_kwargs = {
+                "host": host,
+                "port": port,
+                "charset": "utf8mb4",
+                "use_unicode": True,
+            }
             if database:
                 connect_kwargs["database"] = database
             if user:
@@ -259,8 +287,15 @@ class MySQLSource(DatabaseSource):
                 return pa.table({})
 
             col_names = [desc[0] for desc in cursor.description]
+            # desc is the 8-tuple (name, type_code, display_size, internal_size,
+            # precision, scale, null_ok, flags) per mysql-connector's PEP-249
+            # superset. desc[7] (flags) is required for the BLOB-family
+            # binary-vs-text discriminator; we take it raw so a future cursor
+            # wrapper that returns a shorter tuple raises loudly rather than
+            # silently mapping every BLOB to string.
             col_types = [
-                _mysql_field_type_to_arrow(desc[1]) for desc in cursor.description
+                _mysql_field_type_to_arrow(desc[1], desc[7])
+                for desc in cursor.description
             ]
             arrow_schema = pa.schema(
                 [pa.field(name, typ) for name, typ in zip(col_names, col_types)]
