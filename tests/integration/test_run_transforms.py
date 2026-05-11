@@ -155,6 +155,30 @@ def test_run_transforms_prod_mode_materializes_gold(tmp_path: Path):
     assert gold_type == ("BASE TABLE",)
 
 
+def test_run_transforms_prod_mode_no_materialized_gold_skips_rebuild_log(
+    tmp_path: Path,
+):
+    """Prod mode + silver-only transforms (no materialized gold) → the
+    ``if count`` log branch in ``run_transforms`` takes the False side.
+    """
+    dest_db = tmp_path / "feather_data.duckdb"
+    _prepare_dest_with_bronze(dest_db)
+    _write_sql(
+        tmp_path,
+        "silver",
+        "emp_clean",
+        "SELECT id, name AS employee_name FROM bronze.src_employees",
+    )
+    config_file = _write_config(tmp_path, dest_db, mode="prod")
+
+    cfg = load_config(config_file)
+    results = run_transforms(cfg)
+
+    assert len(results) == 1
+    assert results[0].schema == "silver"
+    assert results[0].status == "success"
+
+
 def test_run_transforms_no_transforms_returns_empty_list(tmp_path: Path):
     """No transforms directory: helper returns []."""
     dest_db = tmp_path / "feather_data.duckdb"
