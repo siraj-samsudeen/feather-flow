@@ -60,15 +60,15 @@
 
 ## 7. New `feather transform` command
 
-- [ ] 7.1 Create `src/feather_etl/commands/transform.py` with a Typer command, mirroring the shape of `commands/extract.py` (renamed). Accept `--config PATH` (default `feather.yaml`) and `--mode {dev,prod,test}` (optional).
-- [ ] 7.2 Inside the command: load config, resolve mode via the lifted helper, open destination connection, run `check_bronze_dependencies()` and write its output to stderr, call `run_transforms(config)`, write each result as a `_runs` row with `trigger='transform'`, print summary, close connection, exit with the right code.
-- [ ] 7.3 Exit-code contract: 0 on success (including zero-transforms), 1 if any returned result has `status == 'error'`, 2 if config load or destination open raises.
-- [ ] 7.4 Summary output: header line `Mode: <mode>`, one line per transform showing `<schema>.<name>  <view|table>  <success|failure>`, trailing line `<total> transforms: <success_count> succeeded.` Match the line shape used by `feather extract` where it overlaps.
+- [x] 7.1 Create `src/feather_etl/commands/transform.py` with a Typer command, mirroring the shape of `commands/extract.py` (renamed). Accept `--config PATH` (default `feather.yaml`) and `--mode {dev,prod,test}` (optional).
+- [x] 7.2 Inside the command: load config, resolve mode via the lifted helper, open destination connection, run `check_bronze_dependencies()` and write its output to stderr, call `run_transforms(config)`, write each result as a `_runs` row with `trigger='transform'`, print summary, close connection, exit with the right code. **De-duplicated `(schema, name)` pairs before writing to `_runs` and before rendering the summary; rationale documented in the command's module docstring.**
+- [x] 7.3 Exit-code contract: 0 on success (including zero-transforms), 1 if any returned result has `status == 'error'`, 2 if config load or destination open raises. **`_load_and_validate` raises `Exit(code=1)`; the command traps and re-raises with `code=2` to honor the transform-spec contract.**
+- [x] 7.4 Summary output: header line `Mode: <mode>`, one line per transform showing `<schema>.<name>  <view|table>  <success|failure>`, trailing line `<total> transforms: <success_count> succeeded.` Match the line shape used by `feather extract` where it overlaps.
 
 ## 8. CLI registration
 
-- [ ] 8.1 In `src/feather_etl/cli.py`, register the new `transform` command alongside the existing verbs (now `extract`, `run`, etc.). Two-line addition.
-- [ ] 8.2 Confirm `uv run feather --help` lists `transform` and `extract` (not `cache`), and `uv run feather transform --help` renders correctly.
+- [x] 8.1 In `src/feather_etl/cli.py`, register the new `transform` command alongside the existing verbs (now `extract`, `run`, etc.). Two-line addition. Also updated `tests/e2e/test_00_cli_structure.py` (the registered-commands and module-names lists) to expect `transform` as part of the CLI surface.
+- [x] 8.2 Confirm `uv run feather --help` lists `transform` and `extract` (not `cache`), and `uv run feather transform --help` renders correctly. **Both verified.**
 
 ## 9. CLI integration tests
 

@@ -11,6 +11,7 @@ from feather_etl.commands.init import register as register_init
 from feather_etl.commands.run import register as register_run
 from feather_etl.commands.setup import register as register_setup
 from feather_etl.commands.status import register as register_status
+from feather_etl.commands.transform import register as register_transform
 from feather_etl.commands.view import register as register_view
 from feather_etl.commands.validate import register as register_validate
 
@@ -35,3 +36,4 @@ register_run(app)
 register_history(app)
 register_status(app)
 register_extract(app)
+register_transform(app)

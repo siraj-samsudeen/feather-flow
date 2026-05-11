@@ -34,6 +34,7 @@ def test_cli_registers_expected_commands_on_app() -> None:
         "history",
         "status",
         "extract",
+        "transform",
     }
 
 
@@ -48,6 +49,7 @@ def test_command_modules_expose_register_functions() -> None:
         "history",
         "status",
         "extract",
+        "transform",
     ]
 
     for module_name in module_names:
