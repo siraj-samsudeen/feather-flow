@@ -272,3 +272,49 @@ def rebuild_materialized_gold(
             logger.warning(warning)
 
     return results
+
+
+def run_transforms(config) -> list[TransformResult]:
+    """Run discovered silver/gold transforms against the destination DuckDB.
+
+    Discovers transforms from ``config.config_dir``, orders them, opens the
+    destination, executes per the resolved mode (prod honors
+    ``-- materialized: true``; dev/test forces all to views), and returns one
+    ``TransformResult`` per executed transform.
+
+    This helper is the single execution path shared by ``feather run`` (which
+    calls it after extraction) and ``feather transform`` (which calls it
+    standalone). The body is the post-extract block previously inlined in
+    ``pipeline.run_all`` — extracted verbatim to preserve behaviour.
+
+    Returns an empty list when no transforms are discovered.
+    """
+    from feather_etl.destinations.duckdb import DuckDBDestination
+
+    results: list[TransformResult] = []
+    transforms = discover_transforms(config.config_dir)
+    if not transforms:
+        return results
+
+    ordered = build_execution_order(transforms)
+    dest = DuckDBDestination(path=config.destination.path)
+    con = dest._connect()
+    try:
+        if config.mode == "prod":
+            # Prod: create all as views first (gold needs silver),
+            # then rebuild gold as materialized tables
+            exec_results = execute_transforms(con, ordered)
+            results.extend(exec_results)
+            rebuild_results = rebuild_materialized_gold(con, ordered)
+            count = sum(1 for r in rebuild_results if r.status == "success")
+            if count:
+                logger.info("Rebuilt %d materialized gold table(s)", count)
+            results.extend(rebuild_results)
+        else:
+            # Dev/test: create everything as views (force_views)
+            exec_results = execute_transforms(con, ordered, force_views=True)
+            results.extend(exec_results)
+    finally:
+        con.close()
+
+    return results

@@ -45,12 +45,12 @@
 
 ## 5. Extract `transforms.run_transforms()` helper
 
-- [ ] 5.1 Survey the existing `feather run` test suite for branch coverage of the block being extracted (`pipeline.py:568-597`). Confirm both branches are exercised: (a) prod with at least one `-- materialized: true` gold transform that becomes a TABLE; (b) dev/test where everything is forced to VIEW. If either branch is uncovered, add the missing `feather run` test *before* the refactor — otherwise 5.4's "tests pass unchanged" invariant proves nothing.
-- [ ] 5.2 In `transforms.py`, add `run_transforms(config) -> list[TransformResult]`. Body is the existing block from `pipeline.py:568-597`, copied verbatim — discover, sort, open destination, branch on `config.mode`, return result list.
-- [ ] 5.3 In `pipeline.run_all()`, replace the inlined block with a single call to `run_transforms(config)`. No other changes to `run_all`'s shape or call sites.
-- [ ] 5.4 Run `uv run pytest -q`. Every `feather run` test must pass unchanged. If any test changes, the extraction was not behaviour-preserving — revert and reconcile before continuing.
-- [ ] 5.5 Add a direct unit test calling `run_transforms(config)` on a fixture config and asserting the returned `TransformResult` list shape, schema membership, and statuses.
-- [ ] 5.6 Commit the refactor as its own diff.
+- [x] 5.1 Survey the existing `feather run` test suite for branch coverage of the block being extracted (`pipeline.py:568-597`). Confirm both branches are exercised: (a) prod with at least one `-- materialized: true` gold transform that becomes a TABLE; (b) dev/test where everything is forced to VIEW. If either branch is uncovered, add the missing `feather run` test *before* the refactor — otherwise 5.4's "tests pass unchanged" invariant proves nothing. **Result: both branches covered.** Branch A (prod, materialized TABLE) by `tests/integration/test_mode.py::test_prod_gold_materialized` and `tests/integration/test_transforms.py::test_run_rebuilds_materialized_gold` / `test_run_mode_switch_rematerializes_gold`. Branch B (dev/test, force_views) by `tests/integration/test_mode.py::test_dev_gold_view`. Exception-swallow path covered by `tests/integration/test_transforms.py::test_run_all_transform_rebuild_failure_is_caught_and_logged`. No new tests needed.
+- [x] 5.2 In `transforms.py`, add `run_transforms(config) -> list[TransformResult]`. Body is the existing block from `pipeline.py:568-597`, copied verbatim — discover, sort, open destination, branch on `config.mode`, return result list. Returns `execute_transforms` results in both branches plus `rebuild_materialized_gold` results in the prod branch.
+- [x] 5.3 In `pipeline.run_all()`, replace the inlined block with a single call to `run_transforms(config)`. No other changes to `run_all`'s shape or call sites. Net delete: ~27 lines; net add: 3 lines.
+- [x] 5.4 Run `uv run pytest -q`. Every `feather run` test must pass unchanged. If any test changes, the extraction was not behaviour-preserving — revert and reconcile before continuing. **831 passing, unchanged.**
+- [x] 5.5 Add a direct unit test calling `run_transforms(config)` on a fixture config and asserting the returned `TransformResult` list shape, schema membership, and statuses. Added `tests/integration/test_run_transforms.py` with 4 tests (return-type/shape, dev-mode views, prod-mode materialized gold, empty-transforms returns []). **835 passing total.**
+- [x] 5.6 Commit the refactor as its own diff.
 
 ## 6. Advisory bronze-dependency check
 

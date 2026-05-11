@@ -572,32 +572,9 @@ def run_all(
     any_ok = any(r.status in ("success", "skipped") for r in results)
     if any_ok:
         try:
-            from feather_etl.transforms import (
-                build_execution_order,
-                discover_transforms,
-                execute_transforms,
-                rebuild_materialized_gold,
-            )
+            from feather_etl.transforms import run_transforms
 
-            transforms = discover_transforms(config.config_dir)
-            if transforms:
-                ordered = build_execution_order(transforms)
-                dest = DuckDBDestination(path=config.destination.path)
-                con = dest._connect()
-                try:
-                    if config.mode == "prod":
-                        # Prod: create all as views first (gold needs silver),
-                        # then rebuild gold as materialized tables
-                        execute_transforms(con, ordered)
-                        rebuild_results = rebuild_materialized_gold(con, ordered)
-                        count = sum(1 for r in rebuild_results if r.status == "success")
-                        if count:
-                            logger.info("Rebuilt %d materialized gold table(s)", count)
-                    else:
-                        # Dev/test: create everything as views (force_views)
-                        execute_transforms(con, ordered, force_views=True)
-                finally:
-                    con.close()
+            run_transforms(config)
         except Exception as e:
             logger.error("Transform rebuild failed: %s", e)
 
