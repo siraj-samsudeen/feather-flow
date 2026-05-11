@@ -12,10 +12,14 @@ def load_history(
     *,
     table: str | None = None,
     limit: int = 20,
+    trigger: str | None = None,
 ) -> list[dict]:
     """Return recent run history rows from the state DB.
 
     Raises ``StateDBMissingError`` if the state DB does not exist.
+
+    When ``trigger`` is set, only rows whose ``_runs.trigger`` equals the
+    given value are returned (legacy NULL-trigger rows are excluded).
     """
     if not state_path.exists():
         raise StateDBMissingError(str(state_path))
@@ -23,4 +27,4 @@ def load_history(
     from feather_etl.state import StateManager
 
     sm = StateManager(state_path)
-    return sm.get_history(table_name=table, limit=limit)
+    return sm.get_history(table_name=table, limit=limit, trigger=trigger)

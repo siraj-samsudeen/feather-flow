@@ -12,6 +12,11 @@ import feather_etl
 
 SCHEMA_VERSION = 1
 
+# Accepted values for the _runs.trigger column. Names the CLI verb that
+# wrote the row, not the invocation source. Legacy rows (written before
+# this column existed) have trigger=NULL; no backfill.
+VALID_TRIGGERS: frozenset[str] = frozenset({"run", "extract", "transform", "schedule"})
+
 
 class StateManager:
     """Manages the feather_state.duckdb file."""
@@ -72,9 +77,16 @@ class StateManager:
                     watermark_before VARCHAR,
                     watermark_after VARCHAR,
                     freshness_max_ts TIMESTAMP,
-                    schema_changes JSON
+                    schema_changes JSON,
+                    trigger VARCHAR
                 )
             """)
+            # Idempotent migration for state DBs created before this column
+            # existed. Safe to run on every connect — ADD COLUMN IF NOT EXISTS
+            # is a no-op once the column is present.
+            con.execute(
+                "ALTER TABLE _runs ADD COLUMN IF NOT EXISTS trigger VARCHAR"
+            )
 
             con.execute("""
                 CREATE TABLE IF NOT EXISTS _run_steps (
@@ -324,12 +336,22 @@ class StateManager:
         watermark_after: str | None = None,
         freshness_max_ts: datetime | None = None,
         schema_changes: str | None = None,
+        trigger: str | None = None,
     ) -> None:
+        # Trigger validation — single chokepoint for every _runs writer.
+        # None is permitted so internal call sites that don't know the verb
+        # (currently none in production; reserved for tests / future legacy
+        # writers) can omit it. Any non-None value MUST be in VALID_TRIGGERS.
+        if trigger is not None and trigger not in VALID_TRIGGERS:
+            raise ValueError(
+                f"Invalid trigger value {trigger!r}. "
+                f"Expected one of {sorted(VALID_TRIGGERS)} or None."
+            )
         duration = (ended_at - started_at).total_seconds()
         con = self._connect()
         try:
             con.execute(
-                "INSERT INTO _runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO _runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
                     run_id,
                     table_name,
@@ -345,6 +367,7 @@ class StateManager:
                     watermark_after,
                     freshness_max_ts,
                     schema_changes,
+                    trigger,
                 ],
             )
         finally:
@@ -417,37 +440,37 @@ class StateManager:
         self,
         table_name: str | None = None,
         limit: int = 20,
+        trigger: str | None = None,
     ) -> list[dict[str, object]]:
         """Return recent runs ordered by started_at DESC.
 
-        Optionally filter by table_name. Returns dicts with keys:
-        run_id, table_name, started_at, ended_at, status, rows_loaded, error_message.
+        Optionally filter by table_name and/or trigger verb. Returns dicts
+        with keys: run_id, table_name, started_at, ended_at, status,
+        rows_loaded, error_message, trigger.
+
+        When ``trigger`` is None, all rows are returned, including legacy
+        rows whose trigger is NULL. When ``trigger`` is a string, only rows
+        whose trigger column equals it are returned (NULL rows excluded).
         """
         con = self._connect()
         try:
+            base_sql = (
+                "SELECT run_id, table_name, started_at, ended_at, "
+                "status, rows_loaded, error_message, trigger "
+                "FROM _runs"
+            )
+            clauses: list[str] = []
+            params: list[object] = []
             if table_name is not None:
-                rows = con.execute(
-                    """
-                    SELECT run_id, table_name, started_at, ended_at,
-                           status, rows_loaded, error_message
-                    FROM _runs
-                    WHERE table_name = ?
-                    ORDER BY started_at DESC
-                    LIMIT ?
-                    """,
-                    [table_name, limit],
-                ).fetchall()
-            else:
-                rows = con.execute(
-                    """
-                    SELECT run_id, table_name, started_at, ended_at,
-                           status, rows_loaded, error_message
-                    FROM _runs
-                    ORDER BY started_at DESC
-                    LIMIT ?
-                    """,
-                    [limit],
-                ).fetchall()
+                clauses.append("table_name = ?")
+                params.append(table_name)
+            if trigger is not None:
+                clauses.append("trigger = ?")
+                params.append(trigger)
+            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            sql = f"{base_sql}{where} ORDER BY started_at DESC LIMIT ?"
+            params.append(limit)
+            rows = con.execute(sql, params).fetchall()
             columns = [desc[0] for desc in con.description]
             return [dict(zip(columns, row)) for row in rows]
         finally:

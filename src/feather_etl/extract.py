@@ -52,9 +52,22 @@ def run_extract(
     results: list[ExtractResult] = []
     for table in tables:
         source_db = table.database or (table.source_name or "")
+        now = datetime.now(timezone.utc)
+        run_id = f"extract_{table.name}_{now.isoformat()}"
+
         try:
             source = resolve_source(source_db, config.sources)
         except ValueError as e:
+            ended_at = datetime.now(timezone.utc)
+            state.record_run(
+                run_id=run_id,
+                table_name=table.name,
+                started_at=now,
+                ended_at=ended_at,
+                status="failure",
+                error_message=str(e),
+                trigger="extract",
+            )
             results.append(
                 ExtractResult(
                     table_name=table.name,
@@ -65,13 +78,19 @@ def run_extract(
             )
             continue
 
-        now = datetime.now(timezone.utc)
-        run_id = f"extract_{table.name}_{now.isoformat()}"
-
         wm = state.read_cache_watermark(table.name)
         change = source.detect_changes(table.source_table, last_state=wm)
 
         if not change.changed and not refresh:
+            ended_at = datetime.now(timezone.utc)
+            state.record_run(
+                run_id=run_id,
+                table_name=table.name,
+                started_at=now,
+                ended_at=ended_at,
+                status="skipped",
+                trigger="extract",
+            )
             results.append(
                 ExtractResult(
                     table_name=table.name,
@@ -93,6 +112,17 @@ def run_extract(
                 last_checksum=change.metadata.get("checksum"),
                 last_row_count=change.metadata.get("row_count"),
             )
+            ended_at = datetime.now(timezone.utc)
+            state.record_run(
+                run_id=run_id,
+                table_name=table.name,
+                started_at=now,
+                ended_at=ended_at,
+                status="success",
+                rows_extracted=rows,
+                rows_loaded=rows,
+                trigger="extract",
+            )
             results.append(
                 ExtractResult(
                     table_name=table.name,
@@ -103,6 +133,16 @@ def run_extract(
             )
         except Exception as e:
             logger.error("Extract failed for %s: %s", table.name, e)
+            ended_at = datetime.now(timezone.utc)
+            state.record_run(
+                run_id=run_id,
+                table_name=table.name,
+                started_at=now,
+                ended_at=ended_at,
+                status="failure",
+                error_message=str(e),
+                trigger="extract",
+            )
             results.append(
                 ExtractResult(
                     table_name=table.name,

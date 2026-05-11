@@ -27,21 +27,21 @@
 
 ## 4. Add `_runs.trigger` column and history filter
 
-- [ ] 4.1 Update `state.py` `_runs` `CREATE TABLE` to include a `trigger VARCHAR` column. Add an `ALTER TABLE _runs ADD COLUMN IF NOT EXISTS trigger VARCHAR` immediately after the create-table block, so existing destinations gain the column on first connect. Idempotent.
-- [ ] 4.2 Locate every `INSERT INTO _runs` call (currently `state.py:332`). Add the `trigger` value as a new placeholder, sourced from the verb context:
+- [x] 4.1 Update `state.py` `_runs` `CREATE TABLE` to include a `trigger VARCHAR` column. Add an `ALTER TABLE _runs ADD COLUMN IF NOT EXISTS trigger VARCHAR` immediately after the create-table block, so existing destinations gain the column on first connect. Idempotent.
+- [x] 4.2 Locate every `INSERT INTO _runs` call (currently `state.py:332`). Add the `trigger` value as a new placeholder, sourced from the verb context:
   - `feather run` path → `trigger='run'`
   - `feather extract` (renamed) path → `trigger='extract'`
   - `feather transform` (new) path → `trigger='transform'`
   - Future scheduled path (placeholder, no current writer) → `trigger='schedule'`
-- [ ] 4.3 Add an application-side validator that rejects trigger values outside `{'run', 'extract', 'transform', 'schedule'}`. Place it at the single writer chokepoint (likely a helper in `state.py`) so all paths share it.
-- [ ] 4.4 Update `history.py` `load_history(...)` to accept a `trigger: str | None = None` parameter. When set, the SELECT WHERE clause filters by it.
-- [ ] 4.5 Update `commands/history.py`: add `--trigger <value>` Typer option; pass through to `load_history`. Update both human and JSON output paths to include the `trigger` column.
-- [ ] 4.6 Unit tests:
+- [x] 4.3 Add an application-side validator that rejects trigger values outside `{'run', 'extract', 'transform', 'schedule'}`. Place it at the single writer chokepoint (likely a helper in `state.py`) so all paths share it.
+- [x] 4.4 Update `history.py` `load_history(...)` to accept a `trigger: str | None = None` parameter. When set, the SELECT WHERE clause filters by it.
+- [x] 4.5 Update `commands/history.py`: add `--trigger <value>` Typer option; pass through to `load_history`. Update both human and JSON output paths to include the `trigger` column.
+- [x] 4.6 Unit tests:
   - Fresh destination creates `_runs` with the column present.
   - Existing destination (simulated by creating `_runs` without the column then connecting) gets the column added; second open is a no-op.
   - Validator rejects unknown trigger; accepts the four valid values.
   - `load_history(trigger='run')` returns only run rows. Unfiltered call returns NULL-trigger rows too.
-- [ ] 4.7 Run `uv run pytest -q`. Existing history tests must pass; new tests must pass.
+- [x] 4.7 Run `uv run pytest -q`. Existing history tests must pass; new tests must pass.
 
 ## 5. Extract `transforms.run_transforms()` helper
 

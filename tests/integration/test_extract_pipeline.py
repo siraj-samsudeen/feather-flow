@@ -73,6 +73,10 @@ def test_writes_only_to_cache_watermarks(project):
     Note: the underlying state table is still ``_cache_watermarks`` — only the
     verb-facing API was renamed by the feather-transform change. State schema
     is out of scope for this rename.
+
+    ``_runs`` IS written (one row per table, ``trigger='extract'``) per the
+    transform-command spec — observability requirement, not a state-machine
+    split.
     """
     _setup_project(project)
     cfg = load_config(project.config_path)
@@ -81,12 +85,17 @@ def test_writes_only_to_cache_watermarks(project):
     con = duckdb.connect(str(project.state_db_path), read_only=True)
     prod = con.execute("SELECT COUNT(*) FROM _watermarks").fetchone()[0]
     cache = con.execute("SELECT COUNT(*) FROM _cache_watermarks").fetchone()[0]
-    runs = con.execute("SELECT COUNT(*) FROM _runs").fetchone()[0]
+    runs = con.execute(
+        "SELECT COUNT(*), MIN(trigger), MAX(trigger) FROM _runs"
+    ).fetchone()
     con.close()
 
     assert prod == 0, "run_extract must not write to _watermarks"
-    assert runs == 0, "run_extract must not write to _runs"
     assert cache == 1, "run_extract must write to _cache_watermarks"
+    assert runs[0] == 1, "run_extract must write one _runs row per table"
+    assert runs[1] == "extract" and runs[2] == "extract", (
+        "run_extract rows must have trigger='extract'"
+    )
 
 
 def test_skips_unchanged_on_second_run(project):

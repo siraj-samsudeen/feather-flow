@@ -195,6 +195,7 @@ def run_table(
             ended_at=ended_at,
             status="skipped",
             error_message=error_msg,
+            trigger="run",
         )
         return RunResult(
             table_name=table.name,
@@ -231,6 +232,7 @@ def run_table(
             started_at=started_at,
             ended_at=ended_at,
             status="skipped",
+            trigger="run",
         )
         # Touch scenario: mtime changed but hash identical — update watermark
         # so next run skips re-hashing
@@ -349,6 +351,7 @@ def run_table(
                     rows_loaded=0,
                     watermark_before=watermark_before,
                     watermark_after=watermark_before,
+                    trigger="run",
                 )
                 # Update file mtime/hash but keep last_value unchanged
                 state.write_watermark(
@@ -481,6 +484,7 @@ def run_table(
             watermark_before=watermark_before,
             watermark_after=watermark_after,
             schema_changes=schema_changes_json,
+            trigger="run",
         )
         state.reset_retry(table.name)
         logger.info(
@@ -513,6 +517,7 @@ def run_table(
             ended_at=ended_at,
             status="failure",
             error_message=error_msg,
+            trigger="run",
         )
         state.increment_retry(table.name)
         alert_on_failure(table.name, error_msg, config=config.alerts)
