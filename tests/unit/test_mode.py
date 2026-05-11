@@ -79,6 +79,55 @@ def test_config_mode_cli_override(tmp_path):
     assert cfg.mode == "prod"
 
 
+def test_config_mode_cli_beats_env(tmp_path, monkeypatch):
+    """mode_override (CLI) wins over FEATHER_MODE env var."""
+    from feather_etl.config import load_config
+
+    config_path = _write_config(tmp_path, mode="dev")
+    monkeypatch.setenv("FEATHER_MODE", "test")
+    cfg = load_config(config_path, mode_override="prod")
+    assert cfg.mode == "prod"
+
+
+def test_config_mode_env_beats_default(tmp_path, monkeypatch):
+    """FEATHER_MODE env var wins over the default 'dev' when YAML omits mode."""
+    from feather_etl.config import load_config
+
+    config_path = _write_config(tmp_path)  # no mode in YAML
+    monkeypatch.setenv("FEATHER_MODE", "prod")
+    cfg = load_config(config_path)
+    assert cfg.mode == "prod"
+
+
+def test_config_mode_yaml_beats_default(tmp_path, monkeypatch):
+    """YAML mode wins over the default 'dev' when no env var or CLI override is set."""
+    from feather_etl.config import load_config
+
+    config_path = _write_config(tmp_path, mode="test")
+    monkeypatch.delenv("FEATHER_MODE", raising=False)
+    cfg = load_config(config_path)
+    assert cfg.mode == "test"
+
+
+def test_config_mode_invalid_cli_override_rejected(tmp_path):
+    """mode_override with an invalid value is rejected with a clear error."""
+    from feather_etl.config import load_config
+
+    config_path = _write_config(tmp_path, mode="dev")
+    with pytest.raises(ValueError, match="mode"):
+        load_config(config_path, mode_override="staging")
+
+
+def test_config_mode_invalid_env_rejected(tmp_path, monkeypatch):
+    """FEATHER_MODE with an invalid value is rejected with a clear error."""
+    from feather_etl.config import load_config
+
+    config_path = _write_config(tmp_path, mode="dev")
+    monkeypatch.setenv("FEATHER_MODE", "bogus")
+    with pytest.raises(ValueError, match="mode"):
+        load_config(config_path)
+
+
 def test_config_row_limit_parsed(tmp_path):
     """defaults.row_limit is parsed from YAML."""
     from feather_etl.config import load_config
