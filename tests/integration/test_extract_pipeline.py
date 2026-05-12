@@ -265,7 +265,7 @@ def test_cache_succeeds_for_mysql_databases_list_form(
     connection, and (b) land VARCHAR/TEXT columns as DuckDB ``VARCHAR``,
     keeping BLOB columns as ``BLOB``.
 
-    **#51 (No database selected)** — Before the fix, ``run_cache``
+    **#51 (No database selected)** — Before the fix, ``run_extract``
     resolved the parent multi-DB source, whose ``self.database is None``
     and whose ``_connect_kwargs`` carries no ``database`` key. ``extract``
     issued ``SELECT ... FROM <table>`` with no DB prefix and MySQL
@@ -315,7 +315,7 @@ def test_cache_succeeds_for_mysql_databases_list_form(
     )
 
     cfg = load_config(project.config_path)
-    results = run_cache(cfg, cfg.tables, project.root)
+    results = run_extract(cfg, cfg.tables, project.root)
 
     # #51: every result must succeed (not fail with 1046).
     assert len(results) == 1
