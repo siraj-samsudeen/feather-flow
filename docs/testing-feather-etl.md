@@ -421,7 +421,6 @@ On each extraction, feather-etl compares the source table's current schema again
 SQL files in `transforms/silver/` and `transforms/gold/` define post-extraction transforms. Each file's name becomes the view/table name. Header comments declare dependencies and materialization.
 
 ```sql
--- depends_on: silver.customers
 -- materialized: true
 SELECT COUNT(*) AS n FROM silver.customers
 ```
@@ -430,6 +429,8 @@ SELECT COUNT(*) AS n FROM silver.customers
 - Gold transforms &rarr; VIEWs by default, TABLEs if `-- materialized: true` and mode is `prod`
 - In `dev`/`test` mode: all transforms (including materialized gold) become VIEWs
 - Dependencies on `bronze.*` are silently ignored (bronze is extraction layer)
+- Dependencies are inferred from the SQL body (`silver.*`/`gold.*` references in `FROM`/`JOIN`). The `-- depends_on:` header is not part of the contract — only the SQL body declares edges.
+- CTE names, string literals, comments, and table-valued functions like `read_csv(...)` are not treated as dependency edges.
 - Dependencies on `silver.*`/`gold.*` that don't exist among discovered transforms &rarr; error
 
 ### Test Matrix

@@ -213,7 +213,7 @@ feather transform --mode prod          # honour `-- materialized: true` markers
 feather transform --config alt.yaml    # alternate config path
 ```
 
-DDL kind is a two-axis rule: silver is always VIEW; gold is VIEW by default; gold becomes TABLE only when both (a) the SQL declares `-- materialized: true` and (b) mode is `prod`. Dev and test forcibly downgrade marked gold to views. Each executed transform writes a row to `_runs` with `trigger='transform'`. Missing `-- depends_on: bronze.<table>` dependencies emit advisory `WARNING:` lines on stderr (collapsed into one summary line if more than five are missing) but never abort. Exit codes: `0` success (including zero discovered transforms), `1` transform error, `2` config/destination error.
+DDL kind is a two-axis rule: silver is always VIEW; gold is VIEW by default; gold becomes TABLE only when both (a) the SQL declares `-- materialized: true` and (b) mode is `prod`. Dev and test forcibly downgrade marked gold to views. Each executed transform writes a row to `_runs` with `trigger='transform'`. Bronze tables referenced (via `FROM`/`JOIN`) by any silver transform's SQL body but missing from the destination emit advisory `WARNING:` lines on stderr (collapsed into one summary line if more than five are missing) but never abort. Bronze refs are derived from the SQL body via sqlglot — issue #54 removed the `-- depends_on: bronze.<table>` header convention. Exit codes: `0` success (including zero discovered transforms), `1` transform error, `2` config/destination error.
 
 ### Browsing a source schema
 
@@ -252,7 +252,7 @@ client-abc/                         # separate GitHub repo per client
 │   └── inventory.yaml
 ├── transforms/
 │   ├── silver/                     # canonical mapping views
-│   │   └── sales_invoice.sql       # -- depends_on: (none)
+│   │   └── sales_invoice.sql       # deps inferred from FROM clauses
 │   └── gold/                       # client-specific output
 │       └── sales_summary.sql       # -- materialized: true
 └── extracts/                       # optional — custom source SELECT queries
@@ -325,7 +325,7 @@ tables:
 Silver views over bronze live in `transforms/silver/sales_invoice.sql`. Transform files contain only the SELECT query — the system wraps it in the appropriate `CREATE OR REPLACE VIEW` or `CREATE OR REPLACE TABLE` DDL based on mode and the `-- materialized` flag:
 
 ```sql
--- depends_on: (none — reads from bronze directly)
+-- silver: reads from bronze; bronze refs don't create transform-layer edges
 SELECT
     ID           AS invoice_id,
     SI_NO        AS invoice_no,
@@ -352,18 +352,20 @@ feather-etl auto-discovers and merges all `.yaml` files in the `tables/` directo
 
 ## Transform Dependencies
 
-Declare dependencies with a SQL comment — the system builds the execution order automatically:
+Dependencies are inferred from the SQL body. The system parses each transform with `sqlglot`, extracts every `silver.*` / `gold.*` reference from `FROM` / `JOIN` clauses, and builds the topological execution order automatically. No header markup declares edges:
 
 ```sql
--- depends_on: silver.sales_invoice
--- depends_on: silver.customer_master
 -- materialized: true
 SELECT ...
 FROM silver.sales_invoice si
 JOIN silver.customer_master cm ON si.customer_code = cm.customer_code
 ```
 
-Transform files contain only the SELECT body plus header comments. The system generates the DDL: silver transforms become VIEWs, gold transforms with `-- materialized: true` become TABLEs in prod mode (VIEWs in dev/test).
+The above produces edges to `silver.sales_invoice` and `silver.customer_master`. CTEs, comments, string literals, and table-valued functions (e.g. `read_csv(...)`) do not create phantom edges.
+
+Header comments retain meaning only for information the SQL body cannot express: `-- materialized: true` (gold materialisation in prod mode) and `-- fact_table: <name>` (join-health-check declaration). The `-- depends_on:` header is no longer recognised — see GitHub issue #54.
+
+Transform files contain only the SELECT body plus optional `-- materialized:` / `-- fact_table:` headers. The system generates the DDL: silver transforms become VIEWs, gold transforms with `-- materialized: true` become TABLEs in prod mode (VIEWs in dev/test).
 
 ## Dependencies
 
