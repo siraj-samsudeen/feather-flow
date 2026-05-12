@@ -102,23 +102,8 @@ class TestParseTransformFile:
         assert meta.path == p
         assert meta.qualified_name == "silver.employees"
 
-    def test_parse_with_depends_on(self, tmp_path: Path):
-        content = (
-            "-- depends_on: bronze.employees\n"
-            "-- depends_on: bronze.departments\n"
-            "SELECT e.*, d.dept_name\n"
-            "FROM bronze.employees e\n"
-            "JOIN bronze.departments d USING (dept_id)"
-        )
-        p = _write_sql(tmp_path, "silver", "emp_with_dept", content)
-        meta = parse_transform_file(p)
-
-        assert meta.depends_on == ["bronze.employees", "bronze.departments"]
-        assert "SELECT e.*" in meta.sql
-
     def test_parse_materialized_gold(self, tmp_path: Path):
         content = (
-            "-- depends_on: silver.employees\n"
             "-- materialized: true\n"
             "SELECT * FROM silver.employees"
         )
@@ -140,7 +125,6 @@ class TestParseTransformFile:
 
     def test_parse_preserves_non_metadata_comments(self, tmp_path: Path):
         content = (
-            "-- depends_on: bronze.sales\n"
             "-- This is a regular comment\n"
             "SELECT amount FROM bronze.sales"
         )
@@ -148,14 +132,15 @@ class TestParseTransformFile:
         meta = parse_transform_file(p)
 
         assert "-- This is a regular comment" in meta.sql
-        assert meta.depends_on == ["bronze.sales"]
+        assert meta.depends_on == []  # bronze ref produces no transform-layer edge
 
     def test_parse_strips_leading_trailing_blank_lines(self, tmp_path: Path):
-        content = "\n\n-- depends_on: bronze.x\n\nSELECT 1\n\n"
-        p = _write_sql(tmp_path, "silver", "stripped", content)
+        content = "\n\n-- materialized: true\n\nSELECT 1\n\n"
+        p = _write_sql(tmp_path, "gold", "stripped", content)
         meta = parse_transform_file(p)
 
         assert meta.sql == "SELECT 1"
+        assert meta.materialized is True
 
     def test_parse_invalid_schema_directory(self, tmp_path: Path):
         d = tmp_path / "transforms" / "platinum"
@@ -166,17 +151,50 @@ class TestParseTransformFile:
         with pytest.raises(ValueError, match="platinum"):
             parse_transform_file(p)
 
-    def test_parse_multiple_depends_on_interleaved(self, tmp_path: Path):
+    def test_parse_multiple_deps_from_sql_body(self, tmp_path: Path):
+        # Two inferred deps, returned in sorted order. Materialized flag still
+        # honoured. Issue #54 — replaces the old header-interleaved variant.
         content = (
-            "-- depends_on: silver.a\n"
             "-- materialized: true\n"
-            "-- depends_on: silver.b\n"
             "SELECT * FROM silver.a JOIN silver.b USING (id)"
         )
         p = _write_sql(tmp_path, "gold", "joined", content)
         meta = parse_transform_file(p)
 
         assert meta.depends_on == ["silver.a", "silver.b"]
+        assert meta.materialized is True
+
+    def test_parse_auto_infers_dep_from_from_clause(self, tmp_path: Path):
+        # No -- depends_on: header. The FROM clause alone must produce the edge.
+        content = (
+            "-- materialized: true\n"
+            "SELECT store_name, SUM(daily_cost) AS total_cost\n"
+            "FROM silver.storewise_hrcost\n"
+            "GROUP BY store_name"
+        )
+        p = _write_sql(tmp_path, "gold", "store_cost", content)
+        meta = parse_transform_file(p)
+
+        assert meta.depends_on == ["silver.storewise_hrcost"]
+        assert meta.materialized is True
+
+    def test_parse_legacy_depends_on_header_is_silently_ignored(
+        self, tmp_path: Path
+    ):
+        # Issue #54 removed -- depends_on: as a contract. A legacy file
+        # that still contains the header must parse successfully — the
+        # header line is treated as a regular SQL comment (and stripped
+        # by sqlglot during AST walk). Only inferred edges count.
+        content = (
+            "-- depends_on: silver.legacy_marker\n"
+            "-- materialized: true\n"
+            "SELECT * FROM silver.real"
+        )
+        p = _write_sql(tmp_path, "gold", "legacy", content)
+        meta = parse_transform_file(p)
+
+        assert meta.depends_on == ["silver.real"]
+        assert "silver.legacy_marker" not in meta.depends_on
         assert meta.materialized is True
 
 

@@ -10,6 +10,8 @@ from pathlib import Path
 
 import duckdb
 
+from feather_etl.transform_deps import extract_dependencies, TransformDepParseError
+
 logger = logging.getLogger(__name__)
 
 VALID_SCHEMAS = {"silver", "gold"}
@@ -46,25 +48,31 @@ class TransformResult:
 def parse_transform_file(path: Path) -> TransformMeta:
     """Parse a .sql file into TransformMeta.
 
-    Header comment lines with ``-- depends_on: X`` and ``-- materialized: true``
-    are extracted as metadata. Everything else is treated as the SQL SELECT body.
+    DAG edges (`depends_on`) are derived **solely** from the SQL body via
+    :func:`feather_etl.transform_deps.extract_dependencies` — every
+    ``silver.*`` / ``gold.*`` table referenced in a ``FROM``/``JOIN``
+    clause becomes an edge. CTEs, comments, string literals, and
+    table-valued functions like ``read_csv(...)`` do not create edges.
+
+    Header comment lines retain meaning only for information the SQL body
+    cannot encode: ``-- materialized: true`` (gold materialisation) and
+    ``-- fact_table: <name>`` (join-health-check declaration). The
+    ``-- depends_on:`` header is no longer recognised — see GitHub
+    issue #54; any such line in an existing file is silently ignored
+    (treated as a regular SQL comment).
+
+    Raises ``TransformDepParseError`` if the SQL body cannot be parsed.
     """
     text = path.read_text()
     lines = text.splitlines()
 
-    depends_on: list[str] = []
     materialized = False
-    sql_lines: list[str] = []
-
     fact_table: str | None = None
+    sql_lines: list[str] = []
 
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("-- depends_on:"):
-            dep = stripped.removeprefix("-- depends_on:").strip()
-            if dep:
-                depends_on.append(dep)
-        elif stripped == "-- materialized: true":
+        if stripped == "-- materialized: true":
             materialized = True
         elif stripped.startswith("-- fact_table:"):
             fact_table = stripped.removeprefix("-- fact_table:").strip() or None
@@ -82,6 +90,14 @@ def parse_transform_file(path: Path) -> TransformMeta:
             f"Transform '{path}' is in directory '{schema}', "
             f"expected one of {sorted(VALID_SCHEMAS)}"
         )
+
+    # Derive deps from the SQL body. Issue #54 — sole source of truth.
+    try:
+        depends_on = extract_dependencies(sql)
+    except TransformDepParseError as e:
+        raise TransformDepParseError(
+            f"Failed to parse transform SQL at {path}: {e}"
+        ) from e
 
     return TransformMeta(
         name=name,
