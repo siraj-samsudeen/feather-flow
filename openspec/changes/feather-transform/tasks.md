@@ -103,11 +103,11 @@ Real DuckDB fixtures, no mocking, per project convention. Unit tests for new pur
 
 ## 10. Documentation
 
-- [ ] 10.1 Add §FR-Transform to `docs/prd.md`. State the verb, the mode interaction (cite design's Mode interaction section by name), the no-source invariant, and the exit-code contract.
-- [ ] 10.2 Update existing §FR-Cache → §FR-Extract in `docs/prd.md`. Bump PRD version. Note the rename was a correction, not a feature addition.
-- [ ] 10.3 Update `README.md`: top-level command table now lists `extract` (not `cache`), and `transform`. Add a one-line dev-workflow example showing `uv run feather extract && uv run feather transform`. Add a one-line note about the trigger filter: `uv run feather history --trigger transform`.
-- [ ] 10.4 Update `docs/README.md` and any relevant sub-hub README that referenced `cache`.
-- [ ] 10.5 Add a one-line migration note to the README for any script authors: *"`feather cache` was renamed to `feather extract`. The old name no longer works; update your scripts."*
+- [x] 10.1 Add §FR-Transform to `docs/prd.md`. State the verb, the mode interaction (cite design's Mode interaction section by name), the no-source invariant, and the exit-code contract.
+- [x] 10.2 Update existing §FR-Cache → §FR-Extract in `docs/prd.md`. Bump PRD version. Note the rename was a correction, not a feature addition.
+- [x] 10.3 Update `README.md`: top-level command table now lists `extract` (not `cache`), and `transform`. Add a one-line dev-workflow example showing `uv run feather extract && uv run feather transform`. Add a one-line note about the trigger filter: `uv run feather history --trigger transform`.
+- [x] 10.4 Update `docs/README.md` and any relevant sub-hub README that referenced `cache`.
+- [x] 10.5 Add a one-line migration note to the README for any script authors: *"`feather cache` was renamed to `feather extract`. The old name no longer works; update your scripts."*
 
 ## 11. Final verification
 

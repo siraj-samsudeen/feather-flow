@@ -52,6 +52,7 @@ This is also why `--force-views` is unnecessary (see Non-Goals): the only mode t
 - Single execution path for silver/gold across both `feather run` and `feather transform` — one helper, one mode-resolution chain, one mode-aware DDL strategy.
 - Operator can iterate on transform SQL in seconds without touching source systems.
 - Transform-only runs are filterable in `_runs` history.
+- Verb composability — `feather extract && feather transform` is interchangeable with `feather run` in **dev/test** modes. Prod is a documented exception (see Known limitations below).
 
 **Non-Goals:**
 
@@ -146,6 +147,14 @@ The proposal folds in issue #55: rename the verb so the trio `extract` / `transf
 **Hard rename breaks scripts** → any external script invoking `feather cache` will get a "no such command" error. This is intentional (see D5). Risk acknowledged; mitigation is the README note and the loud failure mode itself.
 
 **Trigger value drift between writers** → four writers (`run`, `extract`, `transform`, scheduled-future) each need to set trigger correctly. A single writer forgetting to set it leaves NULL rows that look like legacy data. Mitigation: validator rejects unknown values, and every `_runs` write site is updated in one task (task 4.2) with tests asserting the value per verb.
+
+## Known limitations (deferred to follow-up)
+
+Discovered during implementation of this change. Captured in [`docs/issues/rethink-mode-system.md`](../../../docs/issues/rethink-mode-system.md). Not blockers; this change ships honest about them.
+
+- **Verb equivalence holds in dev/test only, not prod.** `feather run` in prod skips bronze (writes column-mapped rows directly to `silver.*`). `feather extract` always writes to `bronze.*`. Therefore `feather extract && feather transform` is not interchangeable with `feather run` in prod. The 9.15 verb-equivalence test runs in dev/test only, with the prod case excluded by docstring pointing at the issue doc. README/PRD document the verb trio as the dev iteration loop, not a universal substitute.
+- **Watermarks split across two tables.** `_watermarks` (written by `feather run`) and `_cache_watermarks` (written by `feather extract`) are separate today. The equivalence test's watermark assertion is relaxed to "same set of watermarked table names across the union." Predates this change; unified table is a candidate cleanup.
+- **Root cause is the mode system itself.** Both findings are symptoms of `dev`/`prod`/`test` bundling four orthogonal concerns (target schema, column filtering, row limiting, DDL kind) into three presets that operators routinely need to recombine. The issue doc recommends removing modes entirely in a follow-up.
 
 ## Open Questions
 
