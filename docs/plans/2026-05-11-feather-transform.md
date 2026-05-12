@@ -1,5 +1,14 @@
 # `feather transform` — Design Spec
 
+> **Superseded note (issue #54):** when this plan was written, the
+> advisory bronze-existence check consumed `-- depends_on: bronze.<table>`
+> headers from each silver transform. Issue #54 has since removed the
+> header convention entirely; the check now derives bronze refs from
+> the silver SQL body via `extract_bronze_dependencies`. The plan steps
+> below are preserved for historical context — the implementation in
+> `transforms.py` differs at the points where the body says "read
+> `t.depends_on`."
+
 **Issue:** #53 — `feather transform` (run silver/gold transforms only, without re-extracting bronze)
 **Date:** 2026-05-11
 **Status:** DRAFT

@@ -1,4 +1,3 @@
--- depends_on: silver.silver_orders
 -- materialized: true
 SELECT
     order_id,

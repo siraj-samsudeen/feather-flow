@@ -11,7 +11,7 @@ To ship the trio coherently this change also folds in **issue #55**: rename the 
 - Add a new `feather transform` CLI command that executes all discovered silver/gold transforms against the existing destination DuckDB, without opening any source connection.
 - Honor the same dev/prod mode-resolution chain as `feather run` (CLI flag > `FEATHER_MODE` env > `feather.yaml` > default `dev`). Silver always materializes as views; gold materializes per the two-axis rule (only `-- materialized: true` gold becomes a table, and only in prod).
 - Extract the existing post-extract transform block in `pipeline.py:568-597` into a shared `transforms.run_transforms(config)` helper used by both `feather run` and `feather transform`. Pure refactor — no semantic change to `feather run`.
-- Emit advisory (non-blocking) `WARNING:` to stderr for each silver transform whose declared `-- depends_on: bronze.*` table is missing from the destination. Many warnings collapse to a single summary line.
+- Emit advisory (non-blocking) `WARNING:` to stderr for each silver transform that references a `bronze.*` table (via `FROM`/`JOIN` in its SQL body) which is missing from the destination. Many warnings collapse to a single summary line. Bronze references are derived from the operator's silver SQL `FROM`/`JOIN` clauses referencing `bronze.X` — issue #54 removed the `-- depends_on: bronze.<table>` header convention; the SQL body is now the sole source of truth.
 
 **The verb rename (folds in #55):**
 

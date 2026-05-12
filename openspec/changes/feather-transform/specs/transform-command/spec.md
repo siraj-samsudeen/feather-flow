@@ -58,16 +58,16 @@ The command SHALL exit with code 0 on success (including the "no transforms" cas
 
 ### Requirement: Advisory bronze-dependency check
 
-Before executing, the command SHALL inspect each silver transform's `-- depends_on: bronze.<table>` declarations and check whether each referenced bronze table exists in the destination DuckDB's `information_schema.tables`. For every unmet dependency, the command SHALL emit a `WARNING:` line to stderr but SHALL NOT abort execution. When the number of unmet dependencies exceeds five, the command SHALL collapse the warnings into a single summary line.
+THE SYSTEM SHALL emit an advisory warning to stderr for each bronze table that is referenced (via FROM or JOIN) by any silver transform but does not exist in the destination's bronze schema. The bronze references SHALL be derived from each silver transform's SQL body via sqlglot AST walk; the `-- depends_on:` header convention is not honoured (see issue #54). For every unmet dependency, the command SHALL emit a `WARNING:` line to stderr but SHALL NOT abort execution. When the number of unmet dependencies exceeds five, the command SHALL collapse the warnings into a single summary line.
 
 #### Scenario: Missing bronze dependency emits warning but continues
 
-- **WHEN** a silver transform declares `-- depends_on: bronze.orders` and `bronze.orders` does not exist in the destination DuckDB
+- **WHEN** a silver transform's SQL body contains `FROM bronze.orders` and `bronze.orders` does not exist in the destination DuckDB
 - **THEN** the command writes a `WARNING:` to stderr naming the missing dependency and still attempts to execute every transform
 
 #### Scenario: All bronze dependencies present produces no warnings
 
-- **WHEN** every silver transform's declared bronze dependencies exist in the destination
+- **WHEN** every `bronze.*` table referenced (via FROM/JOIN) by any silver transform's SQL body exists in the destination
 - **THEN** the command emits zero `WARNING:` lines for missing bronze dependencies
 
 #### Scenario: Many missing dependencies collapse to summary

@@ -621,13 +621,18 @@ in SQL files.
 
 # FR5.5
 THE SYSTEM SHALL determine transform execution order via
-graphlib.TopologicalSorter (stdlib) based on declared dependencies.
-Dependencies are declared via SQL comment in the transform file:
--- depends_on: silver.sales_invoice
-Multiple dependencies are declared on separate lines.
-The system SHALL parse these comments at setup time to build the dependency graph.
-IF a declared dependency does not resolve to a known transform
+graphlib.TopologicalSorter (stdlib) based on the dependency graph derived
+from each transform's SQL body. Dependencies are auto-inferred at setup
+time by parsing the SQL with sqlglot and extracting every `silver.*` /
+`gold.*` reference from `FROM` / `JOIN` clauses (issue #54). The `-- depends_on:`
+header is not recognised — the SQL body is the only source of truth for
+the DAG.
+IF a referenced transform-layer dependency does not resolve to a known
+transform
 THE SYSTEM SHALL raise an error at setup time naming the missing dependency.
+IF the SQL body cannot be parsed by sqlglot
+THE SYSTEM SHALL raise a TransformDepParseError at setup time naming the
+file path.
 
 # FR5.6
 WHEN feather setup runs
@@ -645,7 +650,7 @@ Gold views are not rebuilt (they are always live).
 
 **AC-FR5.b:** Given a gold transform referencing `${schema}` and a template variable `schema=silver`, when the transform executes, then the substitution resolves correctly in the generated SQL.
 
-**AC-FR5.c:** Given a gold transform with `-- depends_on: silver.sales_invoice` and a silver transform for `sales_invoice`, when `feather setup` runs, then the silver view is created before the gold transform — verified by gold containing correct data.
+**AC-FR5.c:** Given a gold transform whose SQL body contains `FROM silver.sales_invoice` and a silver transform for `sales_invoice`, when `feather setup` runs, then the silver view is created before the gold transform — verified by gold containing correct data. No `-- depends_on:` header is required or recognised; the edge is derived from the `FROM` clause alone.
 
 **AC-FR5.d:** Given a gold transform with `-- materialized: true`, when a run completes, then it is rebuilt as a `CREATE OR REPLACE TABLE`. A gold transform without that comment is executed as `CREATE OR REPLACE VIEW` and is NOT rebuilt after each run.
 
@@ -1208,7 +1213,7 @@ The verb mirrors `feather run`'s post-extract behaviour exactly. The transform b
 
 > **No-source-touch invariant.** `feather transform` never opens a source connection. It operates entirely against the destination DuckDB. This invariant is load-bearing for the verb's value (iteration without source cost) and is asserted in tests by registering a `RaisingSource` and verifying `connect()` is never called. See `openspec/changes/feather-transform/specs/transform-command/spec.md` for the full behavioural contract.
 
-> **Advisory bronze-dependency check.** Before executing transforms, the verb reads each silver transform's `-- depends_on: bronze.<table>` comments and checks each declared dependency against the destination's `information_schema.tables`. Missing dependencies emit `WARNING:` lines on stderr; **the check never aborts**. The convention is honour-system today (many transforms don't declare it), so blocking would break valid workflows. If more than five distinct dependencies are missing, the lines collapse into a single summary `WARNING:` stating the count — "still scannable as a list" caps at five.
+> **Advisory bronze-dependency check.** Before executing transforms, the verb extracts every `bronze.<table>` reference from each silver transform's SQL body (via sqlglot AST walk over `FROM`/`JOIN` clauses) and checks each against the destination's `information_schema.tables`. Missing dependencies emit `WARNING:` lines on stderr; **the check never aborts**. Bronze refs are sourced from the SQL body — the same source of truth as the silver→gold DAG edges. Issue #54 removed the `-- depends_on: bronze.<table>` header convention in favour of this. If more than five distinct dependencies are missing, the lines collapse into a single summary `WARNING:` stating the count — "still scannable as a list" caps at five.
 
 > **Exit-code contract.** `0` on success (including zero discovered transforms); `1` if any transform execution returns `status='error'`; `2` if config load or destination open fails. This contract is what makes `feather extract && feather transform` safe to chain in CI.
 
@@ -1239,8 +1244,10 @@ THE SYSTEM SHALL apply the two-axis DDL rule:
 
 # FR-Transform.4
 WHEN feather transform starts
-THE SYSTEM SHALL read each silver transform's `-- depends_on: bronze.<table>` comments
-and check each declared dependency against information_schema.tables.
+THE SYSTEM SHALL extract every `bronze.<table>` reference from each silver transform's
+SQL body (via sqlglot AST walk over `FROM`/`JOIN` clauses) and check each against
+information_schema.tables. Bronze refs are sourced from the SQL body — issue #54
+removed the `-- depends_on: bronze.<table>` header convention.
 For each missing dependency, THE SYSTEM SHALL emit a `WARNING:` line on stderr.
 IF more than five dependencies are missing, THE SYSTEM SHALL collapse them into a single
 summary `WARNING:` line stating the count.
@@ -1272,7 +1279,7 @@ unfiltered output.
 
 **AC-FR-Transform.b:** Given `feather.yaml` with `mode: prod` and a gold transform declaring `-- materialized: true`, when `feather transform --mode prod` is invoked, then that gold transform exists in `information_schema.tables` with `table_type='BASE TABLE'`. Given the same config and `feather transform --mode dev`, then the same gold transform exists with `table_type='VIEW'`.
 
-**AC-FR-Transform.c:** Given a silver transform with `-- depends_on: bronze.missing_table` and that table absent from the destination, when `feather transform` is invoked, then a `WARNING:` line on stderr names the missing table, but the command continues and exits 0 (the transform may still fail with a clean SQL error if the dependency is actually needed).
+**AC-FR-Transform.c:** Given a silver transform whose SQL body contains `FROM bronze.missing_table` and that table absent from the destination, when `feather transform` is invoked, then a `WARNING:` line on stderr names the missing table, but the command continues and exits 0 (the transform may still fail with a clean SQL error if the dependency is actually needed). The bronze reference is derived from the SQL body via sqlglot — issue #54 removed the `-- depends_on: bronze.<table>` header convention.
 
 **AC-FR-Transform.d:** Given six silver transforms each declaring a distinct missing bronze dependency, when `feather transform` is invoked, then exactly one summary `WARNING:` line on stderr contains the count `6` (collapse rule), not six individual warning lines.
 
@@ -1623,7 +1630,7 @@ client-abc/                         # one GitHub repo per client
 │   └── hr.yaml
 ├── transforms/
 │   ├── silver/                     # canonical mapping views
-│   │   ├── sales_invoice.sql       # -- depends_on: (none)
+│   │   ├── sales_invoice.sql       # deps inferred from FROM clauses
 │   │   └── customer_master.sql
 │   └── gold/                       # client-specific output
 │       ├── sales_summary.sql       # -- materialized: true
@@ -1972,7 +1979,7 @@ source: client.duckdb with ModifiedDate column
 | V5 | `feather run --table`, `feather history` | Single-table runs, run history CLI |
 | V6 | Additional file sources | SqliteSource (already partially built in V1), JsonSource, ExcelSource. Multi-file CSV tables (e.g., `sales_*.csv` → single table via glob pattern config) — requires config schema + Source protocol changes. |
 | V7 | SQL Server source | DatabaseSource base, pyodbc, CHECKSUM_AGG + COUNT change detection, mocked tests |
-| V8 | Silver/gold transforms | SQL files as views, `-- depends_on`, `-- materialized: true`, topological ordering |
+| V8 | Silver/gold transforms | SQL files as views, `-- materialized: true`, topological ordering. (V8 originally shipped a `-- depends_on:` header convention for DAG edges; issue #54 superseded it — edges are now inferred from `FROM`/`JOIN` clauses in the SQL body.) |
 | V9 | DQ checks | Declarative not_null/unique/row_count, `_dq_results`, pipeline continues on failure. Duplicate CSV detection: same data under different filenames or overlapping date-range re-exports in same directory (hash-based or row-level dedup). |
 | V10 | Schema drift detection | Schema snapshots, added/removed/type_changed classification, handling per FR4.9 |
 | V11 | SMTP alerting | `[CRITICAL]`/`[WARNING]`/`[INFO]` email, no-op if unconfigured |

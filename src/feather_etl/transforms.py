@@ -10,6 +10,12 @@ from pathlib import Path
 
 import duckdb
 
+from feather_etl.transform_deps import (
+    extract_bronze_dependencies,
+    extract_dependencies,
+    TransformDepParseError,
+)
+
 logger = logging.getLogger(__name__)
 
 VALID_SCHEMAS = {"silver", "gold"}
@@ -46,25 +52,31 @@ class TransformResult:
 def parse_transform_file(path: Path) -> TransformMeta:
     """Parse a .sql file into TransformMeta.
 
-    Header comment lines with ``-- depends_on: X`` and ``-- materialized: true``
-    are extracted as metadata. Everything else is treated as the SQL SELECT body.
+    DAG edges (`depends_on`) are derived **solely** from the SQL body via
+    :func:`feather_etl.transform_deps.extract_dependencies` — every
+    ``silver.*`` / ``gold.*`` table referenced in a ``FROM``/``JOIN``
+    clause becomes an edge. CTEs, comments, string literals, and
+    table-valued functions like ``read_csv(...)`` do not create edges.
+
+    Header comment lines retain meaning only for information the SQL body
+    cannot encode: ``-- materialized: true`` (gold materialisation) and
+    ``-- fact_table: <name>`` (join-health-check declaration). The
+    ``-- depends_on:`` header is no longer recognised — see GitHub
+    issue #54; any such line in an existing file is silently ignored
+    (treated as a regular SQL comment).
+
+    Raises ``TransformDepParseError`` if the SQL body cannot be parsed.
     """
     text = path.read_text()
     lines = text.splitlines()
 
-    depends_on: list[str] = []
     materialized = False
-    sql_lines: list[str] = []
-
     fact_table: str | None = None
+    sql_lines: list[str] = []
 
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("-- depends_on:"):
-            dep = stripped.removeprefix("-- depends_on:").strip()
-            if dep:
-                depends_on.append(dep)
-        elif stripped == "-- materialized: true":
+        if stripped == "-- materialized: true":
             materialized = True
         elif stripped.startswith("-- fact_table:"):
             fact_table = stripped.removeprefix("-- fact_table:").strip() or None
@@ -82,6 +94,14 @@ def parse_transform_file(path: Path) -> TransformMeta:
             f"Transform '{path}' is in directory '{schema}', "
             f"expected one of {sorted(VALID_SCHEMAS)}"
         )
+
+    # Derive deps from the SQL body. Issue #54 — sole source of truth.
+    try:
+        depends_on = extract_dependencies(sql)
+    except TransformDepParseError as e:
+        raise TransformDepParseError(
+            f"Failed to parse transform SQL at {path}: {e}"
+        ) from e
 
     return TransformMeta(
         name=name,
@@ -280,22 +300,24 @@ def check_bronze_dependencies(
 ) -> list[str]:
     """Return a warning string for each unmet ``bronze.<table>`` dependency.
 
-    Inspects every silver transform's ``-- depends_on:`` declarations and
-    checks each ``bronze.<table>`` reference against the destination's
+    Walks each silver transform's SQL body via sqlglot
+    (:func:`feather_etl.transform_deps.extract_bronze_dependencies`) and
+    checks every ``bronze.<table>`` reference against the destination's
     ``information_schema.tables`` (filtered to the ``bronze`` schema).
 
-    Returns one warning string per unmet dependency, in the order discovered.
-    The caller decides whether to render each entry as its own line or
-    collapse the list into a summary — that presentation concern is not the
-    helper's job. Returns an empty list when every declared bronze dep is
-    present (or when no silver transform declares any bronze dep).
+    Returns one warning string per unmet dependency, in the order
+    discovered. The caller decides whether to render each entry as its own
+    line or collapse the list into a summary — that presentation concern
+    is not the helper's job.
 
-    Only ``depends_on`` entries whose schema is exactly ``bronze`` are
-    checked. Cross-transform deps (``silver.X``, ``gold.X``) are out of scope
-    for this helper — the topological sorter in ``build_execution_order``
-    already validates those.
+    Scope is silver→bronze only. Cross-transform deps (``silver.X`` /
+    ``gold.X``) are out of scope here — ``build_execution_order`` already
+    validates them. Gold transforms referencing bronze are also out of
+    scope; production transforms read bronze only from silver.
+
+    The SQL body is the only source of truth for bronze deps. Issue #54
+    removed the ``-- depends_on: bronze.<table>`` header convention.
     """
-    # Build the set of available bronze tables in a single query.
     rows = con.execute(
         "SELECT table_schema || '.' || table_name "
         "FROM information_schema.tables "
@@ -307,9 +329,7 @@ def check_bronze_dependencies(
     for t in transforms:
         if t.schema != "silver":
             continue
-        for dep in t.depends_on:
-            if not dep.startswith("bronze."):
-                continue
+        for dep in extract_bronze_dependencies(t.sql):
             if dep not in available:
                 warnings.append(
                     f"WARNING: bronze dependency missing: {dep} "

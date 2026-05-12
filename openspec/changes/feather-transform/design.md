@@ -57,7 +57,7 @@ This is also why `--force-views` is unnecessary (see Non-Goals): the only mode t
 **Non-Goals:**
 
 - Graph-aware `--select` / `--exclude` filtering. Tracked separately.
-- AST-based DAG inference (issue #54). The advisory bronze check uses the existing `-- depends_on:` comment convention.
+- AST-based DAG inference (issue #54) — landed; the advisory bronze check now derives bronze refs from the silver SQL body via `feather_etl.transform_deps.extract_bronze_dependencies`, completing the convergence.
 - `--dry-run` preview. Out of scope for this slice.
 - Incremental materialization strategies (e.g. delta tables). Gold-as-table remains a full rebuild.
 - Per-invocation materialization overrides. No `--force-views` or similar flag. Operators wanting views-only iterate with `--mode dev`; mode is the single knob.
@@ -87,10 +87,10 @@ The resolved mode then flows into the same `execute_transforms(..., force_views=
 
 ### D3 — Bronze-dependency check is advisory, not blocking
 
-Each silver transform may declare `-- depends_on: bronze.<table>` comments. Before execution, the command checks each declared bronze table against the destination's `information_schema.tables`. Missing dependencies produce a `WARNING:` line on stderr but never abort.
+Each silver transform may reference `bronze.<table>` in its SQL body. Before execution, the command extracts these references via sqlglot AST walk and checks each against the destination's `information_schema.tables`. Missing dependencies produce a `WARNING:` line on stderr but never abort.
 
 **Why advisory:**
-- The `depends_on` convention is honour-system today — many existing transforms don't declare it. Blocking on it would break valid workflows the first time an operator forgot a comment.
+- Bronze refs are sourced from the silver SQL `FROM`/`JOIN` clauses via sqlglot — the same source of truth as the silver→gold DAG edges. Issue #54 removed the honour-system header convention in favour of this.
 - The actual dependency truth lives in the SQL itself. If a bronze table is genuinely missing, the transform will fail with a clear SQL error at execution time anyway — the warning just gives an earlier, friendlier signal.
 - Iteration verbs should be permissive about preconditions and strict about results.
 

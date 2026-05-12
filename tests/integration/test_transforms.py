@@ -54,7 +54,6 @@ def test_run_rebuilds_materialized_gold(tmp_path: Path):
         "gold",
         "emp_snapshot",
         (
-            "-- depends_on: silver.emp_clean\n"
             "-- materialized: true\n"
             "SELECT * FROM silver.emp_clean"
         ),
@@ -103,7 +102,6 @@ def test_run_mode_switch_rematerializes_gold(tmp_path: Path):
         "gold",
         "emp_snapshot",
         (
-            "-- depends_on: silver.emp_clean\n"
             "-- materialized: true\n"
             "SELECT * FROM silver.emp_clean"
         ),
@@ -225,3 +223,61 @@ def test_run_all_transform_rebuild_failure_is_caught_and_logged(
     assert results[0].status == "success"
     assert "Transform rebuild failed" in caplog.text
     assert "synthetic transform-discover failure" in caplog.text
+
+
+def test_run_auto_infers_silver_to_gold_dep(tmp_path: Path):
+    """A gold transform with no -- depends_on: header but a `FROM silver.X`
+    clause is correctly ordered after silver.X by run_all. Regression for
+    issue #54 (the headline feature)."""
+    source_db = tmp_path / "source.duckdb"
+    con = duckdb.connect(str(source_db))
+    con.execute("CREATE SCHEMA IF NOT EXISTS erp")
+    con.execute("CREATE TABLE erp.employees (id INT, name VARCHAR)")
+    con.execute("INSERT INTO erp.employees VALUES (1, 'Alice'), (2, 'Bob')")
+    con.close()
+
+    dest_db = tmp_path / "feather_data.duckdb"
+    config = {
+        "sources": [{"type": "duckdb", "name": "src", "path": str(source_db)}],
+        "destination": {"path": str(dest_db)},
+    }
+    config_file = tmp_path / "feather.yaml"
+    config_file.write_text(yaml.dump(config))
+    write_curation(
+        tmp_path,
+        [make_curation_entry("src", "erp.employees", "employees")],
+    )
+
+    _write_sql(
+        tmp_path,
+        "silver",
+        "emp_clean",
+        "SELECT id, name AS employee_name FROM bronze.src_employees",
+    )
+    # gold: only -- materialized: true, NO -- depends_on:.
+    # The dep must be inferred from `FROM silver.emp_clean`.
+    _write_sql(
+        tmp_path,
+        "gold",
+        "emp_snapshot",
+        (
+            "-- materialized: true\n"
+            "SELECT * FROM silver.emp_clean"
+        ),
+    )
+
+    cfg = load_config(config_file)
+    results = run_all(cfg, config_file)
+
+    # run_all returns extraction RunResults, not transform-level results;
+    # success of the inferred-dep ordering is proven by the gold rows
+    # query below succeeding (which only works if silver.emp_clean was
+    # built before gold.emp_snapshot).
+    assert any(r.status == "success" for r in results), (
+        f"extraction failed: {results}"
+    )
+
+    con = duckdb.connect(str(dest_db))
+    gold_rows = con.execute("SELECT * FROM gold.emp_snapshot").fetchall()
+    assert len(gold_rows) == 2
+    con.close()

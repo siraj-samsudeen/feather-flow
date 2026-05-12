@@ -54,9 +54,9 @@
 
 ## 6. Advisory bronze-dependency check
 
-- [x] 6.1 Add `check_bronze_dependencies(con, transforms) -> list[str]` to `transforms.py`. Returns a list of warning strings, one per silver transform whose `-- depends_on: bronze.<table>` is missing from `information_schema.tables`.
+- [x] 6.1 Add `check_bronze_dependencies(con, transforms) -> list[str]` to `transforms.py`. Returns a list of warning strings, one per silver transform whose SQL body references a `bronze.<table>` (via FROM/JOIN, extracted with sqlglot) that is missing from `information_schema.tables`. (Issue #54 superseded the `-- depends_on: bronze.<table>` header convention; bronze refs are now derived from the SQL body — same source of truth as the silver→gold DAG edges.)
 - [x] 6.2 If the returned list has more than five entries, collapse into a single summary string: `f"WARNING: {N} bronze dependencies missing — run `feather extract` first"`. Otherwise emit one `WARNING:` line per missing dep. **Collapse logic lives in the transform command (Section 7), not the helper — the helper returns the raw list, the caller renders/collapses.**
-- [x] 6.3 Pytest covers: zero missing → empty list; one missing → one warning; six missing → one summary; mixed silver-without-depends_on and silver-with-depends_on → only the latter is checked. **7 unit tests in `tests/unit/test_bronze_check.py`.**
+- [x] 6.3 Pytest covers: zero missing → empty list; one missing → one warning; six missing → one summary; mixed silver transforms with and without bronze SQL refs → only the ones with bronze refs in the SQL body are checked. The SQL-body-via-sqlglot path is the only one exercised — the legacy `-- depends_on:` header convention is not honoured (see issue #54). **7 unit tests in `tests/unit/test_bronze_check.py`.**
 
 ## 7. New `feather transform` command
 
@@ -76,7 +76,7 @@ Real DuckDB fixtures, no mocking, per project convention. Unit tests for new pur
 
 - [x] 9.1 Build shared test fixtures under `tests/fixtures/transform_command/` and helpers under `tests/helpers.py`:
   - A `transforms/` directory containing one silver, one unmarked gold, and one gold with `-- materialized: true`. **Added** `silver_orders.sql` (silver), `gold_summary.sql` (unmarked gold), `gold_facts.sql` (marked gold).
-  - One silver transform annotated `-- depends_on: bronze.<table>`. **`silver_orders.sql` declares `-- depends_on: bronze.orders_src_orders`** (the sanitized name produced by curation from source_db=`orders_src` + alias=`orders`).
+  - One silver transform whose SQL body references a `bronze.<table>` (via FROM/JOIN). **`silver_orders.sql` contains `FROM bronze.orders_src_orders`** (the sanitized name produced by curation from source_db=`orders_src` + alias=`orders`). The bronze ref is sourced from the SQL body via sqlglot — issue #54 removed the `-- depends_on: bronze.<table>` header convention.
   - A `RaisingSource` class subclassing the source protocol, whose `_connect()` raises `RuntimeError("should not be called")`. **Added in `tests/helpers.py`.** Class-level `connect_called` + `called_methods` flags let tests assert the invariant after the run.
   - A pytest fixture that runs `feather run` once to populate bronze. **Implemented as `populated_destination`** but uses a direct DuckDB insert (cheaper, decouples from `feather extract`); tests that need the extract path call it themselves.
 - [x] 9.2 Add `tests/test_transform_command.py` and import from the shared fixtures. **Lives at `tests/integration/test_transform_command.py`** alongside the project's other integration tests.

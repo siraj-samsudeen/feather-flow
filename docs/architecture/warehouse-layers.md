@@ -97,6 +97,13 @@ The binding rule: **every layer serves at least one of the primary personas (`pe
 
 **Default materialization.** Views by default (PRD FR5, R-0636). Fact tables with large joins opt into materialization via the `-- materialized: true` annotation — rebuilt after each extraction run.
 
+**Dependency edges are inferred from SQL.** feather-etl parses each
+transform's `FROM`/`JOIN` clauses with `sqlglot` and builds the DAG from the
+`silver.*` / `gold.*` references it finds. The SQL body is the only source
+of truth for DAG edges — there is no `-- depends_on:` header. CTE names,
+string literals, comments, and table-valued functions like `read_csv(...)`
+are not treated as edges. See GitHub issue #54.
+
 **Persona trace.** Serves the Analyst's binding invariant *"information parity with source"* (Gold is where "the same question answered from the ERP today is answerable from the warehouse tomorrow" lives), and the Builder's JTBD *"guarantee that ported logic produces numbers identical to the source."*
 
 ### 4. Departmental Data Marts — consumer-shaped outputs

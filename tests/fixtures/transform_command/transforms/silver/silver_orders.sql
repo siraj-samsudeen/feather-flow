@@ -1,4 +1,3 @@
--- depends_on: bronze.orders_src_orders
 SELECT
     order_id,
     customer_id,
