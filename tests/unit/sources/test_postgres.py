@@ -672,3 +672,79 @@ class TestPostgresChangeDetectionMocked:
         assert result.changed is True
         assert result.reason == "checksum_changed"
         assert result.metadata == {"checksum": "md5-NEW", "row_count": 100}
+
+
+# ---------------------------------------------------------------------------
+# PostgresSource.extract — column quoting (mocked)
+# ---------------------------------------------------------------------------
+
+
+class TestPostgresColumnQuoting:
+    def test_columns_are_double_quoted(self, monkeypatch):
+        from feather_etl.sources import postgres as pg
+
+        captured_sql: list[str] = []
+
+        class FakeCursor:
+            description = [("id", 23), ("name", 1043)]
+
+            def execute(self, sql, *_):
+                captured_sql.append(sql)
+
+            def fetchmany(self, _n):
+                return []
+
+            def close(self):
+                pass
+
+        class FakeConn:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(pg.psycopg2, "connect", lambda *a, **k: FakeConn())
+
+        src = pg.PostgresSource(connection_string="dummy", name="x")
+        src.extract("erp.sales", columns=["Invoice Date", "Quantity"])
+
+        assert any('"Invoice Date", "Quantity"' in sql for sql in captured_sql)
+
+    def test_columns_with_double_quote_rejected(self):
+        from feather_etl.sources.postgres import PostgresSource
+
+        src = PostgresSource(connection_string="dummy", name="x")
+        with pytest.raises(ValueError, match="cannot be double-quoted"):
+            src.extract("erp.sales", columns=['col"name'])
+
+    def test_columns_none_uses_star(self, monkeypatch):
+        from feather_etl.sources import postgres as pg
+
+        captured_sql: list[str] = []
+
+        class FakeCursor:
+            description = [("id", 23)]
+
+            def execute(self, sql, *_):
+                captured_sql.append(sql)
+
+            def fetchmany(self, _n):
+                return []
+
+            def close(self):
+                pass
+
+        class FakeConn:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(pg.psycopg2, "connect", lambda *a, **k: FakeConn())
+
+        src = pg.PostgresSource(connection_string="dummy", name="x")
+        src.extract("erp.sales")
+
+        assert any("SELECT *" in sql for sql in captured_sql)

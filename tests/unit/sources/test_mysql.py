@@ -7,6 +7,7 @@ the local MySQL instance is not reachable.
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -773,3 +774,99 @@ class TestMySQLDetectChangesMocked:
         assert result.changed is True
         assert result.reason == "checksum_changed"
         assert result.metadata == {"checksum": 424242, "row_count": 100}
+
+
+# ---------------------------------------------------------------------------
+# MySQLSource.extract — column quoting (mocked)
+# ---------------------------------------------------------------------------
+
+
+class TestMySQLColumnQuoting:
+    def test_columns_are_backtick_quoted(self, monkeypatch):
+        from feather_etl.sources import mysql as mysql_mod
+        from feather_etl.sources.mysql import MySQLSource
+
+        captured_sql: list[str] = []
+
+        class FakeCursor:
+            description = [
+                ("id", 3, None, None, None, None, None, 0),
+                ("name", 253, None, None, None, None, None, 0),
+            ]
+
+            def execute(self, sql, *_):
+                captured_sql.append(sql)
+
+            def fetchmany(self, _n):
+                return []
+
+            def close(self):
+                pass
+
+        class FakeConn:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(
+            mysql_mod.mysql.connector, "connect", lambda **k: FakeConn()
+        )
+
+        src = MySQLSource(connection_string="dummy")
+        src._connect_kwargs = {"host": "localhost"}
+        src.extract("erp_sales", columns=["Invoice Date", "Quantity"])
+
+        assert any("`Invoice Date`, `Quantity`" in sql for sql in captured_sql)
+
+    def test_columns_with_backtick_rejected(self, monkeypatch):
+        from feather_etl.sources import mysql as mysql_mod
+        from feather_etl.sources.mysql import MySQLSource
+
+        # Must monkeypatch connect to prevent real connection attempt
+        # Even though validation happens before connect, other tests may
+        # need this pattern
+        monkeypatch.setattr(
+            mysql_mod.mysql.connector, "connect", lambda **k: MagicMock()
+        )
+
+        src = MySQLSource(connection_string="dummy")
+        src._connect_kwargs = {"host": "localhost"}
+        with pytest.raises(ValueError, match="cannot be backtick-quoted"):
+            src.extract("erp_sales", columns=["col`name"])
+
+    def test_columns_none_uses_star(self, monkeypatch):
+        from feather_etl.sources import mysql as mysql_mod
+        from feather_etl.sources.mysql import MySQLSource
+
+        captured_sql: list[str] = []
+
+        class FakeCursor:
+            description = [("id", 3, None, None, None, None, None, 0)]
+
+            def execute(self, sql, *_):
+                captured_sql.append(sql)
+
+            def fetchmany(self, _n):
+                return []
+
+            def close(self):
+                pass
+
+        class FakeConn:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(
+            mysql_mod.mysql.connector, "connect", lambda **k: FakeConn()
+        )
+
+        src = MySQLSource(connection_string="dummy")
+        src._connect_kwargs = {"host": "localhost"}
+        src.extract("erp_sales")
+
+        assert any("SELECT *" in sql for sql in captured_sql)

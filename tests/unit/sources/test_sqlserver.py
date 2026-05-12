@@ -110,7 +110,7 @@ def test_sqlserver_extract_with_filter_and_columns(
 
     assert result.num_rows == 1
     calls = [str(c) for c in mock_cursor.execute.call_args_list]
-    query_call = [c for c in calls if "id, name" in c]
+    query_call = [c for c in calls if "[id], [name]" in c]
     assert len(query_call) == 1
     assert "status = 'active'" in query_call[0]
 
@@ -784,3 +784,48 @@ def test_sqlserver_detect_changes_first_run_when_row_is_none(
     result = source.detect_changes("dbo.t", last_state=None)
     assert result.changed is True
     assert result.reason == "first_run"
+
+
+# ---------------------------------------------------------------------------
+# extract() — column quoting
+# ---------------------------------------------------------------------------
+
+
+class TestSqlServerColumnQuoting:
+    @patch("feather_etl.sources.sqlserver.pyodbc")
+    def test_columns_are_bracket_quoted(self, mock_pyodbc, source):
+        mock_cursor = MagicMock()
+        mock_cursor.description = [
+            ("Invoice Date", str, None, None, None, None, None),
+        ]
+        mock_cursor.fetchmany.side_effect = [[("2026-01-01",)], []]
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_pyodbc.connect.return_value = mock_conn
+
+        source.extract("dbo.Sales", columns=["Invoice Date", "Quantity"])
+
+        executed = mock_cursor.execute.call_args_list
+        query = executed[1][0][0]
+        assert "[Invoice Date], [Quantity]" in query
+
+    @patch("feather_etl.sources.sqlserver.pyodbc")
+    def test_columns_with_bracket_rejected(self, mock_pyodbc, source):
+        with pytest.raises(ValueError, match="cannot be bracket-quoted"):
+            source.extract("dbo.Sales", columns=["col]name"])
+
+    @patch("feather_etl.sources.sqlserver.pyodbc")
+    def test_columns_none_uses_star(self, mock_pyodbc, source):
+        mock_cursor = MagicMock()
+        mock_cursor.description = [
+            ("id", int, None, None, None, None, None),
+        ]
+        mock_cursor.fetchmany.side_effect = [[(1,)], []]
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_pyodbc.connect.return_value = mock_conn
+
+        source.extract("dbo.Sales")
+        executed = mock_cursor.execute.call_args_list
+        query = executed[1][0][0]
+        assert "SELECT *" in query

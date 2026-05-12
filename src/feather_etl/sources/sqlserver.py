@@ -300,7 +300,14 @@ class SqlServerSource(DatabaseSource):
         cursor = con.cursor()
         cursor.execute("SET NOCOUNT ON")
 
-        col_clause = ", ".join(columns) if columns else "*"
+        if columns:
+            bad = [c for c in columns if "]" in c]
+            if bad:
+                raise ValueError(
+                    f"SQL Server column names containing ']' cannot be "
+                    f"bracket-quoted: {bad}"
+                )
+        col_clause = ", ".join(f"[{c}]" for c in columns) if columns else "*"
         where = self._build_where_clause(filter, watermark_column, watermark_value)
         query = f"SELECT {col_clause} FROM {table}{where}"
 
