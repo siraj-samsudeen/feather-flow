@@ -197,6 +197,47 @@ class TestParseTransformFile:
         assert "silver.legacy_marker" not in meta.depends_on
         assert meta.materialized is True
 
+    def test_parse_cte_shadow_no_phantom_dep(self, tmp_path: Path):
+        # A CTE named `foo` must not create silver.foo as a dependency,
+        # even if the SQL uses `FROM foo` elsewhere.
+        content = (
+            "WITH foo AS (SELECT * FROM bronze.bar)\n"
+            "SELECT * FROM foo JOIN silver.baz USING (id)"
+        )
+        p = _write_sql(tmp_path, "silver", "cte_user", content)
+        meta = parse_transform_file(p)
+
+        assert meta.depends_on == ["silver.baz"]
+        assert "silver.foo" not in meta.depends_on
+
+    def test_parse_string_literal_does_not_create_dep(self, tmp_path: Path):
+        # 'FROM silver.boom' is a string value, not a table reference.
+        content = (
+            "SELECT * FROM silver.real WHERE label = 'FROM silver.boom'"
+        )
+        p = _write_sql(tmp_path, "gold", "no_boom", content)
+        meta = parse_transform_file(p)
+
+        assert meta.depends_on == ["silver.real"]
+        assert "silver.boom" not in meta.depends_on
+
+    def test_parse_raises_on_unparseable_sql(self, tmp_path: Path):
+        from feather_etl.transform_deps import TransformDepParseError
+
+        p = _write_sql(tmp_path, "silver", "bad", "SELECT FROM WHERE")
+        with pytest.raises(TransformDepParseError, match="bad.sql"):
+            parse_transform_file(p)
+
+    def test_parse_raises_on_empty_sql_body(self, tmp_path: Path):
+        # A file with only headers and no SELECT body must fail loudly at
+        # discover-time, not silently install an empty view at execute-time.
+        from feather_etl.transform_deps import TransformDepParseError
+
+        content = "-- materialized: true\n"  # no SELECT body at all
+        p = _write_sql(tmp_path, "gold", "empty", content)
+        with pytest.raises(TransformDepParseError, match="empty.sql"):
+            parse_transform_file(p)
+
 
 # ===========================================================================
 # Task 2: Discovery + dependency graph
