@@ -111,10 +111,10 @@ Real DuckDB fixtures, no mocking, per project convention. Unit tests for new pur
 
 ## 11. Final verification
 
-- [ ] 11.1 `uv run pytest -q` — fully green, including new tests.
-- [ ] 11.2 `uv run pytest -q --cov=src --cov-fail-under=80` — coverage threshold holds.
-- [ ] 11.3 `ruff check .` — clean.
-- [ ] 11.4 `ruff format .` across the whole repo and commit as a separate style-only diff before push (per project convention).
-- [ ] 11.5 Manual smoke: in a throwaway dir, run `uv run feather init`, `uv run feather extract`, `uv run feather transform`, `uv run feather history --trigger transform`, `uv run feather history --trigger extract`. Confirm output matches the spec's summary-output and filter requirements.
-- [ ] 11.6 Confirm `uv run feather cache --help` returns "no such command" (positive proof of the hard rename — no alias slipped in).
-- [ ] 11.7 Open PR. Body cites this change name and the spec/design under `openspec/changes/feather-transform/`.
+- [x] 11.1 `uv run pytest -q` — fully green, including new tests. **873 passing** (the +8 vs Wave E's 865 comes from un-shadowing a previously-duplicate `TestParseTransformFile` class; see the chore commit).
+- [x] 11.2 `uv run pytest -q --cov=src --cov-fail-under=80` — coverage threshold holds. **100.00% overall** (every file in `src/feather_etl/` reports 100% line coverage including `commands/transform.py`, `commands/extract.py`, `transforms.py`, `state.py`, `history.py`, `commands/history.py`).
+- [x] 11.3 `ruff check .` — clean. Six pre-existing nits fixed in the chore commit (five auto-fixed F-rule violations and one F811 — a duplicate `TestParseTransformFile` class that was silently shadowing).
+- [x] 11.4 `ruff format .` across the whole repo and commit as a separate style-only diff before push (per project convention). **9 files reformatted**, committed as `chore: ruff format + cleanup duplicate test class`.
+- [x] 11.5 Manual smoke in `mktemp -d`: configured a CSV source + curation manifest + two transforms; ran `uv run feather extract` (1 row extracted, trigger='extract'), `uv run feather transform` (2 transforms succeeded, trigger='transform'), `uv run feather history --trigger transform` (2 rows, all trigger='transform'), `uv run feather history --trigger extract` (only extract rows). All output matched the spec.
+- [x] 11.6 Confirmed `uv run feather cache --help` returns `Error: No such command 'cache'.` — hard rename verified, no alias slipped in.
+- [x] 11.7 Open PR. Body cites this change name and the spec/design under `openspec/changes/feather-transform/`.
