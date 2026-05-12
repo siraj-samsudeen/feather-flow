@@ -72,13 +72,11 @@ def _run_with_transforms(tmp_path: Path, mode: str) -> Path:
     gold_dir.mkdir(parents=True)
 
     (silver_dir / "customers_clean.sql").write_text(
-        "-- depends_on: bronze.erp_customers\n"
         "SELECT customer_id, name AS customer_name, city\n"
         "FROM bronze.erp_customers\n"
     )
 
     (gold_dir / "customer_summary.sql").write_text(
-        "-- depends_on: silver.customers_clean\n"
         "-- materialized: true\n"
         "SELECT city, COUNT(*) AS customer_count\n"
         "FROM silver.customers_clean\n"

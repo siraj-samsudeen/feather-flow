@@ -380,9 +380,10 @@ def test_mode_precedence_default_is_dev(project_dir: Path):
 
 
 def test_advisory_warning_single_missing_bronze(populated_destination: Path):
-    """Silver declares ``-- depends_on: bronze.orders_src_orders``; if dropped,
-    command warns on stderr. Per spec: still attempts execution; we pin the
-    warning, not the exit code (the transform will fail downstream)."""
+    """Silver SQL body's ``FROM bronze.orders_src_orders`` clause is what the
+    bronze advisory check reads; if the table is dropped, command warns on
+    stderr. Per spec: still attempts execution; we pin the warning, not the
+    exit code (the transform will fail downstream)."""
     dest_db = populated_destination / "feather_data.duckdb"
     con = duckdb.connect(str(dest_db))
     con.execute("DROP TABLE bronze.orders_src_orders")
@@ -427,7 +428,7 @@ def test_collapse_rule_more_than_five_missing(project_dir: Path):
     silver_dir.mkdir(parents=True)
     for i in range(6):
         (silver_dir / f"silver_{i}.sql").write_text(
-            f"-- depends_on: bronze.missing_{i}\nSELECT 1 AS x\n"
+            f"SELECT 1 AS x FROM bronze.missing_{i}\n"
         )
     # Remove gold transforms so only the missing-bronze warnings are in play.
     shutil.rmtree(project_dir / "transforms" / "gold")

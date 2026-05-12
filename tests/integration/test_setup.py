@@ -66,9 +66,7 @@ def _write_gold_transform(project, *, materialized: bool) -> None:
     prod mode rebuilds it as a TABLE; otherwise it stays a view."""
     tdir = project.root / "transforms" / "gold"
     tdir.mkdir(parents=True, exist_ok=True)
-    header = "-- depends_on: silver.orders_clean\n"
-    if materialized:
-        header += "-- materialized: true\n"
+    header = "-- materialized: true\n" if materialized else ""
     (tdir / "orders_summary.sql").write_text(
         header + "SELECT COUNT(*) AS n FROM silver.orders_clean\n"
     )
