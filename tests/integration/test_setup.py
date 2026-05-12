@@ -21,11 +21,13 @@ def _setup_project(project):
 
 
 def _write_silver_transform(project) -> None:
-    """Write a tiny silver view definition that depends on bronze.orders."""
+    """Write a tiny silver view definition. The loader wraps the SELECT
+    body in CREATE OR REPLACE VIEW silver.orders_clean AS ... at execution
+    time, so the file only contains the SELECT."""
     tdir = project.root / "transforms" / "silver"
     tdir.mkdir(parents=True, exist_ok=True)
     (tdir / "orders_clean.sql").write_text(
-        "CREATE OR REPLACE VIEW silver.orders_clean AS SELECT * FROM bronze.orders;\n"
+        "SELECT * FROM bronze.orders\n"
     )
 
 

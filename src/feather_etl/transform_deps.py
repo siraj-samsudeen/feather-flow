@@ -20,6 +20,27 @@ from sqlglot.errors import ParseError
 TRANSFORM_SCHEMAS: frozenset[str] = frozenset({"silver", "gold"})
 BRONZE_SCHEMA: str = "bronze"
 
+# Statement node types where an ``exp.Table`` child is the *target*
+# (output) of a write — not a dependency. The SELECT body that produces
+# the rows is read separately; only its FROM/JOIN refs become edges.
+#
+# sqlglot's class names for ALTER vary across versions: older releases
+# expose ``exp.AlterTable``, newer ones expose ``exp.Alter``. We probe
+# for both and include whichever exists.
+_WRITE_TARGET_PARENTS: tuple[type, ...] = tuple(
+    cls
+    for cls in (
+        exp.Create,
+        exp.Insert,
+        exp.Drop,
+        getattr(exp, "AlterTable", None),
+        getattr(exp, "Alter", None),
+        exp.Delete,
+        exp.Update,
+    )
+    if cls is not None
+)
+
 
 class TransformDepParseError(ValueError):
     """Raised when sqlglot cannot parse a transform's SQL body."""
@@ -39,8 +60,14 @@ def _walk_tables_in_schemas(
 
     refs: set[str] = set()
     for table in tree.find_all(exp.Table):
-        if table.db in schemas:
-            refs.add(f"{table.db}.{table.name}")
+        if table.db not in schemas:
+            continue
+        # Skip tables that are the *target* of a CREATE/INSERT/DROP/etc.
+        # — they're outputs, not dependencies. Only the SELECT body's
+        # FROM/JOIN refs are real edges.
+        if isinstance(table.parent, _WRITE_TARGET_PARENTS):
+            continue
+        refs.add(f"{table.db}.{table.name}")
     return sorted(refs)
 
 

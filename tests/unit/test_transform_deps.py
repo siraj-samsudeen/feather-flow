@@ -79,6 +79,18 @@ class TestExtractDependenciesEdgeCases:
         sql = "SELECT * FROM (SELECT id FROM silver.inner_dim) sub"
         assert extract_dependencies(sql) == ["silver.inner_dim"]
 
+    def test_create_view_target_is_not_a_dep(self):
+        # CREATE OR REPLACE VIEW silver.X AS SELECT ... — silver.X is
+        # the OUTPUT of this transform, not a dependency. Only the
+        # FROM/JOIN refs in the SELECT body count.
+        sql = "CREATE OR REPLACE VIEW silver.orders_clean AS SELECT * FROM bronze.orders"
+        assert extract_dependencies(sql) == []  # bronze ignored, silver.orders_clean is target
+
+    def test_create_table_target_is_not_a_dep(self):
+        sql = "CREATE TABLE silver.foo AS SELECT * FROM silver.bar"
+        # silver.bar is the REAL dep; silver.foo is the target.
+        assert extract_dependencies(sql) == ["silver.bar"]
+
 
 class TestExtractDependenciesParseFailure:
     def test_malformed_sql_raises(self):
