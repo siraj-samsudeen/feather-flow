@@ -68,9 +68,7 @@ class TestCheckBronzeDependencies:
     def test_six_missing_deps_returns_six_warnings(
         self, con: duckdb.DuckDBPyConnection
     ) -> None:
-        transforms = [
-            _silver(f"t{i}", depends_on=[f"bronze.t{i}"]) for i in range(6)
-        ]
+        transforms = [_silver(f"t{i}", depends_on=[f"bronze.t{i}"]) for i in range(6)]
         warnings = check_bronze_dependencies(con, transforms)
         # Helper returns the full raw list — caller collapses when > 5.
         assert len(warnings) == 6

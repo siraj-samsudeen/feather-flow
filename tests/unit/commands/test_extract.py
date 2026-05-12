@@ -89,10 +89,12 @@ class TestNoCacheAlias:
         # that legitimately mentions caching can't produce a false positive.
         lines = commands_text.splitlines()
         command_list_lines = [
-            line for line in lines if line.startswith("  ") and not line.startswith("    ")
+            line
+            for line in lines
+            if line.startswith("  ") and not line.startswith("    ")
         ]
         joined = " ".join(command_list_lines)
         assert "cache" not in joined.split(), (
-            f"Did not expect `cache` in the command list. Command lines:\n"
+            "Did not expect `cache` in the command list. Command lines:\n"
             + "\n".join(command_list_lines)
         )

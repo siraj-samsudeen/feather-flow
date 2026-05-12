@@ -84,9 +84,7 @@ class StateManager:
             # Idempotent migration for state DBs created before this column
             # existed. Safe to run on every connect — ADD COLUMN IF NOT EXISTS
             # is a no-op once the column is present.
-            con.execute(
-                "ALTER TABLE _runs ADD COLUMN IF NOT EXISTS trigger VARCHAR"
-            )
+            con.execute("ALTER TABLE _runs ADD COLUMN IF NOT EXISTS trigger VARCHAR")
 
             con.execute("""
                 CREATE TABLE IF NOT EXISTS _run_steps (

@@ -83,7 +83,7 @@ def test_feather_help_does_not_list_cache(project, cli):
     # Whole-word match so words containing 'cache' inside help strings can't
     # produce a false positive.
     assert "cache" not in joined.split(), (
-        f"`cache` must not appear in the command list. Lines:\n"
+        "`cache` must not appear in the command list. Lines:\n"
         + "\n".join(command_lines)
     )
 

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import typer
 
 if TYPE_CHECKING:
-    from feather_etl.config import FeatherConfig
+    pass
 
 
 def _is_json(ctx: typer.Context) -> bool:

@@ -211,9 +211,7 @@ def test_history_trigger_filter_excludes_other_verbs(cli, project):
     json_extract = cli("--json", "history", "--trigger", "extract")
 
     run_rows = [
-        json.loads(line)
-        for line in json_run.output.strip().split("\n")
-        if line.strip()
+        json.loads(line) for line in json_run.output.strip().split("\n") if line.strip()
     ]
     extract_rows = [
         json.loads(line)

@@ -36,9 +36,7 @@ def _prepare_dest_with_bronze(dest_db: Path) -> None:
     con.close()
 
 
-def _write_config(
-    tmp_path: Path, dest_db: Path, mode: str
-) -> Path:
+def _write_config(tmp_path: Path, dest_db: Path, mode: str) -> Path:
     """Minimal config file with a single source (unused by run_transforms)."""
     source_db = tmp_path / "source.duckdb"
     # Touch a source file so config validation passes; run_transforms never

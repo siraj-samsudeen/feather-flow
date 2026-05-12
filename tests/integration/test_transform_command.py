@@ -321,7 +321,9 @@ def _resolved_mode_from_facts(dest_db: Path) -> str:
     exactly which is expected.
     """
     types = _table_types(dest_db)
-    return "prod" if types.get(("gold", "gold_facts")) == "BASE TABLE" else "dev_or_test"
+    return (
+        "prod" if types.get(("gold", "gold_facts")) == "BASE TABLE" else "dev_or_test"
+    )
 
 
 def test_mode_precedence_cli_beats_env_and_yaml(project_dir: Path):
@@ -367,7 +369,9 @@ def test_mode_precedence_default_is_dev(project_dir: Path):
     with _env(FEATHER_MODE=None):
         result = _invoke("transform", "--config", str(project_dir / "feather.yaml"))
     assert result.exit_code == 0, result.output
-    assert _resolved_mode_from_facts(project_dir / "feather_data.duckdb") == "dev_or_test"
+    assert (
+        _resolved_mode_from_facts(project_dir / "feather_data.duckdb") == "dev_or_test"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +388,9 @@ def test_advisory_warning_single_missing_bronze(populated_destination: Path):
     con.execute("DROP TABLE bronze.orders_src_orders")
     con.close()
 
-    result = _invoke("transform", "--config", str(populated_destination / "feather.yaml"))
+    result = _invoke(
+        "transform", "--config", str(populated_destination / "feather.yaml")
+    )
     combined = result.output  # mix_stderr default
     assert "WARNING" in combined
     assert "bronze.orders_src_orders" in combined
@@ -458,12 +464,8 @@ def test_collapse_rule_more_than_five_missing(project_dir: Path):
 def test_bad_sql_returns_exit_1(populated_destination: Path):
     """A transform with broken SQL → exit 1 with the failure in the breakdown."""
     # Inject a deliberately-broken gold transform.
-    bad = (
-        populated_destination / "transforms" / "gold" / "gold_broken.sql"
-    )
-    bad.write_text(
-        "SELECT this_column_does_not_exist FROM bronze.orders_src_orders\n"
-    )
+    bad = populated_destination / "transforms" / "gold" / "gold_broken.sql"
+    bad.write_text("SELECT this_column_does_not_exist FROM bronze.orders_src_orders\n")
 
     result = _invoke(
         "transform", "--config", str(populated_destination / "feather.yaml")
@@ -495,13 +497,9 @@ def test_unexpected_config_load_error_returns_exit_2(
     def _boom(*_a, **_kw):
         raise RuntimeError("synthetic config-load failure")
 
-    monkeypatch.setattr(
-        "feather_etl.commands.transform._load_and_validate", _boom
-    )
+    monkeypatch.setattr("feather_etl.commands.transform._load_and_validate", _boom)
 
-    result = _invoke(
-        "transform", "--config", str(project_dir / "feather.yaml")
-    )
+    result = _invoke("transform", "--config", str(project_dir / "feather.yaml"))
     assert result.exit_code == 2
     assert "Failed to load config" in result.output
     assert "synthetic config-load failure" in result.output
@@ -525,9 +523,7 @@ def test_unreachable_destination_returns_exit_2(
 
     monkeypatch.setattr(DuckDBDestination, "_connect", _boom)
 
-    result = _invoke(
-        "transform", "--config", str(project_dir / "feather.yaml")
-    )
+    result = _invoke("transform", "--config", str(project_dir / "feather.yaml"))
     assert result.exit_code == 2
     assert "Failed to open destination" in result.output
 
@@ -621,7 +617,11 @@ def test_summary_output_format(populated_destination: Path):
     * trailing summary ``<N> transforms: <K> succeeded.``
     """
     result = _invoke(
-        "transform", "--config", str(populated_destination / "feather.yaml"), "--mode", "dev"
+        "transform",
+        "--config",
+        str(populated_destination / "feather.yaml"),
+        "--mode",
+        "dev",
     )
     assert result.exit_code == 0, result.output
 
@@ -715,9 +715,7 @@ def _watermarked_tables(state_db: Path) -> set[str]:
 
 
 @pytest.mark.parametrize("mode", ["dev", "test"])
-def test_verb_equivalence_extract_plus_transform_equals_run(
-    tmp_path: Path, mode: str
-):
+def test_verb_equivalence_extract_plus_transform_equals_run(tmp_path: Path, mode: str):
     """Path A (``feather run``) and Path B (``feather extract`` then
     ``feather transform``) produce equivalent destination state.
 
