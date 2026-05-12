@@ -76,8 +76,8 @@ class TestExtractDependenciesEdgeCases:
         assert extract_dependencies(sql) == []
 
     def test_subquery_dependency(self):
-        sql = "SELECT * FROM (SELECT id FROM silver.inner) sub"
-        assert extract_dependencies(sql) == ["silver.inner"]
+        sql = "SELECT * FROM (SELECT id FROM silver.inner_dim) sub"
+        assert extract_dependencies(sql) == ["silver.inner_dim"]
 
 
 class TestExtractDependenciesParseFailure:
