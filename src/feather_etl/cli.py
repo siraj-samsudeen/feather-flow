@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import typer
 
-from feather_etl.commands.cache import register as register_cache
 from feather_etl.commands.discover import register as register_discover
+from feather_etl.commands.extract import register as register_extract
 from feather_etl.commands.history import register as register_history
 from feather_etl.commands.init import register as register_init
 from feather_etl.commands.run import register as register_run
 from feather_etl.commands.setup import register as register_setup
 from feather_etl.commands.status import register as register_status
+from feather_etl.commands.transform import register as register_transform
 from feather_etl.commands.view import register as register_view
 from feather_etl.commands.validate import register as register_validate
 
@@ -34,4 +35,5 @@ register_setup(app)
 register_run(app)
 register_history(app)
 register_status(app)
-register_cache(app)
+register_extract(app)
+register_transform(app)

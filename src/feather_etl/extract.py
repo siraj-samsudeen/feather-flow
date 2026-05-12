@@ -1,4 +1,10 @@
-"""`feather cache` orchestrator — dev-only bronze pull, isolated state."""
+"""`feather extract` orchestrator — dev-only bronze pull, isolated state.
+
+Renamed from `feather_etl.cache` (verb `feather cache`) per the
+feather-transform change. The local-snapshot state machinery still
+uses `_cache_watermarks` etc. inside `state.py`; only the verb-facing
+public API was renamed.
+"""
 
 from __future__ import annotations
 
@@ -16,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class CacheResult:
-    """Result of caching one table."""
+class ExtractResult:
+    """Result of extracting one table into bronze."""
 
     table_name: str
     source_db: str
@@ -26,16 +32,16 @@ class CacheResult:
     error_message: str | None = None
 
 
-def run_cache(
+def run_extract(
     config: FeatherConfig,
     tables: list[TableConfig],
     working_dir: Path,
     refresh: bool = False,
-) -> list[CacheResult]:
+) -> list[ExtractResult]:
     """Pull curated tables into bronze. Dev-only. No transforms, no DQ, no drift.
 
     Per-table errors (including unresolvable ``source_db`` and extract/load
-    failures) are captured as ``CacheResult(status="failure")`` and never
+    failures) are captured as ``ExtractResult(status="failure")`` and never
     raised — the caller can decide exit-code semantics from the result list.
     """
     state = StateManager(working_dir / "feather_state.duckdb")
@@ -43,14 +49,27 @@ def run_cache(
     dest = DuckDBDestination(path=config.destination.path)
     dest.setup_schemas()
 
-    results: list[CacheResult] = []
+    results: list[ExtractResult] = []
     for table in tables:
         source_db = table.database or (table.source_name or "")
+        now = datetime.now(timezone.utc)
+        run_id = f"extract_{table.name}_{now.isoformat()}"
+
         try:
             source = resolve_source(source_db, config.sources)
         except ValueError as e:
+            ended_at = datetime.now(timezone.utc)
+            state.record_run(
+                run_id=run_id,
+                table_name=table.name,
+                started_at=now,
+                ended_at=ended_at,
+                status="failure",
+                error_message=str(e),
+                trigger="extract",
+            )
             results.append(
-                CacheResult(
+                ExtractResult(
                     table_name=table.name,
                     source_db=source_db,
                     status="failure",
@@ -59,15 +78,21 @@ def run_cache(
             )
             continue
 
-        now = datetime.now(timezone.utc)
-        run_id = f"cache_{table.name}_{now.isoformat()}"
-
         wm = state.read_cache_watermark(table.name)
         change = source.detect_changes(table.source_table, last_state=wm)
 
         if not change.changed and not refresh:
+            ended_at = datetime.now(timezone.utc)
+            state.record_run(
+                run_id=run_id,
+                table_name=table.name,
+                started_at=now,
+                ended_at=ended_at,
+                status="skipped",
+                trigger="extract",
+            )
             results.append(
-                CacheResult(
+                ExtractResult(
                     table_name=table.name,
                     source_db=source_db,
                     status="cached",
@@ -87,8 +112,19 @@ def run_cache(
                 last_checksum=change.metadata.get("checksum"),
                 last_row_count=change.metadata.get("row_count"),
             )
+            ended_at = datetime.now(timezone.utc)
+            state.record_run(
+                run_id=run_id,
+                table_name=table.name,
+                started_at=now,
+                ended_at=ended_at,
+                status="success",
+                rows_extracted=rows,
+                rows_loaded=rows,
+                trigger="extract",
+            )
             results.append(
-                CacheResult(
+                ExtractResult(
                     table_name=table.name,
                     source_db=source_db,
                     status="success",
@@ -96,9 +132,19 @@ def run_cache(
                 )
             )
         except Exception as e:
-            logger.error("Cache failed for %s: %s", table.name, e)
+            logger.error("Extract failed for %s: %s", table.name, e)
+            ended_at = datetime.now(timezone.utc)
+            state.record_run(
+                run_id=run_id,
+                table_name=table.name,
+                started_at=now,
+                ended_at=ended_at,
+                status="failure",
+                error_message=str(e),
+                trigger="extract",
+            )
             results.append(
-                CacheResult(
+                ExtractResult(
                     table_name=table.name,
                     source_db=source_db,
                     status="failure",

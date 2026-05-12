@@ -195,6 +195,7 @@ def run_table(
             ended_at=ended_at,
             status="skipped",
             error_message=error_msg,
+            trigger="run",
         )
         return RunResult(
             table_name=table.name,
@@ -231,6 +232,7 @@ def run_table(
             started_at=started_at,
             ended_at=ended_at,
             status="skipped",
+            trigger="run",
         )
         # Touch scenario: mtime changed but hash identical — update watermark
         # so next run skips re-hashing
@@ -349,6 +351,7 @@ def run_table(
                     rows_loaded=0,
                     watermark_before=watermark_before,
                     watermark_after=watermark_before,
+                    trigger="run",
                 )
                 # Update file mtime/hash but keep last_value unchanged
                 state.write_watermark(
@@ -481,6 +484,7 @@ def run_table(
             watermark_before=watermark_before,
             watermark_after=watermark_after,
             schema_changes=schema_changes_json,
+            trigger="run",
         )
         state.reset_retry(table.name)
         logger.info(
@@ -513,6 +517,7 @@ def run_table(
             ended_at=ended_at,
             status="failure",
             error_message=error_msg,
+            trigger="run",
         )
         state.increment_retry(table.name)
         alert_on_failure(table.name, error_msg, config=config.alerts)
@@ -567,32 +572,9 @@ def run_all(
     any_ok = any(r.status in ("success", "skipped") for r in results)
     if any_ok:
         try:
-            from feather_etl.transforms import (
-                build_execution_order,
-                discover_transforms,
-                execute_transforms,
-                rebuild_materialized_gold,
-            )
+            from feather_etl.transforms import run_transforms
 
-            transforms = discover_transforms(config.config_dir)
-            if transforms:
-                ordered = build_execution_order(transforms)
-                dest = DuckDBDestination(path=config.destination.path)
-                con = dest._connect()
-                try:
-                    if config.mode == "prod":
-                        # Prod: create all as views first (gold needs silver),
-                        # then rebuild gold as materialized tables
-                        execute_transforms(con, ordered)
-                        rebuild_results = rebuild_materialized_gold(con, ordered)
-                        count = sum(1 for r in rebuild_results if r.status == "success")
-                        if count:
-                            logger.info("Rebuilt %d materialized gold table(s)", count)
-                    else:
-                        # Dev/test: create everything as views (force_views)
-                        execute_transforms(con, ordered, force_views=True)
-                finally:
-                    con.close()
+            run_transforms(config)
         except Exception as e:
             logger.error("Transform rebuild failed: %s", e)
 

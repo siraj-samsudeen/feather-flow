@@ -24,7 +24,7 @@ horizontal `core`:
 |---|---|---|
 | **Sources** | `csv`, `sqlserver`, `postgres`, `excel`, `json`, `sqlite`, `duckdb`, `mysql` | Adding a new source type |
 | **Destinations** | `duckdb` today; future: `motherduck`, `s3` | Adding a new write target |
-| **Commands** | `init`, `validate`, `discover`, `run`, `setup`, `cache`, `status`, `history`, `view` | Adding a new CLI subcommand |
+| **Commands** | `init`, `validate`, `discover`, `run`, `setup`, `extract`, `transform`, `status`, `history`, `view` | Adding a new CLI subcommand |
 
 **`core/`** holds horizontal primitives (config, state, transforms,
 output, exceptions, alerts, curation parser) used across multiple
@@ -206,7 +206,7 @@ concerns. Its test belongs in `commands/run/retry_test.py`, not
 ### 13. Cross-command imports
 `commands/<a>/core.py` **MAY** import from `commands/<b>/core.py`
 when one command's domain logic legitimately composes another's
-(e.g., cache calls pipeline internals).
+(e.g., extract or transform calls pipeline internals).
 
 `commands/<a>/cli.py` **MAY NOT** import from `commands/<b>/cli.py` —
 Typer wrappers stay isolated. Cross-wrapper plumbing goes through

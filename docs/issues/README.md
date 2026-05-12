@@ -7,6 +7,7 @@ Files here are typically short-lived — once a design spec lands under `docs/su
 ## Contents
 
 - [`26-discover-views.md`](26-discover-views.md) — Issue #26 (view discovery across DB sources). Captures the R1 (Builder) and R2 (Analyst) requirements, out-of-scope items, and the implementation handoff addendum covering AI-agent consumption and forward-compatibility with the planned SQLite metadata DB. Cited by the design spec at `docs/superpowers/specs/2026-04-21-discover-views-design.md`.
+- [`rethink-mode-system.md`](rethink-mode-system.md) — Three symptoms surfaced during the `feather-transform` change (May 2026): verb-equivalence breaks in prod, dual watermark tables, and the deeper observation that modes-as-preset-bundles cannot express what operators want. Recommends removing modes entirely (option C1). Pick up after `feather-transform` lands.
 - [`replace-hands-on-test.md`](replace-hands-on-test.md) — pre-existing note; retained for context.
 
 ## When to add a doc here

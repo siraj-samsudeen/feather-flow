@@ -142,3 +142,86 @@ def test_history_json_outputs_ndjson(cli, project):
     parsed = json.loads(lines[0])
     assert "run_id" in parsed
     assert "table_name" in parsed
+    # trigger key is now part of the history JSON contract.
+    assert "trigger" in parsed
+    assert parsed["trigger"] == "run"
+
+
+# ---------------------------------------------------------------------------
+# --trigger filter (feather-transform Wave B)
+# ---------------------------------------------------------------------------
+
+
+def _extract_then_run_env(project):
+    """Project set up for both `feather extract` and `feather run`.
+
+    Bronze pulled via extract; run loads the same tables. Yields both
+    trigger='extract' and trigger='run' rows in _runs.
+    """
+    project.copy_fixture("client.duckdb")
+    project.write_config(
+        sources=[
+            {
+                "type": "duckdb",
+                "name": "icube",
+                "path": str(project.root / "client.duckdb"),
+            }
+        ],
+        destination={"path": str(project.root / "feather_data.duckdb")},
+    )
+    project.write_curation([("icube", "icube.InventoryGroup", "inv")])
+
+
+def test_history_trigger_filter_run(cli, project):
+    """`feather history --trigger run` returns only run rows."""
+    _extract_then_run_env(project)
+    cli("extract")
+    cli("run")
+
+    result = cli("history", "--trigger", "run")
+    assert result.exit_code == 0
+    # Header is unconditional; assert run output, no extract rows.
+    assert "run" in result.output
+    # Output contains a `Trigger` column header now.
+    assert "Trigger" in result.output
+
+
+def test_history_trigger_filter_extract(cli, project):
+    """`feather history --trigger extract` returns only extract rows."""
+    _extract_then_run_env(project)
+    cli("extract")
+    cli("run")
+
+    result = cli("--json", "history", "--trigger", "extract")
+    assert result.exit_code == 0
+    lines = [line for line in result.output.strip().split("\n") if line.strip()]
+    assert lines, "expected at least one extract row"
+    for line in lines:
+        row = json.loads(line)
+        assert row["trigger"] == "extract", row
+
+
+def test_history_trigger_filter_excludes_other_verbs(cli, project):
+    """The filter drops rows whose trigger doesn't match."""
+    _extract_then_run_env(project)
+    cli("extract")
+    cli("run")
+
+    json_run = cli("--json", "history", "--trigger", "run")
+    json_extract = cli("--json", "history", "--trigger", "extract")
+
+    run_rows = [
+        json.loads(line) for line in json_run.output.strip().split("\n") if line.strip()
+    ]
+    extract_rows = [
+        json.loads(line)
+        for line in json_extract.output.strip().split("\n")
+        if line.strip()
+    ]
+
+    assert all(r["trigger"] == "run" for r in run_rows)
+    assert all(r["trigger"] == "extract" for r in extract_rows)
+    # And they're disjoint sets — different verbs, different rows.
+    run_ids = {r["run_id"] for r in run_rows}
+    extract_ids = {r["run_id"] for r in extract_rows}
+    assert run_ids.isdisjoint(extract_ids)

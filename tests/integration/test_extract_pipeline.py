@@ -1,16 +1,19 @@
-"""Integration: feather_etl.cache.run_cache — parquet cache builder.
+"""Integration: feather_etl.extract.run_extract — bronze extractor.
 
-Exercises cache + config + state + destinations cross-module behavior.
-All tests invoke cache.run_cache directly; the CLI counterpart lives
-in tests/e2e/test_12_cache.py.
+Exercises extract + config + state + destinations cross-module behavior.
+All tests invoke extract.run_extract directly; the CLI counterpart lives
+in tests/e2e/test_12_extract.py.
+
+Renamed from test_cache_pipeline.py per the feather-transform change
+(verb `feather cache` -> `feather extract`).
 """
 
 from __future__ import annotations
 
 import duckdb
 
-from feather_etl.cache import run_cache
 from feather_etl.config import load_config
+from feather_etl.extract import run_extract
 from tests.helpers import make_curation_entry, write_curation
 
 
@@ -33,7 +36,7 @@ def _setup_project(project):
 def test_extracts_all_columns_into_bronze(project):
     _setup_project(project)
     cfg = load_config(project.config_path)
-    results = run_cache(cfg, cfg.tables, project.root)
+    results = run_extract(cfg, cfg.tables, project.root)
 
     assert len(results) == 1
     assert results[0].status == "success"
@@ -65,30 +68,44 @@ def test_extracts_all_columns_into_bronze(project):
 
 
 def test_writes_only_to_cache_watermarks(project):
-    """After run_cache, _watermarks must be empty and _cache_watermarks populated."""
+    """After run_extract, _watermarks must be empty and _cache_watermarks populated.
+
+    Note: the underlying state table is still ``_cache_watermarks`` — only the
+    verb-facing API was renamed by the feather-transform change. State schema
+    is out of scope for this rename.
+
+    ``_runs`` IS written (one row per table, ``trigger='extract'``) per the
+    transform-command spec — observability requirement, not a state-machine
+    split.
+    """
     _setup_project(project)
     cfg = load_config(project.config_path)
-    run_cache(cfg, cfg.tables, project.root)
+    run_extract(cfg, cfg.tables, project.root)
 
     con = duckdb.connect(str(project.state_db_path), read_only=True)
     prod = con.execute("SELECT COUNT(*) FROM _watermarks").fetchone()[0]
     cache = con.execute("SELECT COUNT(*) FROM _cache_watermarks").fetchone()[0]
-    runs = con.execute("SELECT COUNT(*) FROM _runs").fetchone()[0]
+    runs = con.execute(
+        "SELECT COUNT(*), MIN(trigger), MAX(trigger) FROM _runs"
+    ).fetchone()
     con.close()
 
-    assert prod == 0, "run_cache must not write to _watermarks"
-    assert runs == 0, "run_cache must not write to _runs"
-    assert cache == 1, "run_cache must write to _cache_watermarks"
+    assert prod == 0, "run_extract must not write to _watermarks"
+    assert cache == 1, "run_extract must write to _cache_watermarks"
+    assert runs[0] == 1, "run_extract must write one _runs row per table"
+    assert runs[1] == "extract" and runs[2] == "extract", (
+        "run_extract rows must have trigger='extract'"
+    )
 
 
 def test_skips_unchanged_on_second_run(project):
     _setup_project(project)
     cfg = load_config(project.config_path)
 
-    first = run_cache(cfg, cfg.tables, project.root)
+    first = run_extract(cfg, cfg.tables, project.root)
     assert first[0].status == "success"
 
-    second = run_cache(cfg, cfg.tables, project.root)
+    second = run_extract(cfg, cfg.tables, project.root)
     assert second[0].status == "cached"
     assert second[0].rows_loaded == 0
 
@@ -97,15 +114,15 @@ def test_refresh_forces_repull(project):
     _setup_project(project)
     cfg = load_config(project.config_path)
 
-    run_cache(cfg, cfg.tables, project.root)
-    second = run_cache(cfg, cfg.tables, project.root, refresh=True)
+    run_extract(cfg, cfg.tables, project.root)
+    second = run_extract(cfg, cfg.tables, project.root, refresh=True)
 
     assert second[0].status == "success"
     assert second[0].rows_loaded > 0
 
 
 def test_one_failure_does_not_block_others(project):
-    """One bad table should not prevent other tables from being cached."""
+    """One bad table should not prevent other tables from being extracted."""
     project.copy_fixture("client.duckdb")
     project.write_config(
         sources=[
@@ -126,7 +143,7 @@ def test_one_failure_does_not_block_others(project):
     )
 
     cfg = load_config(project.config_path)
-    results = run_cache(cfg, cfg.tables, project.root)
+    results = run_extract(cfg, cfg.tables, project.root)
 
     statuses = {r.table_name: r.status for r in results}
     assert statuses["icube_good_table"] == "success"
@@ -135,9 +152,9 @@ def test_one_failure_does_not_block_others(project):
 
 def test_unresolvable_source_db_records_failure_without_raising(project):
     """A curation entry whose ``database`` doesn't match any configured
-    source produces a ``CacheResult(status='failure')`` with the
+    source produces an ``ExtractResult(status='failure')`` with the
     resolve_source error message — no exception propagates.
-    (cache.py:51-60)"""
+    (extract.py)"""
     project.copy_fixture("client.duckdb")
     project.write_config(
         sources=[
@@ -156,13 +173,13 @@ def test_unresolvable_source_db_records_failure_without_raising(project):
 
     cfg = load_config(project.config_path)
     # load_config's validator tolerates this (config-level check is
-    # informational); run_cache must not raise either.
-    results = run_cache(cfg, cfg.tables, project.root)
+    # informational); run_extract must not raise either.
+    results = run_extract(cfg, cfg.tables, project.root)
 
     assert len(results) == 1
     assert results[0].status == "failure"
     assert results[0].source_db == "nonexistent_system"
     assert results[0].error_message is not None
     assert "nonexistent_system" in results[0].error_message
-    # Cache shouldn't mutate bronze for a source-resolution failure.
+    # Extract shouldn't mutate bronze for a source-resolution failure.
     assert results[0].rows_loaded == 0

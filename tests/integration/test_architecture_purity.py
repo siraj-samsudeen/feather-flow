@@ -14,7 +14,7 @@ import pytest
 
 CORE_MODULES = [
     "feather_etl.pipeline",
-    "feather_etl.cache",
+    "feather_etl.extract",
     "feather_etl.viewer_server",
     "feather_etl.init_wizard",
     "feather_etl.exceptions",

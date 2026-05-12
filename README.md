@@ -151,40 +151,69 @@ feather view [PATH] [--port 8000]      # serve an existing schema output folder 
 
 # Pipeline operations
 feather setup                          # init state DB + schemas + apply transforms (optional — run creates them automatically)
-feather run                            # run all tables
+feather run                            # run all tables (extract + transform in one verb)
 feather run --table sales              # run a single table only
 feather status                         # last run status per table (all-time history)
 feather history                        # show run history (recent runs, filterable)
+feather history --trigger transform    # show only rows written by `feather transform`
 
-# Dev cache
-feather cache                          # pull curated tables into bronze.* (dev-only, isolated state)
-feather cache --table sales,customer   # comma-separated table filter
-feather cache --source afans,nimbalyst # comma-separated source_db filter
-feather cache --refresh                # force re-pull, ignore change detection
+# Verb trio (dev/test iteration loop — see note below)
+feather extract                        # pull curated tables into bronze.* (dev-only, isolated state)
+feather extract --table sales,customer # comma-separated table filter
+feather extract --source afans,nim     # comma-separated source_db filter
+feather extract --refresh              # force re-pull, ignore change detection
+feather transform                      # re-run silver/gold against existing destination — no source touch
+feather transform --mode prod          # honour `-- materialized: true` markers; gold becomes TABLEs
 ```
 
-All commands accept `--config PATH` (default: `feather.yaml`). `run` and `setup` accept `--mode dev|prod|test` to override the config mode. `history` accepts `--table` and `--limit`.
+> **Breaking change — `feather cache` → `feather extract`.** The previous `feather cache` verb has been renamed to `feather extract`. The old name no longer works; running `feather cache` returns "No such command". Update any scripts that invoke `feather cache`. The rename is hard (no alias) — see [`openspec/changes/feather-transform/specs/extract-verb-rename/spec.md`](openspec/changes/feather-transform/specs/extract-verb-rename/spec.md) for the rationale.
+
+All commands accept `--config PATH` (default: `feather.yaml`). `run`, `setup`, `extract`, and `transform` accept `--mode dev|prod|test` to override the config mode. `history` accepts `--table`, `--limit`, and `--trigger <run|extract|transform|schedule>`.
 
 **Note:** `feather setup --mode prod` applies gold transforms as materialized tables, which requires bronze/silver data to already exist. Run `feather run` first, then `feather setup --mode prod` to materialize gold.
 
-### Dev cache — `feather cache`
+### Dev iteration loop — `extract && transform`
+
+The canonical dev/test iteration loop is:
+
+```bash
+uv run feather extract && uv run feather transform   # bronze pull + silver/gold rebuild, no source on the second call
+```
+
+This trio (`extract`, `transform`, `run`) is the **dev/test** iteration loop. For production deployments, use `feather run` — the verb composability promise is honest about a known asymmetry in prod (`feather run` in prod skips bronze and writes column-mapped rows directly to `silver.*`, while `feather extract` always writes to `bronze.*`). See [`docs/issues/rethink-mode-system.md`](docs/issues/rethink-mode-system.md) for the open issue and planned cleanup.
+
+Run history filter: `uv run feather history --trigger transform` shows only rows written by `feather transform` (similarly for `extract`, `run`, `schedule`). Pre-rename rows have `trigger=NULL` and appear only in unfiltered output.
+
+### `feather extract`
 
 Pull curated source tables into local `bronze.*` for offline development. Skips unchanged sources on re-run. Isolated state — never touches `feather run`'s watermarks.
 
 ```bash
-feather cache                                  # all curated tables, skip unchanged
-feather cache --table sales,customer           # comma-separated, by bronze name
-feather cache --source afans,nimbalyst         # comma-separated, by source_db
-feather cache --table sales --source afans     # intersect
-feather cache --refresh                        # force re-pull of all tables
-feather cache --refresh --table sales          # force re-pull of specific tables
+feather extract                                # all curated tables, skip unchanged
+feather extract --table sales,customer         # comma-separated, by bronze name
+feather extract --source afans,nimbalyst       # comma-separated, by source_db
+feather extract --table sales --source afans   # intersect
+feather extract --refresh                      # force re-pull of all tables
+feather extract --refresh --table sales        # force re-pull of specific tables
 ```
 
-`feather cache` requires `discovery/curation.json`. Run `feather discover` first to generate it.
+`feather extract` requires `discovery/curation.json`. Run `feather discover` first to generate it.
 
-`feather cache` never runs silver/gold transforms. After a fresh cache, run `feather run` or `feather setup` to create silver views and materialize gold tables.
+`feather extract` never runs silver/gold transforms. After a fresh extract, run `feather transform` (re-runs silver/gold with no source touch) or `feather run` (full pipeline) to create silver views and materialize gold tables.
 
-`feather cache` is dev-only. It will refuse to run when the effective mode is `prod` (via `mode: prod` in `feather.yaml` or `FEATHER_MODE=prod`).
+`feather extract` is dev-only. It will refuse to run when the effective mode is `prod` (via `mode: prod` in `feather.yaml` or `FEATHER_MODE=prod`).
+
+### `feather transform`
+
+Re-run all silver/gold transforms against the existing destination DuckDB. Opens no source connection. Honours the same mode-resolution chain as `feather run` (`--mode` flag > `FEATHER_MODE` env > `feather.yaml` `mode:` > default `dev`).
+
+```bash
+feather transform                      # default mode (dev unless configured)
+feather transform --mode prod          # honour `-- materialized: true` markers
+feather transform --config alt.yaml    # alternate config path
+```
+
+DDL kind is a two-axis rule: silver is always VIEW; gold is VIEW by default; gold becomes TABLE only when both (a) the SQL declares `-- materialized: true` and (b) mode is `prod`. Dev and test forcibly downgrade marked gold to views. Each executed transform writes a row to `_runs` with `trigger='transform'`. Missing `-- depends_on: bronze.<table>` dependencies emit advisory `WARNING:` lines on stderr (collapsed into one summary line if more than five are missing) but never abort. Exit codes: `0` success (including zero discovered transforms), `1` transform error, `2` config/destination error.
 
 ### Browsing a source schema
 

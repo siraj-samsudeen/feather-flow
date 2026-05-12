@@ -17,8 +17,6 @@ from feather_etl.transforms import (
     rebuild_materialized_gold,
 )
 
-from tests.helpers import make_curation_entry, write_curation
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -510,7 +508,7 @@ class TestRebuildMaterializedGold:
         con.close()
 
 
-class TestParseTransformFile:
+class TestParseTransformFileInvalidSchema:
     def test_invalid_schema_directory_raises(self, tmp_path: Path):
         """Files placed outside ``transforms/silver`` or ``transforms/gold``
         are rejected — the parser refuses to build a TransformMeta for a

@@ -1,7 +1,7 @@
 # feather-etl: Product Requirements Document
 
-**Version:** 1.8
-**Date:** 2026-03-26
+**Version:** 1.9
+**Date:** 2026-05-12
 **Status:** Draft
 
 | Version | Changes |
@@ -15,6 +15,7 @@
 | 1.6 | feather-etl defined as package-only (no client config in this repo); client projects are separate GitHub repos per client; canonical client project layout defined; feather init wizard added (scaffolding + interactive + --non-interactive agent mode); --json output contract added to all CLI commands; FR11.12-15 EARS added; F10a (feather init) and F10b (--json mode) added to feature list; init_wizard.py added to module breakdown; NFR2 code size updated |
 | 1.7 | Feature list rewritten as vertical slices (V1–V18) replacing horizontal layer phases; Slices 1–3 fully specified with scope tables, CLI commands, end-to-end tests, and explicit "not in this slice" boundaries; Slices 4–18 indicative; Testing strategy rewritten around per-slice coverage using real client DuckDB as primary test source |
 | 1.8 | feather init split: scaffolding (directory structure, template feather.yaml, pyproject.toml, .gitignore, .env.example) moved to Slice 1; interactive wizard (prompts, discovery-driven table selection, silver stubs, --non-interactive agent mode) stays in Slice 17; onboarding flow documented in Slice 1 |
+| 1.9 | New §FR-Transform (FR14) documenting the `feather transform` verb, its mode interaction, no-source-touch invariant, advisory bronze-dependency check, exit-code contract, and `trigger='transform'` history emission. §FR-Cache reference paragraph updated to §FR-Extract (the CLI verb `feather cache` was renamed to `feather extract` — a correction, not a feature addition). New `_runs.trigger` column documented; `feather history --trigger <value>` filter added. Verb trio (`extract` / `transform` / `run`) framed as the dev/test iteration loop; prod equivalence is a documented open issue (see `docs/issues/rethink-mode-system.md`). |
 
 ---
 
@@ -496,7 +497,7 @@ All four schemas (`bronze`, `silver`, `gold`, `_quarantine`) are created on `fea
 > The schema exists in every DuckDB file, but no table is forced into it. Bronze serves two distinct purposes depending on how it is configured:
 >
 > **1. Development cache** (`strategy: full` or `strategy: incremental`)
-> During active development, the operator extracts all columns from the source ERP into bronze once, then iterates on silver/gold transforms locally without hitting the source database again. ERP connections are slow, VPN-gated, and sometimes rate-sensitive — a local bronze snapshot eliminates that friction entirely. Silver views read from bronze; the operator tweaks the silver SQL and reruns `feather run` against the local cache. When transforms are stable, the operator can drop bronze and reconfigure to land directly into silver for production. The canonical command for this workflow is `feather cache` — see the README "Dev cache" section.
+> During active development, the operator extracts all columns from the source ERP into bronze once, then iterates on silver/gold transforms locally without hitting the source database again. ERP connections are slow, VPN-gated, and sometimes rate-sensitive — a local bronze snapshot eliminates that friction entirely. Silver views read from bronze; the operator tweaks the silver SQL and reruns `feather transform` against the local bronze cache (no source connection). When transforms are stable, the operator can drop bronze and reconfigure to land directly into silver for production. The canonical command for the bronze-pull half of this workflow is `feather extract` (renamed from `feather cache` — see §FR-Extract); the transform-only half is `feather transform` (see §FR-Transform). The rename was a correction (the old name described a side effect, not a purpose), not a feature addition.
 >
 > **2. Audit trail / compliance cache** (`strategy: append`)
 > For regulated clients (Unilever, IOM, WHO scale), bronze is append-only — every extracted row is preserved forever with `_etl_loaded_at` and `_etl_run_id`. This enables point-in-time reconstruction, compliance audits, and re-derivation of silver/gold if transform logic changes.
@@ -975,11 +976,13 @@ Single entry point `feather`, built with typer. Every operational action is a CL
 |---------|---------|
 | `feather init` | Scaffold a new client project and run the setup wizard |
 | `feather setup` | Init state DB, create schemas, apply transforms |
-| `feather run` | Run all tables |
+| `feather run` | Run all tables (extract + transform in one verb) |
 | `feather run --table X` | Run single table |
 | `feather run --tier hot` | Run tables matching a tier |
+| `feather extract` | Pull curated source tables into `bronze.*` (dev-only, isolated state). Renamed from `feather cache` — see §FR-Extract. |
+| `feather transform` | Re-run silver/gold transforms against the existing destination, no source connection — see §FR-Transform. |
 | `feather status` | Show watermarks and last run status |
-| `feather history [--table X]` | Show run history |
+| `feather history [--table X] [--trigger V]` | Show run history. `--trigger` filters by writer verb (`run`, `extract`, `transform`, `schedule`). |
 | `feather schedule` | Start APScheduler daemon |
 | `feather validate` | Parse and validate config, resolve paths, print summary — no execution |
 | `feather discover` | List all tables available in the configured source with columns and inferred types |
@@ -1169,6 +1172,111 @@ THE SYSTEM SHALL continue running all other configured tables
 **AC-FR13.b:** Given a table in backoff (`retry_after` is 20 minutes from now), when `feather run` executes, then the table is skipped with status `skipped` and the error message references the original failure — while all other tables run normally.
 
 **AC-FR13.c:** Given a table with `retry_count: 10` (past cap), when backoff is computed, then `retry_after = now + 120 minutes` (capped, not 150).
+
+### FR-Extract: `feather extract` (renamed from `feather cache`)
+
+`feather extract` pulls curated source tables into local `bronze.*` for offline development, using isolated cache state that never touches `feather run`'s production watermarks. It is a hard rename of the previous `feather cache` verb — the old name described a side effect (caching bronze locally), not the verb's purpose. **The rename is hard, not aliased**: `feather cache` returns "No such command" — script authors must update call sites. This is a correction, not a feature addition. The verb's behaviour is unchanged from `feather cache`.
+
+> **Decision: hard rename, no alias.** The project is pre-1.0 with no installed-base stability contract. A hidden alias would be one more thing to document, test, and eventually remove. A clear "no such command" error is a better signal to script authors than a silent deprecation. See `openspec/changes/feather-transform/design.md` Decision D5 for the full rationale, and `openspec/changes/feather-transform/specs/extract-verb-rename/spec.md` for the rename's behavioural contract.
+
+Rows written to `_runs` by this verb have `trigger='extract'`.
+
+#### Requirements
+
+```
+# FR-Extract.1
+WHEN feather extract is invoked
+THE SYSTEM SHALL pull curated source tables into bronze.* using isolated
+state (the _cache_watermarks table) without touching _watermarks.
+
+# FR-Extract.2
+WHEN feather extract writes a row to _runs
+THE SYSTEM SHALL set trigger='extract'.
+
+# FR-Extract.3
+THE SYSTEM SHALL NOT register `feather cache` as a CLI command or alias.
+A user invoking `feather cache` SHALL receive Typer's "No such command" error.
+```
+
+### FR-Transform: `feather transform`
+
+`feather transform` re-runs the full silver/gold transform pipeline against the existing destination DuckDB, without opening any source connection. It exists so operators can iterate on transform SQL in seconds without paying the cost of re-extracting bronze from source ERPs.
+
+The verb mirrors `feather run`'s post-extract behaviour exactly. The transform block previously inlined in `pipeline.run_all()` is now a shared `transforms.run_transforms(config)` helper called by both verbs; this is a behaviour-preserving refactor for `feather run`.
+
+> **Mode interaction.** Mode is resolved exactly once via the `--mode` flag → `FEATHER_MODE` env → `feather.yaml` `mode:` → default `"dev"` chain — the same resolver `feather run` uses. The resolved mode drives one concern at transform time: the **DDL kind** for each transform. This is a **two-axis decision** (author marker × operator mode): silver is always a VIEW; gold is a VIEW by default in every mode; a gold transform becomes a TABLE only when both (a) the SQL file declares `-- materialized: true` and (b) the operator runs `--mode prod`. Dev and test forcibly downgrade marked gold to views. See `openspec/changes/feather-transform/design.md` **Mode interaction (silver, gold, and materialization)** for the canonical statement of the two-axis rule.
+
+> **No-source-touch invariant.** `feather transform` never opens a source connection. It operates entirely against the destination DuckDB. This invariant is load-bearing for the verb's value (iteration without source cost) and is asserted in tests by registering a `RaisingSource` and verifying `connect()` is never called. See `openspec/changes/feather-transform/specs/transform-command/spec.md` for the full behavioural contract.
+
+> **Advisory bronze-dependency check.** Before executing transforms, the verb reads each silver transform's `-- depends_on: bronze.<table>` comments and checks each declared dependency against the destination's `information_schema.tables`. Missing dependencies emit `WARNING:` lines on stderr; **the check never aborts**. The convention is honour-system today (many transforms don't declare it), so blocking would break valid workflows. If more than five distinct dependencies are missing, the lines collapse into a single summary `WARNING:` stating the count — "still scannable as a list" caps at five.
+
+> **Exit-code contract.** `0` on success (including zero discovered transforms); `1` if any transform execution returns `status='error'`; `2` if config load or destination open fails. This contract is what makes `feather extract && feather transform` safe to chain in CI.
+
+> **History emission.** Every transform that runs writes a row to `_runs` with `trigger='transform'`. Operators can scope history to transform-only writes with `feather history --trigger transform`. The `_runs.trigger` column is new in this change (additive; legacy rows are NULL).
+
+> **Verb composability — dev/test only.** The trio `feather extract && feather transform` is interchangeable with `feather run` in **dev and test modes**. In **prod**, the trio is NOT equivalent: `feather run` skips bronze and writes column-mapped rows directly to `silver.*`, while `feather extract` always writes to `bronze.*`. This is documented as an open issue in [`docs/issues/rethink-mode-system.md`](issues/rethink-mode-system.md) — the verb trio is the dev/test iteration loop; production deployments use `feather run`. The trio promise is honest about this exception rather than overclaiming universal equivalence. The 9.15 verb-equivalence test in `tests/integration/test_transform_command.py` is parametrized over `{dev, test}` only; the prod case is excluded by docstring pointing at the issue doc.
+
+#### Requirements
+
+```
+# FR-Transform.1
+WHEN feather transform is invoked
+THE SYSTEM SHALL discover all .sql files under transforms/silver/ and transforms/gold/,
+resolve their dependency order, and execute them against the destination DuckDB
+in the same order feather run would, with no source connection opened.
+
+# FR-Transform.2
+WHEN feather transform resolves mode
+THE SYSTEM SHALL use the chain: --mode flag > FEATHER_MODE env > feather.yaml mode: > default "dev".
+This is the same resolver feather run uses.
+
+# FR-Transform.3
+THE SYSTEM SHALL apply the two-axis DDL rule:
+- silver transforms always materialize as VIEWs.
+- gold transforms without `-- materialized: true` materialize as VIEWs in every mode.
+- gold transforms with `-- materialized: true` materialize as TABLEs only when mode is prod;
+  in dev or test, they materialize as VIEWs.
+
+# FR-Transform.4
+WHEN feather transform starts
+THE SYSTEM SHALL read each silver transform's `-- depends_on: bronze.<table>` comments
+and check each declared dependency against information_schema.tables.
+For each missing dependency, THE SYSTEM SHALL emit a `WARNING:` line on stderr.
+IF more than five dependencies are missing, THE SYSTEM SHALL collapse them into a single
+summary `WARNING:` line stating the count.
+THE SYSTEM SHALL NOT abort on missing bronze dependencies — the check is advisory.
+
+# FR-Transform.5
+WHEN feather transform completes
+THE SYSTEM SHALL write one row per executed transform to _runs with trigger='transform'.
+
+# FR-Transform.6
+THE SYSTEM SHALL exit with code 0 on success (including zero discovered transforms),
+code 1 if any transform returns status='error',
+code 2 if config load or destination open fails.
+
+# FR-Transform.7
+THE SYSTEM SHALL NOT open any source connection during a feather transform invocation.
+Source readers SHALL NOT be instantiated; source `connect()` SHALL NOT be called.
+
+# FR-Transform.8
+WHEN feather history --trigger <value> is invoked
+THE SYSTEM SHALL filter the _runs output to rows whose trigger column equals <value>.
+Legacy rows with trigger=NULL SHALL be excluded from filtered output and included in
+unfiltered output.
+```
+
+#### Acceptance Criteria
+
+**AC-FR-Transform.a:** Given a destination with bronze tables populated and silver/gold transforms in place, when `feather transform` is invoked, then all transforms are created in the destination and one `_runs` row per transform is written with `trigger='transform'`. No source connection is opened.
+
+**AC-FR-Transform.b:** Given `feather.yaml` with `mode: prod` and a gold transform declaring `-- materialized: true`, when `feather transform --mode prod` is invoked, then that gold transform exists in `information_schema.tables` with `table_type='BASE TABLE'`. Given the same config and `feather transform --mode dev`, then the same gold transform exists with `table_type='VIEW'`.
+
+**AC-FR-Transform.c:** Given a silver transform with `-- depends_on: bronze.missing_table` and that table absent from the destination, when `feather transform` is invoked, then a `WARNING:` line on stderr names the missing table, but the command continues and exits 0 (the transform may still fail with a clean SQL error if the dependency is actually needed).
+
+**AC-FR-Transform.d:** Given six silver transforms each declaring a distinct missing bronze dependency, when `feather transform` is invoked, then exactly one summary `WARNING:` line on stderr contains the count `6` (collapse rule), not six individual warning lines.
+
+**AC-FR-Transform.e:** Given an extract + transform sequence in dev mode (`feather extract && feather transform`), when both complete, then the destination contents (schemas, table types, row counts) are equivalent to what a single `feather run` in dev mode would produce. (This holds in dev and test only; prod is a documented exception — see the Verb composability callout above and `docs/issues/rethink-mode-system.md`.)
 
 ---
 
