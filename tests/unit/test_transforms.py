@@ -165,7 +165,7 @@ class TestParseTransformFile:
         assert meta.materialized is True
 
     def test_parse_auto_infers_dep_from_from_clause(self, tmp_path: Path):
-        # No -- depends_on: header. The FROM clause alone must produce the edge.
+        # Without any header, the FROM clause alone must produce the edge.
         content = (
             "-- materialized: true\n"
             "SELECT store_name, SUM(daily_cost) AS total_cost\n"
@@ -351,6 +351,44 @@ class TestBuildExecutionOrder:
 
         with pytest.raises(graphlib.CycleError):
             build_execution_order([a, b])
+
+    def test_auto_inferred_dep_orders_correctly_via_parse(self, tmp_path: Path):
+        # Full pipeline: parse a transform with no header, then topo-sort
+        # it against its (no-dep) predecessor.
+        from feather_etl.transforms import discover_transforms
+
+        _write_sql(tmp_path, "silver", "foo", "SELECT 1 AS id")
+        _write_sql(
+            tmp_path,
+            "gold",
+            "bar",
+            "SELECT * FROM silver.foo",  # inferred dep only
+        )
+
+        transforms = discover_transforms(tmp_path)
+        ordered = build_execution_order(transforms)
+        names = [t.qualified_name for t in ordered]
+
+        assert names.index("silver.foo") < names.index("gold.bar")
+
+    def test_missing_inferred_dep_raises_same_error_as_before(
+        self, tmp_path: Path
+    ):
+        # Acceptance criterion (issue #54): "A transform that references a
+        # non-existent silver.bar raises the same missing-dependency error
+        # as today."
+        from feather_etl.transforms import discover_transforms
+
+        _write_sql(
+            tmp_path,
+            "gold",
+            "bar",
+            "SELECT * FROM silver.nonexistent",
+        )
+
+        transforms = discover_transforms(tmp_path)
+        with pytest.raises(ValueError, match="nonexistent"):
+            build_execution_order(transforms)
 
 
 # ===========================================================================
@@ -591,7 +629,6 @@ class TestParseTransformFileInvalidSchema:
         sql_dir.mkdir(parents=True)
         path = sql_dir / "joined.sql"
         path.write_text(
-            "-- depends_on: silver.fact_x\n"
             "-- fact_table: silver.fact_x\n"
             "-- materialized: true\n"
             "SELECT * FROM silver.fact_x\n"
@@ -725,7 +762,6 @@ class TestE2ETransformPipeline:
             "silver",
             "employee_master",
             (
-                "-- depends_on: bronze.employees\n"
                 "SELECT\n"
                 "    id AS employee_id,\n"
                 "    employee_code,\n"
@@ -738,7 +774,6 @@ class TestE2ETransformPipeline:
             "silver",
             "item_master",
             (
-                "-- depends_on: bronze.items\n"
                 "SELECT\n"
                 "    id AS item_id,\n"
                 "    item_code,\n"
@@ -752,8 +787,6 @@ class TestE2ETransformPipeline:
             "gold",
             "sales_summary",
             (
-                "-- depends_on: silver.employee_master\n"
-                "-- depends_on: silver.item_master\n"
                 "-- materialized: true\n"
                 "SELECT\n"
                 "    s.id AS sale_id,\n"
@@ -818,7 +851,7 @@ class TestE2ETransformPipeline:
             tmp_path,
             "silver",
             "emp",
-            ("-- depends_on: bronze.employees\nSELECT * FROM bronze.employees"),
+            "SELECT * FROM bronze.employees",
         )
 
         transforms = discover_transforms(tmp_path)
@@ -833,7 +866,7 @@ class TestE2ETransformPipeline:
 
     def test_missing_silver_dependency_still_raises(self, tmp_path: Path):
         _write_sql(
-            tmp_path, "gold", "bad", ("-- depends_on: silver.nonexistent\nSELECT 1")
+            tmp_path, "gold", "bad", "SELECT * FROM silver.nonexistent"
         )
 
         transforms = discover_transforms(tmp_path)
