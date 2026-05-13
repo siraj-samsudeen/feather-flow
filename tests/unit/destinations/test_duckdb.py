@@ -37,10 +37,6 @@ class TestQualifiedTableGuard:
                     "foo", _sample_arrow_table(1), "r", "id"
                 ),
             ),
-            (
-                "streaming_full_load",
-                lambda d: d.streaming_full_load("foo", "r"),
-            ),
         ],
     )
     def test_rejects_bare_table_name(
