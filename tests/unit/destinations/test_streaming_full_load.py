@@ -139,13 +139,6 @@ class TestStreamingFullLoadFailurePath:
 
 
 class TestStreamingFullLoadAPI:
-    def test_rejects_bare_table_name_without_schema(self, dest) -> None:
-        # ValueError fires in __init__, so the with-statement form raises
-        # before __enter__ runs.
-        with pytest.raises(ValueError, match="schema.table"):
-            with dest.streaming_full_load("foo", "run-1"):
-                pass
-
     def test_append_outside_session_raises(self, dest) -> None:
         # Constructing the session does not open the connection — only
         # entering the context manager does.

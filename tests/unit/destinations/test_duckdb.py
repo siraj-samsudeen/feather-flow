@@ -20,6 +20,40 @@ def _sample_arrow_table(num_rows: int = 10) -> pa.Table:
     )
 
 
+class TestQualifiedTableGuard:
+    """Bare table names (without `schema.`) raise ValueError on every load path."""
+
+    @pytest.mark.parametrize(
+        "method,call",
+        [
+            ("load_full", lambda d: d.load_full("foo", _sample_arrow_table(1), "r")),
+            (
+                "load_append",
+                lambda d: d.load_append("foo", _sample_arrow_table(1), "r"),
+            ),
+            (
+                "load_incremental",
+                lambda d: d.load_incremental(
+                    "foo", _sample_arrow_table(1), "r", "id"
+                ),
+            ),
+            (
+                "streaming_full_load",
+                lambda d: d.streaming_full_load("foo", "r"),
+            ),
+        ],
+    )
+    def test_rejects_bare_table_name(
+        self, tmp_path: Path, method: str, call
+    ) -> None:
+        from feather_etl.destinations.duckdb import DuckDBDestination
+
+        dest = DuckDBDestination(path=tmp_path / "data.duckdb")
+        dest.setup_schemas()
+        with pytest.raises(ValueError, match=f"{method} expects schema.table"):
+            call(dest)
+
+
 class TestDuckDBDestination:
     def test_setup_schemas(self, tmp_path: Path):
         from feather_etl.destinations.duckdb import DuckDBDestination

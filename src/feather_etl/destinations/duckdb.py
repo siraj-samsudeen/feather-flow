@@ -12,6 +12,14 @@ import pyarrow as pa
 SCHEMAS = ["bronze", "silver", "gold", "_quarantine"]
 
 
+def _parse_qualified_table(table: str, method: str) -> tuple[str, str]:
+    """Split a `schema.table` identifier, rejecting bare names with a clear error."""
+    parts = table.split(".")
+    if len(parts) != 2:
+        raise ValueError(f"{method} expects schema.table, got: {table}")
+    return parts[0], parts[1]
+
+
 class _StreamingFullLoadSession:
     """Per-batch full-refresh load session. Atomicity matches `load_full`.
 
@@ -25,14 +33,11 @@ class _StreamingFullLoadSession:
     def __init__(
         self, dest: "DuckDBDestination", table: str, run_id: str
     ) -> None:
-        parts = table.split(".")
-        if len(parts) != 2:
-            raise ValueError(
-                f"streaming_full_load expects schema.table, got: {table}"
-            )
         self._dest = dest
         self.run_id = run_id
-        self.schema_name, self.table_name = parts
+        self.schema_name, self.table_name = _parse_qualified_table(
+            table, "streaming_full_load"
+        )
         self.staging = f"{self.schema_name}.{self.table_name}_new"
         self.final = f"{self.schema_name}.{self.table_name}"
         self.con: duckdb.DuckDBPyConnection | None = None
@@ -121,13 +126,11 @@ class DuckDBDestination:
 
     def load_full(self, table: str, data: pa.Table, run_id: str) -> int:
         """Full refresh via swap pattern (FR4.3)."""
-        con = self._connect()
-
-        # Parse schema.table_name
-        parts = table.split(".")
-        schema, table_name = parts[0], parts[1]
+        schema, table_name = _parse_qualified_table(table, "load_full")
         staging = f"{schema}.{table_name}_new"
         final = f"{schema}.{table_name}"
+
+        con = self._connect()
 
         # Register arrow data so DuckDB can query it
         con.register("_arrow_data", data)
@@ -154,11 +157,10 @@ class DuckDBDestination:
 
     def load_append(self, table: str, data: pa.Table, run_id: str) -> int:
         """Append-only insert — never deletes existing rows."""
-        con = self._connect()
-
-        parts = table.split(".")
-        schema, table_name = parts[0], parts[1]
+        schema, table_name = _parse_qualified_table(table, "load_append")
         final = f"{schema}.{table_name}"
+
+        con = self._connect()
 
         con.register("_arrow_data", data)
 
@@ -219,10 +221,10 @@ class DuckDBDestination:
 
         min_ts = pc.min(data.column(timestamp_column)).as_py()
 
-        con = self._connect()
-        parts = table.split(".")
-        schema, table_name = parts[0], parts[1]
+        schema, table_name = _parse_qualified_table(table, "load_incremental")
         final = f"{schema}.{table_name}"
+
+        con = self._connect()
 
         con.register("_arrow_data", data)
 
