@@ -39,7 +39,7 @@ def csv_cfg_and_tables(tmp_path: Path):
 BRONZE_TABLE = "bronze.csvs_items"  # _sanitize_bronze_name("csvs", "items")
 
 
-def test_missing_destination_with_committed_windows_raises(
+def test_missing_destination_with_committed_windows_returns_failure(
     csv_cfg_and_tables,
 ) -> None:
     """Deleting feather_data.duckdb while _extract_windows has rows must

@@ -648,3 +648,19 @@ class StateManager:
             con.execute("DELETE FROM _extract_windows")
         finally:
             con.close()
+
+    def get_all_window_table_names(self) -> list[str]:
+        """Return distinct table_name values from _extract_windows.
+
+        Used by the missing-destination safety check in run_extract — operators
+        deleting feather_data.duckdb by hand will trip this list and be steered
+        toward --refresh-all.
+        """
+        con = self._connect()
+        try:
+            rows = con.execute(
+                "SELECT DISTINCT table_name FROM _extract_windows"
+            ).fetchall()
+            return [r[0] for r in rows]
+        finally:
+            con.close()

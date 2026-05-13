@@ -90,14 +90,10 @@ def run_extract(
     # cleanup contract (today fine for 1=1, wrong for future date / pk_range
     # windows). Force the operator to acknowledge via --refresh-all.
     if not config.destination.path.exists():
-        con = state._connect()
-        try:
-            rows = con.execute(
-                "SELECT DISTINCT table_name FROM _extract_windows"
-            ).fetchall()
-        finally:
-            con.close()
-        orphan_tables = [r[0] for r in rows]
+        orphan_tables = state.get_all_window_table_names()
+        # Double-guard: refresh_all already cleared the log above, so this list
+        # is always empty in that path — but the explicit `not refresh_all` keeps
+        # the invariant readable.
         if orphan_tables and not refresh_all:
             sample = ", ".join(orphan_tables[:3])
             if len(orphan_tables) > 3:
