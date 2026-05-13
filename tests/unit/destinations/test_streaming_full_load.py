@@ -20,7 +20,7 @@ def dest(tmp_path):
 def _read_table(dest, table: str) -> pa.Table:
     con = dest._connect()
     try:
-        return con.execute(f"SELECT * FROM {table}").fetch_arrow_table()
+        return con.execute(f"SELECT * FROM {table}").to_arrow_table()
     finally:
         con.close()
 
