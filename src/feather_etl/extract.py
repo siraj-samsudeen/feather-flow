@@ -145,6 +145,12 @@ def run_extract(
 
             rows = 0
             transport_used = getattr(source, "transport_name", "pyodbc")
+            # NOTE (#62/#63): `_iter_source_batches` streams the full source table for
+            # every window. Today windows is always `[WindowSpec("all", "1=1", ...)]`,
+            # so this is fine. Issue #63 introduces real `date` / `pk_range` windows;
+            # the planner there MUST also push the window predicate into the source
+            # fetch (per-window SELECT WHERE) — otherwise each window would re-fetch
+            # everything and the DELETE+INSERT would overwrite the prior window.
             for window in windows:
                 result = dest.load_batched_append(
                     table=target,
