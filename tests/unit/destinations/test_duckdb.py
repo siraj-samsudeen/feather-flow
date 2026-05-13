@@ -33,15 +33,11 @@ class TestQualifiedTableGuard:
             ),
             (
                 "load_incremental",
-                lambda d: d.load_incremental(
-                    "foo", _sample_arrow_table(1), "r", "id"
-                ),
+                lambda d: d.load_incremental("foo", _sample_arrow_table(1), "r", "id"),
             ),
         ],
     )
-    def test_rejects_bare_table_name(
-        self, tmp_path: Path, method: str, call
-    ) -> None:
+    def test_rejects_bare_table_name(self, tmp_path: Path, method: str, call) -> None:
         from feather_etl.destinations.duckdb import DuckDBDestination
 
         dest = DuckDBDestination(path=tmp_path / "data.duckdb")

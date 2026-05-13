@@ -164,7 +164,9 @@ class TestFetchBatches:
                 )
             )
 
-        heartbeats = [r for r in caplog.records if r.getMessage() == "extract_heartbeat"]
+        heartbeats = [
+            r for r in caplog.records if r.getMessage() == "extract_heartbeat"
+        ]
         # 250 rows / 100 cadence → at least 2 heartbeats (at 100, 200).
         assert len(heartbeats) >= 2
         first = heartbeats[0]
@@ -192,5 +194,7 @@ class TestFetchBatches:
                 )
             )
 
-        heartbeats = [r for r in caplog.records if r.getMessage() == "extract_heartbeat"]
+        heartbeats = [
+            r for r in caplog.records if r.getMessage() == "extract_heartbeat"
+        ]
         assert len(heartbeats) >= 1

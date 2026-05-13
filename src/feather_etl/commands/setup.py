@@ -18,7 +18,8 @@ def setup(
     ctx: typer.Context,
     config: Path = typer.Option("feather.yaml", "--config"),
     force_views: bool = typer.Option(
-        False, "--force-views",
+        False,
+        "--force-views",
         help="Create all transforms as VIEWs, skipping gold materialization.",
     ),
 ) -> None:

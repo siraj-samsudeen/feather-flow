@@ -26,9 +26,7 @@ def _write_silver_transform(project) -> None:
     time, so the file only contains the SELECT."""
     tdir = project.root / "transforms" / "silver"
     tdir.mkdir(parents=True, exist_ok=True)
-    (tdir / "orders_clean.sql").write_text(
-        "SELECT * FROM bronze.orders\n"
-    )
+    (tdir / "orders_clean.sql").write_text("SELECT * FROM bronze.orders\n")
 
 
 def test_initializes_state_db_and_destination(project):
@@ -97,7 +95,11 @@ def test_default_setup_materializes_gold_when_marked(project):
     # Both silver and gold are executed
     assert "silver" in schemas
     assert "gold" in schemas
-    gold_results = [t for t in result.transform_results if t.schema == "gold" and t.name == "orders_summary"]
+    gold_results = [
+        t
+        for t in result.transform_results
+        if t.schema == "gold" and t.name == "orders_summary"
+    ]
     assert gold_results, "expected a gold orders_summary result"
     # Materialized gold ends up as a TABLE (the last result for that name reflects final state)
     gold_types = {t.type for t in gold_results}

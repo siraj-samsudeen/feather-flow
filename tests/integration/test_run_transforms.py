@@ -67,10 +67,7 @@ def _write_two_transforms(tmp_path: Path) -> None:
         tmp_path,
         "gold",
         "emp_snapshot",
-        (
-            "-- materialized: true\n"
-            "SELECT * FROM silver.emp_clean"
-        ),
+        ("-- materialized: true\nSELECT * FROM silver.emp_clean"),
     )
 
 

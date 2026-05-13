@@ -38,10 +38,7 @@ class TestExtractDependenciesEdgeCases:
 
     def test_string_literal_mentioning_silver_is_ignored(self):
         # A literal that *looks* like a table reference must not match.
-        sql = (
-            "SELECT * FROM silver.real "
-            "WHERE label = 'FROM silver.fake'"
-        )
+        sql = "SELECT * FROM silver.real WHERE label = 'FROM silver.fake'"
         assert extract_dependencies(sql) == ["silver.real"]
 
     def test_comment_mentioning_silver_is_ignored(self):
@@ -83,8 +80,12 @@ class TestExtractDependenciesEdgeCases:
         # CREATE OR REPLACE VIEW silver.X AS SELECT ... — silver.X is
         # the OUTPUT of this transform, not a dependency. Only the
         # FROM/JOIN refs in the SELECT body count.
-        sql = "CREATE OR REPLACE VIEW silver.orders_clean AS SELECT * FROM bronze.orders"
-        assert extract_dependencies(sql) == []  # bronze ignored, silver.orders_clean is target
+        sql = (
+            "CREATE OR REPLACE VIEW silver.orders_clean AS SELECT * FROM bronze.orders"
+        )
+        assert (
+            extract_dependencies(sql) == []
+        )  # bronze ignored, silver.orders_clean is target
 
     def test_create_table_target_is_not_a_dep(self):
         sql = "CREATE TABLE silver.foo AS SELECT * FROM silver.bar"
@@ -120,10 +121,7 @@ class TestExtractBronzeDependencies:
         # WITH bronze AS (...) is invalid SQL because `bronze` is a schema
         # name, not an identifier; but a CTE named `b` containing a join
         # against bronze.x must still produce bronze.x.
-        sql = (
-            "WITH b AS (SELECT * FROM bronze.real) "
-            "SELECT * FROM b"
-        )
+        sql = "WITH b AS (SELECT * FROM bronze.real) SELECT * FROM b"
         assert extract_bronze_dependencies(sql) == ["bronze.real"]
 
     def test_string_literal_mentioning_bronze_is_ignored(self):

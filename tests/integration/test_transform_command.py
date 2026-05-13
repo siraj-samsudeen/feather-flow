@@ -124,7 +124,6 @@ def _invoke(*args: str) -> "object":
     return runner.invoke(app, list(args))
 
 
-
 # ---------------------------------------------------------------------------
 # Pytest fixtures (lifecycle state only — pure helpers stay in helpers.py)
 # ---------------------------------------------------------------------------
@@ -635,9 +634,7 @@ def test_verb_equivalence_extract_plus_transform_equals_run(tmp_path: Path):
     assert r_a.exit_code == 0, f"feather run failed: {r_a.output}"
 
     r_b_extract = _invoke("extract", "--config", str(cfg_b))
-    assert r_b_extract.exit_code == 0, (
-        f"feather extract failed: {r_b_extract.output}"
-    )
+    assert r_b_extract.exit_code == 0, f"feather extract failed: {r_b_extract.output}"
 
     r_b_transform = _invoke("transform", "--config", str(cfg_b))
     assert r_b_transform.exit_code == 0, (
@@ -663,8 +660,7 @@ def test_verb_equivalence_extract_plus_transform_equals_run(tmp_path: Path):
     counts_b = _row_counts(dest_b, objs_b.keys())
     for key in objs_a:
         assert counts_a[key] == counts_b[key], (
-            f"row count diverged for {key}: "
-            f"A={counts_a[key]}, B={counts_b[key]}"
+            f"row count diverged for {key}: A={counts_a[key]}, B={counts_b[key]}"
         )
 
     # 3. Same content per object (excluding wall-clock audit columns).
@@ -680,9 +676,7 @@ def test_verb_equivalence_extract_plus_transform_equals_run(tmp_path: Path):
     # 4. Watermarked-table set matches.
     wms_a = _watermarked_tables(dir_a / "feather_state.duckdb")
     wms_b = _watermarked_tables(dir_b / "feather_state.duckdb")
-    assert wms_a == wms_b, (
-        f"watermarked-table set diverged.\n  A={wms_a}\n  B={wms_b}"
-    )
+    assert wms_a == wms_b, f"watermarked-table set diverged.\n  A={wms_a}\n  B={wms_b}"
 
     # 5. _runs differs only by trigger.
     con_a = duckdb.connect(str(dir_a / "feather_state.duckdb"), read_only=True)

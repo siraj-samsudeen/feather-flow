@@ -24,6 +24,7 @@ def _sqlserver_coerce_row(val, _col_name):
         return str(val)
     return val
 
+
 _SQLSERVER_CONN_TEMPLATE = (
     "DRIVER={{ODBC Driver 18 for SQL Server}};"
     "SERVER={host},{port};DATABASE={database};UID={user};PWD={password};"

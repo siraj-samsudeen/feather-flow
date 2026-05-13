@@ -165,9 +165,7 @@ class DuckDBDestination:
                             f"{final} does not exist — cannot infer schema."
                         )
                     # Table exists from prior window — just DELETE for idempotency.
-                    con.execute(
-                        f"DELETE FROM {final} WHERE {window.window_predicate}"
-                    )
+                    con.execute(f"DELETE FROM {final} WHERE {window.window_predicate}")
 
                 con.execute("COMMIT")
             except Exception:

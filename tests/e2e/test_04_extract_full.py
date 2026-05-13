@@ -296,4 +296,3 @@ def test_full_onboarding_flow(project, cli, monkeypatch):
 
     # Verify feather_validation.json was written
     assert vj_path.exists()
-

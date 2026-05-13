@@ -511,7 +511,10 @@ class TestWatermarkRoundtrip:
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
         sm.write_watermark(
-            "orders", strategy=None, source_db="erp", last_run_at=datetime.now(timezone.utc)
+            "orders",
+            strategy=None,
+            source_db="erp",
+            last_run_at=datetime.now(timezone.utc),
         )
         row = sm.read_watermark("orders")
         assert row is not None
@@ -530,7 +533,9 @@ class TestWatermarkRoundtrip:
             strategy=None,
             source_db="db",
             last_run_at=datetime.now(timezone.utc),
-            last_checksum=str(12345),  # normalise int -> str at call site, as extract.py does
+            last_checksum=str(
+                12345
+            ),  # normalise int -> str at call site, as extract.py does
         )
         row = sm.read_watermark("mssql_like")
         assert row["last_checksum"] == "12345"

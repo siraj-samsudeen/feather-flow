@@ -29,6 +29,7 @@ def _run_pipeline(
     row_limit: int | None = None,
 ) -> tuple:
     import shutil
+
     src_db = tmp_path / "sample_erp.duckdb"
     shutil.copy2(FIXTURES_DIR / "sample_erp.duckdb", src_db)
     dest_path = tmp_path / "output.duckdb"
@@ -52,6 +53,7 @@ def _run_pipeline(
 
 def _run_with_transforms(tmp_path: Path, force_views: bool = False) -> Path:
     import shutil
+
     src_db = tmp_path / "sample_erp.duckdb"
     shutil.copy2(FIXTURES_DIR / "sample_erp.duckdb", src_db)
     silver_dir = tmp_path / "transforms" / "silver"
@@ -67,10 +69,15 @@ def _run_with_transforms(tmp_path: Path, force_views: bool = False) -> Path:
     )
     dest_path = tmp_path / "output.duckdb"
     config_path = tmp_path / "feather.yaml"
-    config_path.write_text(yaml.dump({
-        "sources": [{"type": "duckdb", "name": "erp", "path": str(src_db)}],
-        "destination": {"path": str(dest_path)},
-    }, default_flow_style=False))
+    config_path.write_text(
+        yaml.dump(
+            {
+                "sources": [{"type": "duckdb", "name": "erp", "path": str(src_db)}],
+                "destination": {"path": str(dest_path)},
+            },
+            default_flow_style=False,
+        )
+    )
     write_curation(tmp_path, [make_curation_entry("erp", "erp.customers", "customers")])
     cfg = load_config(config_path)
     cfg.tables[0].target_table = "bronze.erp_customers"
@@ -162,14 +169,20 @@ def test_force_views_prevents_materialization(tmp_path):
 def test_yaml_mode_key_ignored_with_warning(tmp_path):
     """YAML with 'mode:' key still loads — ignored, warning emitted."""
     import shutil
+
     src_db = tmp_path / "sample_erp.duckdb"
     shutil.copy2(FIXTURES_DIR / "sample_erp.duckdb", src_db)
     config_path = tmp_path / "feather.yaml"
-    config_path.write_text(yaml.dump({
-        "sources": [{"type": "duckdb", "name": "erp", "path": str(src_db)}],
-        "destination": {"path": str(tmp_path / "output.duckdb")},
-        "mode": "prod",
-    }, default_flow_style=False))
+    config_path.write_text(
+        yaml.dump(
+            {
+                "sources": [{"type": "duckdb", "name": "erp", "path": str(src_db)}],
+                "destination": {"path": str(tmp_path / "output.duckdb")},
+                "mode": "prod",
+            },
+            default_flow_style=False,
+        )
+    )
     write_curation(tmp_path, [make_curation_entry("erp", "erp.customers", "customers")])
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")

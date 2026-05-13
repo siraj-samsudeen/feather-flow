@@ -134,8 +134,7 @@ def test_setup_reports_gold_tables_by_default(project, cli):
         project.root,
         "gold",
         "emp_summary",
-        "-- materialized: true\n"
-        "SELECT COUNT(*) AS n FROM silver.emp_clean",
+        "-- materialized: true\nSELECT COUNT(*) AS n FROM silver.emp_clean",
     )
 
     result = cli("setup")

@@ -103,10 +103,7 @@ class TestParseTransformFile:
         assert meta.qualified_name == "silver.employees"
 
     def test_parse_materialized_gold(self, tmp_path: Path):
-        content = (
-            "-- materialized: true\n"
-            "SELECT * FROM silver.employees"
-        )
+        content = "-- materialized: true\nSELECT * FROM silver.employees"
         p = _write_sql(tmp_path, "gold", "employee_summary", content)
         meta = parse_transform_file(p)
 
@@ -124,10 +121,7 @@ class TestParseTransformFile:
         assert meta.materialized is False
 
     def test_parse_preserves_non_metadata_comments(self, tmp_path: Path):
-        content = (
-            "-- This is a regular comment\n"
-            "SELECT amount FROM bronze.sales"
-        )
+        content = "-- This is a regular comment\nSELECT amount FROM bronze.sales"
         p = _write_sql(tmp_path, "silver", "sales_clean", content)
         meta = parse_transform_file(p)
 
@@ -155,8 +149,7 @@ class TestParseTransformFile:
         # Two inferred deps, returned in sorted order. Materialized flag still
         # honoured. Issue #54 — replaces the old header-interleaved variant.
         content = (
-            "-- materialized: true\n"
-            "SELECT * FROM silver.a JOIN silver.b USING (id)"
+            "-- materialized: true\nSELECT * FROM silver.a JOIN silver.b USING (id)"
         )
         p = _write_sql(tmp_path, "gold", "joined", content)
         meta = parse_transform_file(p)
@@ -178,9 +171,7 @@ class TestParseTransformFile:
         assert meta.depends_on == ["silver.storewise_hrcost"]
         assert meta.materialized is True
 
-    def test_parse_legacy_depends_on_header_is_silently_ignored(
-        self, tmp_path: Path
-    ):
+    def test_parse_legacy_depends_on_header_is_silently_ignored(self, tmp_path: Path):
         # Issue #54 removed -- depends_on: as a contract. A legacy file
         # that still contains the header must parse successfully — the
         # header line is treated as a regular SQL comment (and stripped
@@ -212,9 +203,7 @@ class TestParseTransformFile:
 
     def test_parse_string_literal_does_not_create_dep(self, tmp_path: Path):
         # 'FROM silver.boom' is a string value, not a table reference.
-        content = (
-            "SELECT * FROM silver.real WHERE label = 'FROM silver.boom'"
-        )
+        content = "SELECT * FROM silver.real WHERE label = 'FROM silver.boom'"
         p = _write_sql(tmp_path, "gold", "no_boom", content)
         meta = parse_transform_file(p)
 
@@ -371,9 +360,7 @@ class TestBuildExecutionOrder:
 
         assert names.index("silver.foo") < names.index("gold.bar")
 
-    def test_missing_inferred_dep_raises_same_error_as_before(
-        self, tmp_path: Path
-    ):
+    def test_missing_inferred_dep_raises_same_error_as_before(self, tmp_path: Path):
         # Acceptance criterion (issue #54): "A transform that references a
         # non-existent silver.bar raises the same missing-dependency error
         # as today."
@@ -865,9 +852,7 @@ class TestE2ETransformPipeline:
         con.close()
 
     def test_missing_silver_dependency_still_raises(self, tmp_path: Path):
-        _write_sql(
-            tmp_path, "gold", "bad", "SELECT * FROM silver.nonexistent"
-        )
+        _write_sql(tmp_path, "gold", "bad", "SELECT * FROM silver.nonexistent")
 
         transforms = discover_transforms(tmp_path)
         with pytest.raises(ValueError, match="silver.nonexistent"):

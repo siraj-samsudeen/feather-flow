@@ -38,7 +38,8 @@ def extract(
         "feather_data.duckdb has been deleted and state is stale.",
     ),
     limit: int | None = typer.Option(
-        None, "--limit",
+        None,
+        "--limit",
         help="Override defaults.row_limit for this invocation.",
     ),
 ) -> None:
@@ -96,7 +97,9 @@ def extract(
     if requested_sources:
         tables = [t for t in tables if t.database in requested_sources]
 
-    results = run_extract(cfg, tables, cfg.config_dir, refresh=refresh, refresh_all=refresh_all)
+    results = run_extract(
+        cfg, tables, cfg.config_dir, refresh=refresh, refresh_all=refresh_all
+    )
 
     # Grouped-by-source_db output
     from collections import defaultdict

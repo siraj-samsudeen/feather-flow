@@ -53,10 +53,7 @@ def test_run_rebuilds_materialized_gold(tmp_path: Path):
         tmp_path,
         "gold",
         "emp_snapshot",
-        (
-            "-- materialized: true\n"
-            "SELECT * FROM silver.emp_clean"
-        ),
+        ("-- materialized: true\nSELECT * FROM silver.emp_clean"),
     )
 
     cfg = load_config(config_file)
@@ -102,10 +99,7 @@ def test_force_views_then_default_rematerializes_gold(tmp_path: Path):
         tmp_path,
         "gold",
         "emp_snapshot",
-        (
-            "-- materialized: true\n"
-            "SELECT * FROM silver.emp_clean"
-        ),
+        ("-- materialized: true\nSELECT * FROM silver.emp_clean"),
     )
 
     # First run with force_views=True: gold stays a VIEW
@@ -261,10 +255,7 @@ def test_run_auto_infers_silver_to_gold_dep(tmp_path: Path):
         tmp_path,
         "gold",
         "emp_snapshot",
-        (
-            "-- materialized: true\n"
-            "SELECT * FROM silver.emp_clean"
-        ),
+        ("-- materialized: true\nSELECT * FROM silver.emp_clean"),
     )
 
     cfg = load_config(config_file)
@@ -274,9 +265,7 @@ def test_run_auto_infers_silver_to_gold_dep(tmp_path: Path):
     # success of the inferred-dep ordering is proven by the gold rows
     # query below succeeding (which only works if silver.emp_clean was
     # built before gold.emp_snapshot).
-    assert any(r.status == "success" for r in results), (
-        f"extraction failed: {results}"
-    )
+    assert any(r.status == "success" for r in results), f"extraction failed: {results}"
 
     con = duckdb.connect(str(dest_db))
     gold_rows = con.execute("SELECT * FROM gold.emp_snapshot").fetchall()

@@ -19,6 +19,7 @@ def _mysql_coerce_row(val, _col_name):
         return float(val)
     return val
 
+
 # mysql.connector FieldType constants → PyArrow type.
 #
 # BLOB-family codes (249/250/251/252) are intentionally absent: mysql-connector

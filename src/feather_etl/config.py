@@ -264,6 +264,7 @@ def load_config(
 
     if "mode" in raw:
         import warnings
+
         warnings.warn(
             "'mode:' key in feather.yaml is ignored and will be removed. "
             "Remove it from your config.",

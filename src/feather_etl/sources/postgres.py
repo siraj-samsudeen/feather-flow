@@ -19,6 +19,7 @@ def _postgres_coerce_row(val, _col_name):
         return float(val)
     return val
 
+
 # psycopg2 cursor.description[1] is a PostgreSQL OID integer → PyArrow type
 _PSYCOPG2_TYPE_MAP: dict[int, pa.DataType] = {
     16: pa.bool_(),  # bool

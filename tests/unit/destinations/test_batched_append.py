@@ -89,14 +89,20 @@ def test_two_windows_accumulate(tmp_path: Path) -> None:
     w2 = WindowSpec("2026-05-13", "day = '2026-05-13'", None, None)
 
     dest.load_batched_append(
-        "bronze.foo", w1,
+        "bronze.foo",
+        w1,
         _batches(_table([{"id": 1, "name": "a", "day": "2026-05-12"}])),
-        "r", state, "pyodbc",
+        "r",
+        state,
+        "pyodbc",
     )
     dest.load_batched_append(
-        "bronze.foo", w2,
+        "bronze.foo",
+        w2,
         _batches(_table([{"id": 2, "name": "b", "day": "2026-05-13"}])),
-        "r", state, "pyodbc",
+        "r",
+        state,
+        "pyodbc",
     )
     assert state.get_committed_windows("bronze.foo") == {"2026-05-12", "2026-05-13"}
     con = duckdb.connect(str(dest.path))
@@ -118,7 +124,12 @@ def test_failure_mid_window_leaves_state_clean(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="simulated"):
         dest.load_batched_append(
-            "bronze.foo", spec, boom(), "r1", state, "pyodbc",
+            "bronze.foo",
+            spec,
+            boom(),
+            "r1",
+            state,
+            "pyodbc",
         )
 
     assert state.get_committed_windows("bronze.foo") == set()
@@ -139,13 +150,20 @@ def test_empty_iterator_records_zero_row_window(tmp_path: Path) -> None:
     """A window legitimately with zero source rows still commits — it's done."""
     dest, state = _make_dest_and_state(tmp_path)
     spec = WindowSpec("empty-day", "day = '1999-01-01'", None, None)
-    schema = pa.schema([("id", pa.int64()), ("name", pa.string()), ("day", pa.string())])
+    schema = pa.schema(
+        [("id", pa.int64()), ("name", pa.string()), ("day", pa.string())]
+    )
 
     def empty_iter():
         yield pa.RecordBatch.from_pylist([], schema=schema)
 
     result = dest.load_batched_append(
-        "bronze.foo", spec, empty_iter(), "r1", state, "pyodbc",
+        "bronze.foo",
+        spec,
+        empty_iter(),
+        "r1",
+        state,
+        "pyodbc",
     )
     assert result.rows_loaded == 0
     assert result.committed is True
@@ -156,9 +174,12 @@ def test_run_id_propagated_to_etl_metadata(tmp_path: Path) -> None:
     dest, state = _make_dest_and_state(tmp_path)
     spec = WindowSpec("all", "1=1", None, None)
     dest.load_batched_append(
-        "bronze.foo", spec,
+        "bronze.foo",
+        spec,
         _batches(_table([{"id": 1, "name": "a"}])),
-        "run_42", state, "pyodbc",
+        "run_42",
+        state,
+        "pyodbc",
     )
     con = duckdb.connect(str(dest.path))
     try:
@@ -173,7 +194,12 @@ def test_rejects_unqualified_table_name(tmp_path: Path) -> None:
     spec = WindowSpec("all", "1=1", None, None)
     with pytest.raises(ValueError, match="expects schema.table"):
         dest.load_batched_append(
-            "foo", spec, iter(()), "r1", state, "pyodbc",
+            "foo",
+            spec,
+            iter(()),
+            "r1",
+            state,
+            "pyodbc",
         )
 
 
@@ -184,7 +210,12 @@ def test_zero_batches_with_no_prior_table_raises(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="cannot infer schema"):
         dest.load_batched_append(
-            "bronze.foo", spec, iter(()), "r1", state, "pyodbc",
+            "bronze.foo",
+            spec,
+            iter(()),
+            "r1",
+            state,
+            "pyodbc",
         )
 
     assert state.get_committed_windows("bronze.foo") == set()

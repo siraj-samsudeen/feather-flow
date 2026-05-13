@@ -41,6 +41,7 @@ def run_setup(cfg: FeatherConfig, force_views: bool = False) -> SetupResult:
     transforms = discover_transforms(cfg.config_dir)
     if transforms:
         from feather_etl.transforms import run_transforms
+
         transform_results = run_transforms(cfg, force_views=force_views)
 
     return SetupResult(

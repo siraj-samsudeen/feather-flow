@@ -10,6 +10,7 @@ Files here are typically short-lived — once a design spec lands under `docs/su
 - [`rethink-mode-system.md`](rethink-mode-system.md) — Three symptoms surfaced during the `feather-transform` change (May 2026): verb-equivalence breaks in prod, dual watermark tables, and the deeper observation that modes-as-preset-bundles cannot express what operators want. Recommends removing modes entirely (option C1). Pick up after `feather-transform` lands.
 - [`replace-hands-on-test.md`](replace-hands-on-test.md) — pre-existing note; retained for context.
 - [`54-auto-discover-dag.md`](54-auto-discover-dag.md) — Issue #54 (auto-discover transform DAG via sqlglot AST parsing). Captures the rationale for AST over regex over `{{ ref(...) }}`, the no-backcompat removal of `-- depends_on:`, and the parse-failure escalation policy. Cited by `docs/superpowers/plans/2026-05-11-auto-discover-transform-dag.md`.
+- [`zakya-invoice-source.md`](zakya-invoice-source.md) — research notes for adding a Zakya POS API source plugin (first HTTP/REST source). Captures probe findings (the `/export` malformed-JSON bug, branch_id filter asymmetry, pagination ceiling at 200), volume baseline (~27K invoices/day across 16 branches), rate-budget math against the Enterprise plan, and two viable architecture options. Pre-spec; will graduate to `docs/superpowers/specs/` once SLA confirmed.
 
 ## When to add a doc here
 

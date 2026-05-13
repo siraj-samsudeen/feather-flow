@@ -36,7 +36,9 @@ class StateManager:
 
     def _migrate_v1_to_v2(self, con: duckdb.DuckDBPyConnection) -> None:
         """One-time migration: add source_db to _watermarks, copy _cache_watermarks rows."""
-        con.execute("ALTER TABLE _watermarks ADD COLUMN IF NOT EXISTS source_db VARCHAR")
+        con.execute(
+            "ALTER TABLE _watermarks ADD COLUMN IF NOT EXISTS source_db VARCHAR"
+        )
         tables = {
             r[0]
             for r in con.execute(

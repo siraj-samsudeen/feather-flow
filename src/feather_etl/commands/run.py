@@ -18,11 +18,13 @@ def run(
     config: Path = typer.Option("feather.yaml", "--config"),
     table: str | None = typer.Option(None, "--table", help="Extract only this table."),
     force_views: bool = typer.Option(
-        False, "--force-views",
+        False,
+        "--force-views",
         help="Create all transforms as VIEWs, skipping gold materialization.",
     ),
     limit: int | None = typer.Option(
-        None, "--limit",
+        None,
+        "--limit",
         help="Override defaults.row_limit for this invocation.",
     ),
 ) -> None:
