@@ -70,6 +70,7 @@ def run_extract(
     tables: list[TableConfig],
     working_dir: Path,
     refresh: bool = False,
+    refresh_all: bool = False,
 ) -> list[ExtractResult]:
     """Pull curated tables into bronze. Dev-only. No transforms, no DQ, no drift.
 
@@ -79,6 +80,44 @@ def run_extract(
     """
     state = StateManager(working_dir / "feather_state.duckdb")
     state.init_state()
+
+    if refresh_all:
+        state.clear_all_windows()
+
+    # Safety: if the destination DB has been deleted out-of-band while
+    # state still claims windows are committed, silently re-extracting
+    # would leave the new bronze data inconsistent with the predicate-based
+    # cleanup contract (today fine for 1=1, wrong for future date / pk_range
+    # windows). Force the operator to acknowledge via --refresh-all.
+    if not config.destination.path.exists():
+        con = state._connect()
+        try:
+            rows = con.execute(
+                "SELECT DISTINCT table_name FROM _extract_windows"
+            ).fetchall()
+        finally:
+            con.close()
+        orphan_tables = [r[0] for r in rows]
+        if orphan_tables and not refresh_all:
+            sample = ", ".join(orphan_tables[:3])
+            if len(orphan_tables) > 3:
+                sample += "..."
+            msg = (
+                f"feather_data.duckdb does not exist but _extract_windows has "
+                f"{len(orphan_tables)} table(s) with committed windows ({sample}). "
+                f"State and destination are out of sync — rerun with --refresh-all "
+                f"to clear the commit log and re-extract from scratch."
+            )
+            return [
+                ExtractResult(
+                    table_name=t.name,
+                    source_db=t.database or (t.source_name or ""),
+                    status="failure",
+                    error_message=msg,
+                )
+                for t in tables
+            ]
+
     dest = DuckDBDestination(path=config.destination.path)
     dest.setup_schemas()
     _setup_jsonl_logging(working_dir)
