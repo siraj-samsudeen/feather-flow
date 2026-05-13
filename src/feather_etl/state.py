@@ -10,7 +10,7 @@ import duckdb
 
 import feather_etl
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Accepted values for the _runs.trigger column. Names the CLI verb that
 # wrote the row, not the invocation source. Legacy rows (written before
@@ -33,6 +33,28 @@ class StateManager:
             except OSError:
                 pass
         return con
+
+    def _migrate_v1_to_v2(self, con: duckdb.DuckDBPyConnection) -> None:
+        """One-time migration: add source_db to _watermarks, copy _cache_watermarks rows."""
+        con.execute("ALTER TABLE _watermarks ADD COLUMN IF NOT EXISTS source_db VARCHAR")
+        tables = {
+            r[0]
+            for r in con.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'main'"
+            ).fetchall()
+        }
+        if "_cache_watermarks" in tables:
+            con.execute("""
+                INSERT OR IGNORE INTO _watermarks
+                    (table_name, source_db, last_file_mtime, last_file_hash,
+                     last_checksum, last_row_count, last_run_at)
+                SELECT
+                    table_name, source_db, last_file_mtime, last_file_hash,
+                    last_checksum, last_row_count, last_run_at
+                FROM _cache_watermarks
+            """)
+            con.execute("DROP TABLE _cache_watermarks")
 
     def init_state(self) -> None:
         """Create all state tables. Idempotent."""
@@ -58,7 +80,8 @@ class StateManager:
                     last_run_at TIMESTAMP,
                     retry_count INTEGER DEFAULT 0,
                     retry_after TIMESTAMP,
-                    boundary_hashes JSON
+                    boundary_hashes JSON,
+                    source_db VARCHAR
                 )
             """)
 
@@ -118,19 +141,7 @@ class StateManager:
                 )
             """)
 
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS _cache_watermarks (
-                    table_name VARCHAR PRIMARY KEY,
-                    source_db VARCHAR,
-                    last_file_mtime DOUBLE,
-                    last_file_hash VARCHAR,
-                    last_checksum VARCHAR,
-                    last_row_count INTEGER,
-                    last_run_at TIMESTAMP
-                )
-            """)
-
-            # Check version and handle init vs downgrade protection
+            # Check version and handle init vs upgrade vs downgrade protection
             row = con.execute(
                 "SELECT schema_version FROM _state_meta LIMIT 1"
             ).fetchone()
@@ -142,6 +153,12 @@ class StateManager:
                         datetime.now(timezone.utc),
                         feather_etl.__version__,
                     ],
+                )
+            elif row[0] < SCHEMA_VERSION:
+                if row[0] == 1:
+                    self._migrate_v1_to_v2(con)
+                con.execute(
+                    "UPDATE _state_meta SET schema_version = ?", [SCHEMA_VERSION]
                 )
             elif row[0] > SCHEMA_VERSION:
                 raise RuntimeError(
@@ -165,23 +182,8 @@ class StateManager:
             con.close()
 
     def read_cache_watermark(self, table_name: str) -> dict[str, object] | None:
-        """Read a row from _cache_watermarks. Returns None if absent.
-
-        Hardcoded to _cache_watermarks — this method cannot read from
-        _watermarks under any circumstances.
-        """
-        con = self._connect()
-        try:
-            row = con.execute(
-                "SELECT * FROM _cache_watermarks WHERE table_name = ?",
-                [table_name],
-            ).fetchone()
-            if row is None:
-                return None
-            columns = [desc[0] for desc in con.description]
-            return dict(zip(columns, row))
-        finally:
-            con.close()
+        """Deprecated — delegates to read_watermark."""
+        return self.read_watermark(table_name)
 
     def write_cache_watermark(
         self,
@@ -193,68 +195,34 @@ class StateManager:
         last_checksum: str | None = None,
         last_row_count: int | None = None,
     ) -> None:
-        """Upsert a row into _cache_watermarks.
-
-        Hardcoded to _cache_watermarks — this method cannot touch
-        _watermarks under any circumstances.
-        """
+        """Deprecated — delegates to write_watermark with source_db."""
         # Normalize checksum to str at the boundary — SQL Server's
         # CHECKSUM_AGG returns int, Postgres md5() returns a hex string.
         checksum_str = str(last_checksum) if last_checksum is not None else None
-
-        con = self._connect()
-        try:
-            existing = con.execute(
-                "SELECT COUNT(*) FROM _cache_watermarks WHERE table_name = ?",
-                [table_name],
-            ).fetchone()[0]
-            if existing:
-                con.execute(
-                    "UPDATE _cache_watermarks SET source_db = ?, "
-                    "last_file_mtime = ?, last_file_hash = ?, "
-                    "last_checksum = ?, last_row_count = ?, last_run_at = ? "
-                    "WHERE table_name = ?",
-                    [
-                        source_db,
-                        last_file_mtime,
-                        last_file_hash,
-                        checksum_str,
-                        last_row_count,
-                        last_run_at,
-                        table_name,
-                    ],
-                )
-            else:
-                con.execute(
-                    "INSERT INTO _cache_watermarks "
-                    "(table_name, source_db, last_file_mtime, last_file_hash, "
-                    "last_checksum, last_row_count, last_run_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [
-                        table_name,
-                        source_db,
-                        last_file_mtime,
-                        last_file_hash,
-                        checksum_str,
-                        last_row_count,
-                        last_run_at,
-                    ],
-                )
-        finally:
-            con.close()
+        self.write_watermark(
+            table_name=table_name,
+            strategy=None,
+            last_run_at=last_run_at,
+            last_file_mtime=last_file_mtime,
+            last_file_hash=last_file_hash,
+            last_checksum=checksum_str,
+            last_row_count=last_row_count,
+            source_db=source_db,
+        )
 
     _SENTINEL = object()
 
     def write_watermark(
         self,
         table_name: str,
-        strategy: str,
+        strategy: str | None,
         last_run_at: datetime | None = None,
         last_file_mtime: float | None = None,
         last_file_hash: str | None = None,
         last_value: object = _SENTINEL,
         last_checksum: int | str | None = None,
         last_row_count: int | None = None,
+        source_db: str | None = None,
     ) -> None:
         if last_run_at is None:
             last_run_at = datetime.now(timezone.utc)
@@ -269,7 +237,7 @@ class StateManager:
                     con.execute(
                         "UPDATE _watermarks SET strategy = ?, last_run_at = ?, "
                         "last_file_mtime = ?, last_file_hash = ?, "
-                        "last_checksum = ?, last_row_count = ? "
+                        "last_checksum = ?, last_row_count = ?, source_db = ? "
                         "WHERE table_name = ?",
                         [
                             strategy,
@@ -278,6 +246,7 @@ class StateManager:
                             last_file_hash,
                             last_checksum,
                             last_row_count,
+                            source_db,
                             table_name,
                         ],
                     )
@@ -285,7 +254,7 @@ class StateManager:
                     con.execute(
                         "UPDATE _watermarks SET strategy = ?, last_run_at = ?, "
                         "last_file_mtime = ?, last_file_hash = ?, last_value = ?, "
-                        "last_checksum = ?, last_row_count = ? "
+                        "last_checksum = ?, last_row_count = ?, source_db = ? "
                         "WHERE table_name = ?",
                         [
                             strategy,
@@ -295,6 +264,7 @@ class StateManager:
                             last_value,
                             last_checksum,
                             last_row_count,
+                            source_db,
                             table_name,
                         ],
                     )
@@ -303,8 +273,8 @@ class StateManager:
                 con.execute(
                     "INSERT INTO _watermarks "
                     "(table_name, strategy, last_run_at, last_file_mtime, last_file_hash, "
-                    "last_value, last_checksum, last_row_count) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "last_value, last_checksum, last_row_count, source_db) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [
                         table_name,
                         strategy,
@@ -314,6 +284,7 @@ class StateManager:
                         actual_value,
                         last_checksum,
                         last_row_count,
+                        source_db,
                     ],
                 )
         finally:

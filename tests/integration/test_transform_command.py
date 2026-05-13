@@ -690,29 +690,17 @@ def _content_signature(
 
 
 def _watermarked_tables(state_db: Path) -> set[str]:
-    """Return the set of table_names that have ANY watermark record.
-
-    By design, ``feather run`` writes to ``_watermarks`` while
-    ``feather extract`` writes to ``_cache_watermarks`` — they're separate
-    by intent (the cache watermarks are a dev-only artifact). For the
-    equivalence assertion we compare the UNION so the test pins
-    "post-load, both paths know about the same set of tables" without
-    over-specifying which watermark table is the source of truth.
-    """
+    """Return all table names recorded in _watermarks."""
     if not state_db.exists():
         return set()
     con = duckdb.connect(str(state_db), read_only=True)
     try:
-        names: set[str] = set()
-        for tbl in ("_watermarks", "_cache_watermarks"):
-            try:
-                rows = con.execute(f"SELECT DISTINCT table_name FROM {tbl}").fetchall()
-                names.update(r[0] for r in rows)
-            except duckdb.CatalogException:
-                pass
+        rows = con.execute("SELECT DISTINCT table_name FROM _watermarks").fetchall()
+        return {r[0] for r in rows}
+    except duckdb.CatalogException:
+        return set()
     finally:
         con.close()
-    return names
 
 
 @pytest.mark.parametrize("mode", ["dev", "test"])

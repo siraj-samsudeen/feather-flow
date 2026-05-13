@@ -1,9 +1,8 @@
 """`feather extract` orchestrator — dev-only bronze pull, isolated state.
 
 Renamed from `feather_etl.cache` (verb `feather cache`) per the
-feather-transform change. The local-snapshot state machinery still
-uses `_cache_watermarks` etc. inside `state.py`; only the verb-facing
-public API was renamed.
+feather-transform change. The local-snapshot state is written to
+`_watermarks` inside `state.py` with `source_db` set.
 """
 
 from __future__ import annotations

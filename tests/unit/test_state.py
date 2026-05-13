@@ -10,7 +10,7 @@ import duckdb
 import pytest
 
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 class TestStateInit:
@@ -36,34 +36,25 @@ class TestStateInit:
             "_run_steps",
             "_dq_results",
             "_schema_snapshots",
-            "_cache_watermarks",
         }
         assert tables == expected
 
-    def test_cache_watermarks_table_schema(self, tmp_path: Path):
-        """_cache_watermarks has exactly the columns we need, no more."""
+    def test_watermarks_has_source_db_column(self, tmp_path: Path):
+        """_watermarks includes source_db for extract-written rows."""
         from feather_etl.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
-
-        con = duckdb.connect(str(sm.path), read_only=True)
-        rows = con.execute(
-            "SELECT column_name, data_type FROM information_schema.columns "
-            "WHERE table_name = '_cache_watermarks' ORDER BY ordinal_position"
-        ).fetchall()
+        con = sm._connect()
+        cols = {
+            row[0]
+            for row in con.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = '_watermarks' ORDER BY ordinal_position"
+            ).fetchall()
+        }
         con.close()
-
-        expected = [
-            ("table_name", "VARCHAR"),
-            ("source_db", "VARCHAR"),
-            ("last_file_mtime", "DOUBLE"),
-            ("last_file_hash", "VARCHAR"),
-            ("last_checksum", "VARCHAR"),
-            ("last_row_count", "INTEGER"),
-            ("last_run_at", "TIMESTAMP"),
-        ]
-        assert rows == expected
+        assert "source_db" in cols
 
     def test_state_meta_version(self, tmp_path: Path):
         from feather_etl.state import StateManager
@@ -87,6 +78,88 @@ class TestStateInit:
         count = con.execute("SELECT COUNT(*) FROM _state_meta").fetchone()[0]
         con.close()
         assert count == 1
+
+    def test_v1_to_v2_migration(self, tmp_path: Path):
+        """Upgrading a v1 state DB: _cache_watermarks rows land in _watermarks."""
+        import feather_etl
+        from datetime import datetime, timezone
+
+        from feather_etl.state import StateManager
+
+        state_path = tmp_path / "state.duckdb"
+        con = duckdb.connect(str(state_path))
+
+        # Build a v1-era schema manually (no source_db in _watermarks, separate _cache_watermarks)
+        con.execute("""
+            CREATE TABLE _state_meta (
+                schema_version INTEGER PRIMARY KEY,
+                created_at TIMESTAMP,
+                feather_version VARCHAR
+            )
+        """)
+        con.execute("INSERT INTO _state_meta VALUES (1, now(), '0.0.1')")
+
+        con.execute("""
+            CREATE TABLE _watermarks (
+                table_name VARCHAR PRIMARY KEY,
+                strategy VARCHAR,
+                last_value VARCHAR,
+                last_checksum VARCHAR,
+                last_row_count INTEGER,
+                last_file_mtime DOUBLE,
+                last_file_hash VARCHAR,
+                last_run_at TIMESTAMP,
+                retry_count INTEGER DEFAULT 0,
+                retry_after TIMESTAMP,
+                boundary_hashes JSON
+            )
+        """)
+
+        con.execute("""
+            CREATE TABLE _cache_watermarks (
+                table_name VARCHAR PRIMARY KEY,
+                source_db VARCHAR,
+                last_file_mtime DOUBLE,
+                last_file_hash VARCHAR,
+                last_checksum VARCHAR,
+                last_row_count INTEGER,
+                last_run_at TIMESTAMP
+            )
+        """)
+        con.execute(
+            "INSERT INTO _cache_watermarks VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ["orders", "erp", 1.0, "abc", None, 10, datetime.now(timezone.utc)],
+        )
+        con.close()
+
+        # Run init_state — should trigger migration
+        sm = StateManager(state_path)
+        sm.init_state()
+
+        # Verify migration outcome
+        con2 = duckdb.connect(str(state_path))
+
+        # _cache_watermarks is gone
+        tables = {
+            r[0]
+            for r in con2.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+            ).fetchall()
+        }
+        assert "_cache_watermarks" not in tables
+
+        # The row is now in _watermarks with source_db set
+        row = con2.execute(
+            "SELECT table_name, source_db FROM _watermarks WHERE table_name = 'orders'"
+        ).fetchone()
+        assert row is not None
+        assert row[1] == "erp"
+
+        # Schema version is now 2
+        version = con2.execute("SELECT schema_version FROM _state_meta").fetchone()[0]
+        assert version == 2
+
+        con2.close()
 
     def test_downgrade_protection(self, tmp_path: Path):
         from feather_etl.state import StateManager
@@ -421,33 +494,24 @@ class TestCacheWatermarks:
 
         con = duckdb.connect(str(sm.path), read_only=True)
         count = con.execute(
-            "SELECT COUNT(*) FROM _cache_watermarks WHERE table_name = 't'"
+            "SELECT COUNT(*) FROM _watermarks WHERE table_name = 't'"
         ).fetchone()[0]
         con.close()
         assert count == 1
 
-    def test_write_cache_watermark_does_not_touch_watermarks(self, tmp_path: Path):
-        """Cache writes must never land in the prod _watermarks table."""
+    def test_write_cache_watermark_writes_to_watermarks(self, tmp_path: Path):
+        """write_cache_watermark delegates to write_watermark (unified table)."""
         from datetime import datetime, timezone
-        import duckdb
         from feather_etl.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
         sm.write_cache_watermark(
-            table_name="isolated",
-            source_db="db",
-            last_run_at=datetime.now(timezone.utc),
-            last_file_hash="h",
+            "orders", source_db="erp", last_run_at=datetime.now(timezone.utc)
         )
-        con = duckdb.connect(str(sm.path), read_only=True)
-        prod_count = con.execute("SELECT COUNT(*) FROM _watermarks").fetchone()[0]
-        cache_count = con.execute("SELECT COUNT(*) FROM _cache_watermarks").fetchone()[
-            0
-        ]
-        con.close()
-        assert prod_count == 0
-        assert cache_count == 1
+        row = sm.read_watermark("orders")
+        assert row is not None
+        assert row["source_db"] == "erp"
 
     def test_write_cache_watermark_normalizes_int_checksum_to_str(self, tmp_path: Path):
         """Pins the documented boundary: int checksums (SQL Server CHECKSUM_AGG)
