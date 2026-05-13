@@ -7,13 +7,22 @@ import decimal
 import platform
 import uuid
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Iterator
 
 import pyarrow as pa
 import pyodbc
 
 from feather_etl.sources import ChangeResult, StreamSchema
 from feather_etl.sources.database_source import DatabaseSource
+
+
+def _sqlserver_coerce_row(val, _col_name):
+    """Per-cell coercion for pyodbc types PyArrow can't auto-convert."""
+    if isinstance(val, decimal.Decimal):
+        return float(val)
+    if isinstance(val, uuid.UUID):
+        return str(val)
+    return val
 
 _SQLSERVER_CONN_TEMPLATE = (
     "DRIVER={{ODBC Driver 18 for SQL Server}};"
@@ -288,17 +297,18 @@ class SqlServerSource(DatabaseSource):
         con.close()
         return [(c[0], c[1]) for c in cols]
 
-    def extract(
+    def extract_batches(
         self,
         table: str,
         columns: list[str] | None = None,
         filter: str | None = None,
         watermark_column: str | None = None,
         watermark_value: str | None = None,
-    ) -> pa.Table:
-        con = pyodbc.connect(self.connection_string)
-        cursor = con.cursor()
-        cursor.execute("SET NOCOUNT ON")
+        heartbeat_every_rows: int = 100_000,
+        heartbeat_every_seconds: int = 30,
+    ) -> Iterator[pa.RecordBatch]:
+        """Stream `pa.RecordBatch` chunks from SQL Server with progress heartbeat."""
+        from feather_etl.sources.fetch_batches import fetch_batches
 
         if columns:
             bad = [c for c in columns if "]" in c]
@@ -307,56 +317,42 @@ class SqlServerSource(DatabaseSource):
                     f"SQL Server column names containing ']' cannot be "
                     f"bracket-quoted: {bad}"
                 )
-        col_clause = ", ".join(f"[{c}]" for c in columns) if columns else "*"
-        where = self._build_where_clause(filter, watermark_column, watermark_value)
-        query = f"SELECT {col_clause} FROM {table}{where}"
 
-        cursor.execute(query)
+        con = pyodbc.connect(self.connection_string)
+        try:
+            cursor = con.cursor()
+            cursor.execute("SET NOCOUNT ON")
 
-        # Build schema from cursor.description
-        if cursor.description is None:
-            cursor.close()
-            con.close()
-            return pa.table({})
+            col_clause = ", ".join(f"[{c}]" for c in columns) if columns else "*"
+            where = self._build_where_clause(filter, watermark_column, watermark_value)
+            query = f"SELECT {col_clause} FROM {table}{where}"
+            cursor.execute(query)
 
-        col_names = [desc[0] for desc in cursor.description]
-        col_types = [_pyodbc_type_to_arrow(desc[1]) for desc in cursor.description]
-        arrow_schema = pa.schema(
-            [pa.field(name, typ) for name, typ in zip(col_names, col_types)]
-        )
+            if cursor.description is None:
+                cursor.close()
+                return
 
-        # Chunked fetch → PyArrow batches
-        batches: list[pa.RecordBatch] = []
-        while True:
-            rows = cursor.fetchmany(self.batch_size)
-            if not rows:
-                break
-            # Convert rows to column-oriented dict with type coercion
-            col_data: dict[str, list] = {name: [] for name in col_names}
-            for row in rows:
-                for i, name in enumerate(col_names):
-                    val = row[i]
-                    # Coerce types pyodbc returns that PyArrow can't auto-convert
-                    if isinstance(val, decimal.Decimal):
-                        val = float(val)
-                    elif isinstance(val, uuid.UUID):
-                        val = str(val)
-                    col_data[name].append(val)
-            batch = pa.RecordBatch.from_pydict(col_data, schema=arrow_schema)
-            batches.append(batch)
-
-        cursor.close()
-        con.close()
-
-        if not batches:
-            return pa.table(
-                {
-                    name: pa.array([], type=typ)
-                    for name, typ in zip(col_names, col_types)
-                }
+            col_names = [desc[0] for desc in cursor.description]
+            col_types = [_pyodbc_type_to_arrow(desc[1]) for desc in cursor.description]
+            arrow_schema = pa.schema(
+                [pa.field(name, typ) for name, typ in zip(col_names, col_types)]
             )
 
-        return pa.Table.from_batches(batches, schema=arrow_schema)
+            try:
+                yield from fetch_batches(
+                    cursor=cursor,
+                    arrow_schema=arrow_schema,
+                    col_names=col_names,
+                    batch_size=self.batch_size,
+                    table_label=table,
+                    coerce_row=_sqlserver_coerce_row,
+                    heartbeat_every_rows=heartbeat_every_rows,
+                    heartbeat_every_seconds=heartbeat_every_seconds,
+                )
+            finally:
+                cursor.close()
+        finally:
+            con.close()
 
     def detect_changes(
         self, table: str, last_state: dict[str, object] | None = None

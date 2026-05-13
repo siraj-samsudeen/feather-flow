@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import decimal
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Iterator
 
 import mysql.connector
 import pyarrow as pa
@@ -12,6 +12,12 @@ from mysql.connector.constants import FieldFlag
 
 from feather_etl.sources import ChangeResult, StreamSchema
 from feather_etl.sources.database_source import DatabaseSource
+
+
+def _mysql_coerce_row(val, _col_name):
+    if isinstance(val, decimal.Decimal):
+        return float(val)
+    return val
 
 # mysql.connector FieldType constants → PyArrow type.
 #
@@ -264,14 +270,19 @@ class MySQLSource(DatabaseSource):
         finally:
             conn.close()
 
-    def extract(
+    def extract_batches(
         self,
         table: str,
         columns: list[str] | None = None,
         filter: str | None = None,
         watermark_column: str | None = None,
         watermark_value: str | None = None,
-    ) -> pa.Table:
+        heartbeat_every_rows: int = 100_000,
+        heartbeat_every_seconds: int = 30,
+    ) -> Iterator[pa.RecordBatch]:
+        """Stream `pa.RecordBatch` chunks from MySQL with progress heartbeat."""
+        from feather_etl.sources.fetch_batches import fetch_batches
+
         if columns:
             bad = [c for c in columns if "`" in c]
             if bad:
@@ -279,26 +290,22 @@ class MySQLSource(DatabaseSource):
                     f"MySQL column names containing '`' cannot be "
                     f"backtick-quoted: {bad}"
                 )
+
         conn = self._connect()
         try:
             cursor = conn.cursor()
             col_clause = ", ".join(f"`{c}`" for c in columns) if columns else "*"
             where = self._build_where_clause(filter, watermark_column, watermark_value)
             query = f"SELECT {col_clause} FROM {table}{where}"
-
             cursor.execute(query)
 
             if cursor.description is None:
                 cursor.close()
-                return pa.table({})
+                return
 
             col_names = [desc[0] for desc in cursor.description]
-            # desc is the 8-tuple (name, type_code, display_size, internal_size,
-            # precision, scale, null_ok, flags) per mysql-connector's PEP-249
-            # superset. desc[7] (flags) is required for the BLOB-family
-            # binary-vs-text discriminator; we take it raw so a future cursor
-            # wrapper that returns a shorter tuple raises loudly rather than
-            # silently mapping every BLOB to string.
+            # desc[7] (flags) carries the BLOB-vs-TEXT discriminator — see
+            # the _MYSQL_FIELD_TYPE_MAP docstring above for the rationale.
             col_types = [
                 _mysql_field_type_to_arrow(desc[1], desc[7])
                 for desc in cursor.description
@@ -307,32 +314,19 @@ class MySQLSource(DatabaseSource):
                 [pa.field(name, typ) for name, typ in zip(col_names, col_types)]
             )
 
-            batches: list[pa.RecordBatch] = []
-            while True:
-                rows = cursor.fetchmany(self.batch_size)
-                if not rows:
-                    break
-                col_data: dict[str, list] = {name: [] for name in col_names}
-                for row in rows:
-                    for i, name in enumerate(col_names):
-                        val = row[i]
-                        if isinstance(val, decimal.Decimal):
-                            val = float(val)
-                        col_data[name].append(val)
-                batch = pa.RecordBatch.from_pydict(col_data, schema=arrow_schema)
-                batches.append(batch)
-
-            cursor.close()
-
-            if not batches:
-                return pa.table(
-                    {
-                        name: pa.array([], type=typ)
-                        for name, typ in zip(col_names, col_types)
-                    }
+            try:
+                yield from fetch_batches(
+                    cursor=cursor,
+                    arrow_schema=arrow_schema,
+                    col_names=col_names,
+                    batch_size=self.batch_size,
+                    table_label=table,
+                    coerce_row=_mysql_coerce_row,
+                    heartbeat_every_rows=heartbeat_every_rows,
+                    heartbeat_every_seconds=heartbeat_every_seconds,
                 )
-
-            return pa.Table.from_batches(batches, schema=arrow_schema)
+            finally:
+                cursor.close()
         finally:
             conn.close()
 

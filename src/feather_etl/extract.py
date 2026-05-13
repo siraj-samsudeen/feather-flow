@@ -11,13 +11,46 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
+
+import pyarrow as pa
 
 from feather_etl.config import FeatherConfig, TableConfig
 from feather_etl.curation import resolve_source
 from feather_etl.destinations.duckdb import DuckDBDestination
+from feather_etl.pipeline import _setup_jsonl_logging
 from feather_etl.state import StateManager
 
 logger = logging.getLogger(__name__)
+
+
+def _iter_source_batches(
+    source,
+    source_table: str,
+    heartbeat_every_rows: int,
+    heartbeat_every_seconds: int,
+) -> Iterator[pa.RecordBatch]:
+    """Yield RecordBatches from a source. Adapts non-streaming (file) sources.
+
+    SQL sources (sqlserver/mysql/postgres) implement `extract_batches` and
+    stream + heartbeat natively. Other sources still go through `extract()`
+    and we slice the materialized table into batches so the streaming-load
+    session writes uniformly.
+    """
+    if hasattr(source, "extract_batches"):
+        yield from source.extract_batches(
+            source_table,
+            heartbeat_every_rows=heartbeat_every_rows,
+            heartbeat_every_seconds=heartbeat_every_seconds,
+        )
+        return
+
+    table = source.extract(source_table)
+    if table.num_rows == 0:
+        # Streaming-load session needs at least one batch to learn the schema.
+        yield pa.RecordBatch.from_pylist([], schema=table.schema)
+        return
+    yield from table.to_batches()
 
 
 @dataclass
@@ -47,6 +80,8 @@ def run_extract(
     state.init_state()
     dest = DuckDBDestination(path=config.destination.path)
     dest.setup_schemas()
+    _setup_jsonl_logging(working_dir)
+    extract_defaults = config.defaults.extract
 
     results: list[ExtractResult] = []
     for table in tables:
@@ -100,8 +135,24 @@ def run_extract(
             continue
 
         try:
-            data = source.extract(table.source_table)
-            rows = dest.load_full(f"bronze.{table.name}", data, run_id)
+            target = f"bronze.{table.name}"
+            with dest.streaming_full_load(target, run_id) as session:
+                for batch in _iter_source_batches(
+                    source,
+                    table.source_table,
+                    heartbeat_every_rows=extract_defaults.heartbeat_every_rows,
+                    heartbeat_every_seconds=extract_defaults.heartbeat_every_seconds,
+                ):
+                    session.append(batch)
+                rows = session.rows_loaded
+            logger.info(
+                "extract_complete",
+                extra={
+                    "table": table.source_table,
+                    "rows_loaded": rows,
+                    "status": "success",
+                },
+            )
             state.write_watermark(
                 table_name=table.name,
                 strategy=None,

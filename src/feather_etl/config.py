@@ -75,10 +75,17 @@ class DestinationConfig:
 
 
 @dataclass
+class ExtractDefaultsConfig:
+    heartbeat_every_rows: int = 100_000
+    heartbeat_every_seconds: int = 30
+
+
+@dataclass
 class DefaultsConfig:
     overlap_window_minutes: int = 2
     batch_size: int = 120_000
     row_limit: int | None = None
+    extract: ExtractDefaultsConfig = field(default_factory=ExtractDefaultsConfig)
 
 
 @dataclass
@@ -313,10 +320,15 @@ def load_config(
     )
 
     defaults_raw = raw.get("defaults", {})
+    extract_raw = defaults_raw.get("extract", {})
     defaults = DefaultsConfig(
         overlap_window_minutes=defaults_raw.get("overlap_window_minutes", 2),
         batch_size=defaults_raw.get("batch_size", 120_000),
         row_limit=defaults_raw.get("row_limit"),
+        extract=ExtractDefaultsConfig(
+            heartbeat_every_rows=extract_raw.get("heartbeat_every_rows", 100_000),
+            heartbeat_every_seconds=extract_raw.get("heartbeat_every_seconds", 30),
+        ),
     )
 
     from feather_etl.curation import load_curation_tables

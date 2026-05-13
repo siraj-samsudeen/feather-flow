@@ -37,7 +37,14 @@ class _JsonlFormatter(logging.Formatter):
             "event": record.getMessage(),
         }
         # Include extra fields if present
-        for key in ("table", "status", "rows_loaded", "error"):
+        for key in (
+            "table",
+            "status",
+            "rows_loaded",
+            "error",
+            "elapsed_s",
+            "rows_per_sec",
+        ):
             if hasattr(record, key):
                 entry[key] = getattr(record, key)
         return json_mod.dumps(entry, default=str)

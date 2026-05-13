@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import decimal
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Iterator
 
 import psycopg2
 import psycopg2.extras
@@ -12,6 +12,12 @@ import pyarrow as pa
 
 from feather_etl.sources import ChangeResult, StreamSchema
 from feather_etl.sources.database_source import DatabaseSource
+
+
+def _postgres_coerce_row(val, _col_name):
+    if isinstance(val, decimal.Decimal):
+        return float(val)
+    return val
 
 # psycopg2 cursor.description[1] is a PostgreSQL OID integer → PyArrow type
 _PSYCOPG2_TYPE_MAP: dict[int, pa.DataType] = {
@@ -239,14 +245,19 @@ class PostgresSource(DatabaseSource):
         finally:
             conn.close()
 
-    def extract(
+    def extract_batches(
         self,
         table: str,
         columns: list[str] | None = None,
         filter: str | None = None,
         watermark_column: str | None = None,
         watermark_value: str | None = None,
-    ) -> pa.Table:
+        heartbeat_every_rows: int = 100_000,
+        heartbeat_every_seconds: int = 30,
+    ) -> Iterator[pa.RecordBatch]:
+        """Stream `pa.RecordBatch` chunks from PostgreSQL with progress heartbeat."""
+        from feather_etl.sources.fetch_batches import fetch_batches
+
         if columns:
             bad = [c for c in columns if '"' in c]
             if bad:
@@ -254,52 +265,42 @@ class PostgresSource(DatabaseSource):
                     f"Postgres column names containing '\"' cannot be "
                     f"double-quoted: {bad}"
                 )
+
         conn = psycopg2.connect(self.connection_string)
-        cursor = conn.cursor()
-        col_clause = ", ".join(f'"{c}"' for c in columns) if columns else "*"
-        where = self._build_where_clause(filter, watermark_column, watermark_value)
-        query = f"SELECT {col_clause} FROM {table}{where}"
+        try:
+            cursor = conn.cursor()
+            col_clause = ", ".join(f'"{c}"' for c in columns) if columns else "*"
+            where = self._build_where_clause(filter, watermark_column, watermark_value)
+            query = f"SELECT {col_clause} FROM {table}{where}"
+            cursor.execute(query)
 
-        cursor.execute(query)
+            if cursor.description is None:
+                cursor.close()
+                return
 
-        if cursor.description is None:
-            cursor.close()
-            conn.close()
-            return pa.table({})
-
-        col_names = [desc[0] for desc in cursor.description]
-        col_types = [_psycopg2_type_to_arrow(desc[1]) for desc in cursor.description]
-        arrow_schema = pa.schema(
-            [pa.field(name, typ) for name, typ in zip(col_names, col_types)]
-        )
-
-        batches: list[pa.RecordBatch] = []
-        while True:
-            rows = cursor.fetchmany(self.batch_size)
-            if not rows:
-                break
-            col_data: dict[str, list] = {name: [] for name in col_names}
-            for row in rows:
-                for i, name in enumerate(col_names):
-                    val = row[i]
-                    if isinstance(val, decimal.Decimal):
-                        val = float(val)
-                    col_data[name].append(val)
-            batch = pa.RecordBatch.from_pydict(col_data, schema=arrow_schema)
-            batches.append(batch)
-
-        cursor.close()
-        conn.close()
-
-        if not batches:
-            return pa.table(
-                {
-                    name: pa.array([], type=typ)
-                    for name, typ in zip(col_names, col_types)
-                }
+            col_names = [desc[0] for desc in cursor.description]
+            col_types = [
+                _psycopg2_type_to_arrow(desc[1]) for desc in cursor.description
+            ]
+            arrow_schema = pa.schema(
+                [pa.field(name, typ) for name, typ in zip(col_names, col_types)]
             )
 
-        return pa.Table.from_batches(batches, schema=arrow_schema)
+            try:
+                yield from fetch_batches(
+                    cursor=cursor,
+                    arrow_schema=arrow_schema,
+                    col_names=col_names,
+                    batch_size=self.batch_size,
+                    table_label=table,
+                    coerce_row=_postgres_coerce_row,
+                    heartbeat_every_rows=heartbeat_every_rows,
+                    heartbeat_every_seconds=heartbeat_every_seconds,
+                )
+            finally:
+                cursor.close()
+        finally:
+            conn.close()
 
     def _discover_pk_columns(self, table: str) -> list[str]:
         """Discover primary key columns for a table via pg_index."""
