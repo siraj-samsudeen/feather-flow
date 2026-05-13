@@ -36,6 +36,7 @@ class TestStateInit:
             "_run_steps",
             "_dq_results",
             "_schema_snapshots",
+            "_extract_windows",
         }
         assert tables == expected
 

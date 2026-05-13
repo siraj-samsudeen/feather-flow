@@ -141,6 +141,20 @@ class StateManager:
                 )
             """)
 
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS _extract_windows (
+                    table_name VARCHAR,
+                    window_key VARCHAR,
+                    window_start TIMESTAMP,
+                    window_end TIMESTAMP,
+                    rows_loaded BIGINT,
+                    transport_used VARCHAR,
+                    committed_at TIMESTAMP,
+                    run_id VARCHAR,
+                    PRIMARY KEY (table_name, window_key)
+                )
+            """)
+
             # Check version and handle init vs upgrade vs downgrade protection
             row = con.execute(
                 "SELECT schema_version FROM _state_meta LIMIT 1"
@@ -561,5 +575,71 @@ class StateManager:
             if row is None or row[0] is None:
                 return []
             return json.loads(row[0])
+        finally:
+            con.close()
+
+    # --- Extract window commit log (#62) ---
+
+    def get_committed_windows(self, table_name: str) -> set[str]:
+        """Return the set of window_key values already committed for a table."""
+        con = self._connect()
+        try:
+            rows = con.execute(
+                "SELECT window_key FROM _extract_windows WHERE table_name = ?",
+                [table_name],
+            ).fetchall()
+            return {r[0] for r in rows}
+        finally:
+            con.close()
+
+    def record_committed_window(
+        self,
+        table_name: str,
+        window_key: str,
+        window_start: datetime | None,
+        window_end: datetime | None,
+        rows_loaded: int,
+        transport_used: str,
+        run_id: str,
+    ) -> None:
+        """Upsert a window into _extract_windows. Standalone helper opens its
+        own connection; the destination's transactional path bypasses this and
+        writes to the attached state DB directly to keep both writes in one txn."""
+        con = self._connect()
+        try:
+            con.execute(
+                "INSERT OR REPLACE INTO _extract_windows "
+                "(table_name, window_key, window_start, window_end, rows_loaded, "
+                " transport_used, committed_at, run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    table_name,
+                    window_key,
+                    window_start,
+                    window_end,
+                    rows_loaded,
+                    transport_used,
+                    datetime.now(timezone.utc),
+                    run_id,
+                ],
+            )
+        finally:
+            con.close()
+
+    def clear_windows_for_table(self, table_name: str) -> None:
+        """Delete all _extract_windows rows for a table. Used by --refresh."""
+        con = self._connect()
+        try:
+            con.execute(
+                "DELETE FROM _extract_windows WHERE table_name = ?", [table_name]
+            )
+        finally:
+            con.close()
+
+    def clear_all_windows(self) -> None:
+        """Truncate _extract_windows. Used by --refresh-all."""
+        con = self._connect()
+        try:
+            con.execute("DELETE FROM _extract_windows")
         finally:
             con.close()
