@@ -15,15 +15,13 @@ Two load-bearing scenarios anchor the suite:
 
 * **Verb equivalence** (`test_verb_equivalence_extract_plus_transform_equals_run`)
   — proves ``feather extract && feather transform`` is substitutable for
-  ``feather run``. Parametrized over ``{dev, prod, test}`` modes.
+  ``feather run``.
 """
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
-from contextlib import contextmanager
 from pathlib import Path
 
 import duckdb
@@ -50,9 +48,6 @@ from tests.helpers import (
 
 def _write_csv_config(
     project_dir: Path,
-    *,
-    mode: str | None = None,
-    yaml_mode: str | None = None,
 ) -> Path:
     """Write feather.yaml pointing at the project's CSV bronze fixture.
 
@@ -69,8 +64,6 @@ def _write_csv_config(
         ],
         "destination": {"path": str(project_dir / "feather_data.duckdb")},
     }
-    if yaml_mode is not None:
-        config["mode"] = yaml_mode
     cfg_path = project_dir / "feather.yaml"
     cfg_path.write_text(yaml.dump(config, default_flow_style=False))
     write_curation(
@@ -131,24 +124,6 @@ def _invoke(*args: str) -> "object":
     return runner.invoke(app, list(args))
 
 
-@contextmanager
-def _env(**vars: str | None):
-    """Temporarily set / unset environment variables."""
-    old: dict[str, str | None] = {k: os.environ.get(k) for k in vars}
-    try:
-        for k, v in vars.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        yield
-    finally:
-        for k, v in old.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-
 
 # ---------------------------------------------------------------------------
 # Pytest fixtures (lifecycle state only — pure helpers stay in helpers.py)
@@ -182,7 +157,7 @@ def populated_destination(project_dir: Path) -> Path:
     decoupled from ``feather extract``. Tests that specifically want the
     extract path call it themselves.
 
-    Returns the project root path.
+    Returns the project root path (cfg_path = populated_destination / "feather.yaml").
     """
     _write_csv_config(project_dir)
     _populate_bronze_directly(project_dir / "feather_data.duckdb")
@@ -286,92 +261,32 @@ def test_zero_transforms_exits_zero_and_prints_summary(project_dir: Path):
 
 
 # ---------------------------------------------------------------------------
-# 9.6 — Mode matrix (two-axis DDL rule)
+# 9.6 — DDL kind control (force_views vs default)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("mode", ["dev", "prod", "test"])
-def test_mode_matrix_two_axis_ddl_rule(populated_destination: Path, mode: str):
-    """For each mode, silver stays a VIEW, unmarked gold stays a VIEW, and
-    gold_facts (marked) becomes a TABLE only in prod."""
+def test_transform_default_materializes_gold(populated_destination: Path):
+    """Default: silver VIEW, unmarked gold VIEW, materialized gold TABLE."""
     cfg_path = populated_destination / "feather.yaml"
-    result = _invoke("transform", "--config", str(cfg_path), "--mode", mode)
+    result = _invoke("transform", "--config", str(cfg_path))
     assert result.exit_code == 0, result.output
 
     types = _table_types(populated_destination / "feather_data.duckdb")
-    assert types[("silver", "silver_orders")] == "VIEW", f"mode={mode}"
-    assert types[("gold", "gold_summary")] == "VIEW", f"mode={mode}"
-
-    expected_facts = "BASE TABLE" if mode == "prod" else "VIEW"
-    assert types[("gold", "gold_facts")] == expected_facts, (
-        f"mode={mode}: expected {expected_facts}, got {types[('gold', 'gold_facts')]}"
-    )
+    assert types[("silver", "silver_orders")] == "VIEW"
+    assert types[("gold", "gold_summary")] == "VIEW"
+    assert types[("gold", "gold_facts")] == "BASE TABLE"
 
 
-# ---------------------------------------------------------------------------
-# 9.7 — Mode-chain precedence
-# ---------------------------------------------------------------------------
-
-
-def _resolved_mode_from_facts(dest_db: Path) -> str:
-    """Infer the resolved mode from the materialization of gold_facts.
-
-    Only prod materializes the marked gold transform as a TABLE; dev/test
-    leave it as a VIEW. Returns 'prod' or 'dev_or_test' — the test asserts
-    exactly which is expected.
-    """
-    types = _table_types(dest_db)
-    return (
-        "prod" if types.get(("gold", "gold_facts")) == "BASE TABLE" else "dev_or_test"
-    )
-
-
-def test_mode_precedence_cli_beats_env_and_yaml(project_dir: Path):
-    """CLI --mode prod beats FEATHER_MODE=test and yaml mode=dev → prod wins."""
-    _write_csv_config(project_dir, yaml_mode="dev")
-    _populate_bronze_directly(project_dir / "feather_data.duckdb")
-
-    with _env(FEATHER_MODE="test"):
-        result = _invoke(
-            "transform", "--config", str(project_dir / "feather.yaml"), "--mode", "prod"
-        )
+def test_transform_force_views_all_views(populated_destination: Path):
+    """--force-views: all transforms are VIEWs including materialized gold."""
+    cfg_path = populated_destination / "feather.yaml"
+    result = _invoke("transform", "--config", str(cfg_path), "--force-views")
     assert result.exit_code == 0, result.output
-    assert _resolved_mode_from_facts(project_dir / "feather_data.duckdb") == "prod"
 
-
-def test_mode_precedence_env_beats_yaml(project_dir: Path):
-    """FEATHER_MODE=prod beats yaml mode=dev when no CLI flag."""
-    _write_csv_config(project_dir, yaml_mode="dev")
-    _populate_bronze_directly(project_dir / "feather_data.duckdb")
-
-    with _env(FEATHER_MODE="prod"):
-        result = _invoke("transform", "--config", str(project_dir / "feather.yaml"))
-    assert result.exit_code == 0, result.output
-    assert _resolved_mode_from_facts(project_dir / "feather_data.duckdb") == "prod"
-
-
-def test_mode_precedence_yaml_beats_default(project_dir: Path):
-    """yaml mode=prod is used when no CLI flag and no env."""
-    _write_csv_config(project_dir, yaml_mode="prod")
-    _populate_bronze_directly(project_dir / "feather_data.duckdb")
-
-    with _env(FEATHER_MODE=None):
-        result = _invoke("transform", "--config", str(project_dir / "feather.yaml"))
-    assert result.exit_code == 0, result.output
-    assert _resolved_mode_from_facts(project_dir / "feather_data.duckdb") == "prod"
-
-
-def test_mode_precedence_default_is_dev(project_dir: Path):
-    """No CLI, no env, no yaml field → dev (gold_facts stays a VIEW)."""
-    _write_csv_config(project_dir)  # no yaml mode
-    _populate_bronze_directly(project_dir / "feather_data.duckdb")
-
-    with _env(FEATHER_MODE=None):
-        result = _invoke("transform", "--config", str(project_dir / "feather.yaml"))
-    assert result.exit_code == 0, result.output
-    assert (
-        _resolved_mode_from_facts(project_dir / "feather_data.duckdb") == "dev_or_test"
-    )
+    types = _table_types(populated_destination / "feather_data.duckdb")
+    assert types[("silver", "silver_orders")] == "VIEW"
+    assert types[("gold", "gold_summary")] == "VIEW"
+    assert types[("gold", "gold_facts")] == "VIEW"
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +528,6 @@ def test_history_trigger_filter_after_mixed_invocations(project_dir: Path):
 
 def test_summary_output_format(populated_destination: Path):
     """Stdout shape:
-    * first line ``Mode: <mode>``
     * one per-transform line ``<schema>.<name>  <view|table>  <status>``
     * trailing summary ``<N> transforms: <K> succeeded.``
     """
@@ -621,14 +535,10 @@ def test_summary_output_format(populated_destination: Path):
         "transform",
         "--config",
         str(populated_destination / "feather.yaml"),
-        "--mode",
-        "dev",
     )
     assert result.exit_code == 0, result.output
 
     lines = [line for line in result.stdout.splitlines() if line.strip()]
-    # First non-blank line names the resolved mode.
-    assert re.match(r"^Mode: dev\b", lines[0]), f"first line: {lines[0]!r}"
 
     # Per-transform lines.
     assert any("silver.silver_orders" in line and "success" in line for line in lines)
@@ -690,46 +600,25 @@ def _content_signature(
 
 
 def _watermarked_tables(state_db: Path) -> set[str]:
-    """Return the set of table_names that have ANY watermark record.
-
-    By design, ``feather run`` writes to ``_watermarks`` while
-    ``feather extract`` writes to ``_cache_watermarks`` — they're separate
-    by intent (the cache watermarks are a dev-only artifact). For the
-    equivalence assertion we compare the UNION so the test pins
-    "post-load, both paths know about the same set of tables" without
-    over-specifying which watermark table is the source of truth.
-    """
+    """Return all table names recorded in _watermarks."""
     if not state_db.exists():
         return set()
     con = duckdb.connect(str(state_db), read_only=True)
     try:
-        names: set[str] = set()
-        for tbl in ("_watermarks", "_cache_watermarks"):
-            try:
-                rows = con.execute(f"SELECT DISTINCT table_name FROM {tbl}").fetchall()
-                names.update(r[0] for r in rows)
-            except duckdb.CatalogException:
-                pass
+        rows = con.execute("SELECT DISTINCT table_name FROM _watermarks").fetchall()
+        return {r[0] for r in rows}
+    except duckdb.CatalogException:
+        return set()
     finally:
         con.close()
-    return names
 
 
-@pytest.mark.parametrize("mode", ["dev", "test"])
-def test_verb_equivalence_extract_plus_transform_equals_run(tmp_path: Path, mode: str):
+def test_verb_equivalence_extract_plus_transform_equals_run(tmp_path: Path):
     """Path A (``feather run``) and Path B (``feather extract`` then
     ``feather transform``) produce equivalent destination state.
 
-    Parametrized over ``dev`` and ``test`` only. ``prod`` mode is excluded
-    by design: ``feather run`` in prod writes loaded tables directly into
-    ``silver.*`` and never creates a ``bronze.*`` table (see
-    ``pipeline._resolve_target``), while ``feather extract`` is a dev-only
-    verb that always writes to ``bronze.*``. The two paths are not
-    substitutable in prod — that's an intentional architecture decision
-    of the warehouse model, not a regression.
-
-    The assertion message names the mode and the diverging object on
-    failure.
+    Both paths write to bronze.* by default. feather run then runs transforms;
+    feather extract + transform does the same two-step sequence explicitly.
     """
     # Set up two independent project dirs.
     dir_a = tmp_path / "path_a"
@@ -738,21 +627,21 @@ def test_verb_equivalence_extract_plus_transform_equals_run(tmp_path: Path, mode
     dir_b.mkdir()
     copy_transform_fixture(dir_a)
     copy_transform_fixture(dir_b)
-    cfg_a = _write_csv_config(dir_a, yaml_mode=mode)
-    cfg_b = _write_csv_config(dir_b, yaml_mode=mode)
+    cfg_a = _write_csv_config(dir_a)
+    cfg_b = _write_csv_config(dir_b)
 
     # Path A: feather run.
     r_a = _invoke("run", "--config", str(cfg_a))
-    assert r_a.exit_code == 0, f"mode={mode}: feather run failed: {r_a.output}"
+    assert r_a.exit_code == 0, f"feather run failed: {r_a.output}"
 
     r_b_extract = _invoke("extract", "--config", str(cfg_b))
     assert r_b_extract.exit_code == 0, (
-        f"mode={mode}: feather extract failed: {r_b_extract.output}"
+        f"feather extract failed: {r_b_extract.output}"
     )
 
     r_b_transform = _invoke("transform", "--config", str(cfg_b))
     assert r_b_transform.exit_code == 0, (
-        f"mode={mode}: feather transform failed: {r_b_transform.output}"
+        f"feather transform failed: {r_b_transform.output}"
     )
 
     dest_a = dir_a / "feather_data.duckdb"
@@ -762,7 +651,7 @@ def test_verb_equivalence_extract_plus_transform_equals_run(tmp_path: Path, mode
     objs_a = _bronze_silver_gold_objects(dest_a)
     objs_b = _bronze_silver_gold_objects(dest_b)
     assert objs_a == objs_b, (
-        f"mode={mode}: object set diverged.\n"
+        f"object set diverged.\n"
         f"  only in A: {set(objs_a) - set(objs_b)}\n"
         f"  only in B: {set(objs_b) - set(objs_a)}\n"
         f"  type mismatches: "
@@ -774,7 +663,7 @@ def test_verb_equivalence_extract_plus_transform_equals_run(tmp_path: Path, mode
     counts_b = _row_counts(dest_b, objs_b.keys())
     for key in objs_a:
         assert counts_a[key] == counts_b[key], (
-            f"mode={mode}: row count diverged for {key}: "
+            f"row count diverged for {key}: "
             f"A={counts_a[key]}, B={counts_b[key]}"
         )
 
@@ -783,18 +672,16 @@ def test_verb_equivalence_extract_plus_transform_equals_run(tmp_path: Path, mode
     sig_b = _content_signature(dest_b, list(objs_b.keys()))
     for key in objs_a:
         assert sig_a[key] == sig_b[key], (
-            f"mode={mode}: content diverged for {key}.\n"
+            f"content diverged for {key}.\n"
             f"  A first 3 rows: {sig_a[key][:3]}\n"
             f"  B first 3 rows: {sig_b[key][:3]}"
         )
 
-    # 4. Watermarked-table set matches. See _watermarked_tables docstring
-    #    for why we compare the union of _watermarks ∪ _cache_watermarks
-    #    rather than _watermarks directly.
+    # 4. Watermarked-table set matches.
     wms_a = _watermarked_tables(dir_a / "feather_state.duckdb")
     wms_b = _watermarked_tables(dir_b / "feather_state.duckdb")
     assert wms_a == wms_b, (
-        f"mode={mode}: watermarked-table set diverged.\n  A={wms_a}\n  B={wms_b}"
+        f"watermarked-table set diverged.\n  A={wms_a}\n  B={wms_b}"
     )
 
     # 5. _runs differs only by trigger.
@@ -816,7 +703,7 @@ def test_verb_equivalence_extract_plus_transform_equals_run(tmp_path: Path, mode
     finally:
         con_a.close()
         con_b.close()
-    assert triggers_a == {"run"}, f"mode={mode}: path A triggers = {triggers_a}"
+    assert triggers_a == {"run"}, f"path A triggers = {triggers_a}"
     assert "extract" in triggers_b and "transform" in triggers_b, (
-        f"mode={mode}: path B triggers = {triggers_b}"
+        f"path B triggers = {triggers_b}"
     )

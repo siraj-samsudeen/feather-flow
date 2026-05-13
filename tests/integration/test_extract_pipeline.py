@@ -69,12 +69,12 @@ def test_extracts_all_columns_into_bronze(project):
     assert required.issubset(cols), f"Missing expected columns. Got: {sorted(cols)}"
 
 
-def test_writes_only_to_cache_watermarks(project):
-    """After run_extract, _watermarks must be empty and _cache_watermarks populated.
+def test_writes_to_unified_watermarks(project):
+    """After run_extract, _watermarks is populated with source_db set.
 
-    Note: the underlying state table is still ``_cache_watermarks`` — only the
-    verb-facing API was renamed by the feather-transform change. State schema
-    is out of scope for this rename.
+    Since schema v2, _cache_watermarks is unified into _watermarks (with a
+    source_db column). run_extract calls write_watermark directly with
+    source_db set.
 
     ``_runs`` IS written (one row per table, ``trigger='extract'``) per the
     transform-command spec — observability requirement, not a state-machine
@@ -85,15 +85,15 @@ def test_writes_only_to_cache_watermarks(project):
     run_extract(cfg, cfg.tables, project.root)
 
     con = duckdb.connect(str(project.state_db_path), read_only=True)
-    prod = con.execute("SELECT COUNT(*) FROM _watermarks").fetchone()[0]
-    cache = con.execute("SELECT COUNT(*) FROM _cache_watermarks").fetchone()[0]
+    cache = con.execute(
+        "SELECT COUNT(*) FROM _watermarks WHERE source_db IS NOT NULL"
+    ).fetchone()[0]
     runs = con.execute(
         "SELECT COUNT(*), MIN(trigger), MAX(trigger) FROM _runs"
     ).fetchone()
     con.close()
 
-    assert prod == 0, "run_extract must not write to _watermarks"
-    assert cache == 1, "run_extract must write to _cache_watermarks"
+    assert cache == 1, "run_extract must write one row to _watermarks (with source_db)"
     assert runs[0] == 1, "run_extract must write one _runs row per table"
     assert runs[1] == "extract" and runs[2] == "extract", (
         "run_extract rows must have trigger='extract'"

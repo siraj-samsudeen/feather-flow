@@ -65,7 +65,6 @@ def schema_output_path(cfg: "Source") -> Path:
 
 VALID_STRATEGIES = {"full", "incremental", "append"}
 VALID_SCHEMA_PREFIXES = {"bronze", "silver", "gold"}
-VALID_MODES = {"dev", "prod", "test"}
 _SQL_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _UNRESOLVED_ENV_RE = re.compile(r"\$\{([^}]+)\}")
 
@@ -118,7 +117,6 @@ class FeatherConfig:
     tables: list[TableConfig]
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
     config_dir: Path = field(default_factory=lambda: Path("."))
-    mode: str = "dev"
     alerts: AlertsConfig | None = None
 
 
@@ -187,7 +185,7 @@ def _validate(config: FeatherConfig) -> list[str]:
                     f"Table '{table.name}': target_table '{table.target_table}' "
                     f"must include a schema prefix (e.g., bronze.{table.target_table})"
                 )
-        # empty target_table is valid — mode derives it at runtime
+        # empty target_table is valid — defaults to bronze.<name> at runtime
 
         if table.strategy == "incremental" and not table.timestamp_column:
             errors.append(
@@ -236,13 +234,9 @@ def _check_unresolved_env_vars(data: dict | list | str, path: str = "") -> list[
 
 def load_config(
     config_path: Path,
-    mode_override: str | None = None,
     validate: bool = True,
 ) -> FeatherConfig:
-    """Load and validate feather.yaml, raising ValueError on invalid config.
-
-    Mode resolution: mode_override (CLI) > FEATHER_MODE env var > YAML mode > default "dev".
-    """
+    """Load and validate feather.yaml, raising ValueError on invalid config."""
     config_dir = config_path.parent.resolve()
 
     # Auto-load .env from the config directory so users don't have to
@@ -260,6 +254,15 @@ def load_config(
     env_errors = _check_unresolved_env_vars(raw)
     if env_errors:
         raise ValueError("; ".join(env_errors))
+
+    if "mode" in raw:
+        import warnings
+        warnings.warn(
+            "'mode:' key in feather.yaml is ignored and will be removed. "
+            "Remove it from your config.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     if "source" in raw and "sources" not in raw:
         raise ValueError(
@@ -316,24 +319,6 @@ def load_config(
         row_limit=defaults_raw.get("row_limit"),
     )
 
-    # Mode resolution: CLI > env var > YAML > default "dev"
-    yaml_mode = raw.get("mode", "dev")
-    env_mode = os.environ.get("FEATHER_MODE")
-    if mode_override:
-        mode = mode_override
-        mode_source = "--mode flag"
-    elif env_mode:
-        mode = env_mode
-        mode_source = "FEATHER_MODE env var"
-    else:
-        mode = yaml_mode
-        mode_source = "YAML config"
-
-    if mode not in VALID_MODES:
-        raise ValueError(
-            f"Invalid mode '{mode}' (from {mode_source}). Valid: {sorted(VALID_MODES)}"
-        )
-
     from feather_etl.curation import load_curation_tables
 
     try:
@@ -374,7 +359,6 @@ def load_config(
         tables=tables,
         defaults=defaults,
         config_dir=config_dir,
-        mode=mode,
         alerts=alerts,
     )
 

@@ -1,8 +1,6 @@
-"""`feather extract` command — dev-only local bronze pull.
+"""`feather extract` command — local bronze pull.
 
 Renamed from `feather cache` per the feather-transform change.
-The internal `_cache_watermarks` state table is unchanged; only the
-CLI verb and its module path were renamed.
 """
 
 from __future__ import annotations
@@ -33,8 +31,12 @@ def extract(
         "--refresh",
         help="Force re-pull even if source is unchanged.",
     ),
+    limit: int | None = typer.Option(
+        None, "--limit",
+        help="Override defaults.row_limit for this invocation.",
+    ),
 ) -> None:
-    """Pull curated source tables into bronze (dev-only)."""
+    """Pull curated source tables into bronze."""
     from feather_etl.extract import run_extract
 
     curation_path = Path(config).resolve().parent / "discovery" / "curation.json"
@@ -47,14 +49,8 @@ def extract(
         raise typer.Exit(code=2)
 
     cfg = _load_and_validate(config)
-
-    if cfg.mode == "prod":
-        typer.echo(
-            "feather extract is a dev-only tool. "
-            "Remove 'mode: prod' or unset FEATHER_MODE=prod to use it.",
-            err=True,
-        )
-        raise typer.Exit(code=2)
+    if limit is not None:
+        cfg.defaults.row_limit = limit
 
     # Parse selectors
     requested_tables = (
@@ -102,8 +98,6 @@ def extract(
     groups: dict[str, list] = defaultdict(list)
     for r in results:
         groups[r.source_db].append(r)
-
-    typer.echo("Mode: dev (extract)")
     total_success = 0
     total_cached = 0
     total_failed = 0

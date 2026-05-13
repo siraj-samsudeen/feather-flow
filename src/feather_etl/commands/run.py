@@ -16,17 +16,24 @@ from feather_etl.output import emit
 def run(
     ctx: typer.Context,
     config: Path = typer.Option("feather.yaml", "--config"),
-    mode: str | None = typer.Option(None, "--mode"),
     table: str | None = typer.Option(None, "--table", help="Extract only this table."),
+    force_views: bool = typer.Option(
+        False, "--force-views",
+        help="Create all transforms as VIEWs, skipping gold materialization.",
+    ),
+    limit: int | None = typer.Option(
+        None, "--limit",
+        help="Override defaults.row_limit for this invocation.",
+    ),
 ) -> None:
     """Extract all configured tables (or a single table with --table)."""
     from feather_etl.pipeline import run_all
 
-    cfg = _load_and_validate(config, mode_override=mode)
-    if not _is_json(ctx):
-        typer.echo(f"Mode: {cfg.mode}")
+    cfg = _load_and_validate(config)
+    if limit is not None:
+        cfg.defaults.row_limit = limit
     try:
-        results = run_all(cfg, config, table_filter=table)
+        results = run_all(cfg, config, table_filter=table, force_views=force_views)
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1)

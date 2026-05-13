@@ -36,7 +36,6 @@ def validate(
                 "tables_count": report.tables_count,
                 "source_type": cfg.sources[0].type,
                 "destination": str(cfg.destination.path),
-                "mode": cfg.mode,
                 "source_connected": report.all_ok,
             },
             json_mode=True,

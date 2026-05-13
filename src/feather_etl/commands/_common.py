@@ -18,7 +18,6 @@ def _is_json(ctx: typer.Context) -> bool:
 
 def _load_and_validate(
     config_path: Path,
-    mode_override: str | None = None,
     discover_mode: bool = False,
 ):
     """Load config, validate, write validation JSON. Raises on failure.
@@ -31,7 +30,6 @@ def _load_and_validate(
     try:
         cfg = load_config(
             config_path,
-            mode_override=mode_override,
             validate=not discover_mode,
         )
         write_validation_json(config_path, cfg)

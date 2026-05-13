@@ -18,21 +18,17 @@ class SetupResult:
     transform_results: list[TransformResult] | None  # None if no transforms found
 
 
-def run_setup(cfg: FeatherConfig) -> SetupResult:
+def run_setup(cfg: FeatherConfig, force_views: bool = False) -> SetupResult:
     """Initialize state DB, create destination schemas, execute transforms.
 
     Returns a ``SetupResult`` describing what was created. Transforms are
-    executed if any are discovered in ``<config_dir>/transforms/``. In prod
-    mode, only gold transforms are executed; in dev mode, all transforms are
-    executed with ``force_views=True`` (matches the prior CLI behavior).
+    executed if any are discovered in ``<config_dir>/transforms/``. Pass
+    ``force_views=True`` to create all transforms as VIEWs, skipping gold
+    materialization.
     """
     from feather_etl.destinations.duckdb import DuckDBDestination
     from feather_etl.state import StateManager
-    from feather_etl.transforms import (
-        build_execution_order,
-        discover_transforms,
-        execute_transforms,
-    )
+    from feather_etl.transforms import discover_transforms
 
     state_path = cfg.config_dir / "feather_state.duckdb"
     sm = StateManager(state_path)
@@ -44,16 +40,8 @@ def run_setup(cfg: FeatherConfig) -> SetupResult:
     transform_results: list[TransformResult] | None = None
     transforms = discover_transforms(cfg.config_dir)
     if transforms:
-        ordered = build_execution_order(transforms)
-        con = dest._connect()
-        try:
-            if cfg.mode == "prod":
-                gold_only = [t for t in ordered if t.schema == "gold"]
-                transform_results = execute_transforms(con, gold_only)
-            else:
-                transform_results = execute_transforms(con, ordered, force_views=True)
-        finally:
-            con.close()
+        from feather_etl.transforms import run_transforms
+        transform_results = run_transforms(cfg, force_views=force_views)
 
     return SetupResult(
         state_db_path=state_path,

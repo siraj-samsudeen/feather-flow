@@ -297,24 +297,3 @@ def test_full_onboarding_flow(project, cli, monkeypatch):
     # Verify feather_validation.json was written
     assert vj_path.exists()
 
-
-# ---------------------------------------------------------------------------
-# --mode prod CLI flag (migrated from tests/test_mode.py — Wave C Task C0)
-# ---------------------------------------------------------------------------
-
-
-def test_cli_mode_flag_via_runner(project, cli):
-    """--mode prod CLI flag exercises the actual Typer CLI path."""
-    src_db = project.copy_fixture("sample_erp.duckdb")
-    project.write_config(
-        sources=[{"type": "duckdb", "name": "erp", "path": str(src_db)}],
-        destination={"path": str(project.data_db_path)},
-        mode="dev",
-    )
-    project.write_curation([("erp", "erp.customers", "customers")])
-
-    result = cli("run", "--mode", "prod")
-    assert result.exit_code == 0
-
-    silver_count = project.query("SELECT COUNT(*) FROM silver.erp_customers")[0][0]
-    assert silver_count > 0

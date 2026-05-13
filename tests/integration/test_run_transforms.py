@@ -36,7 +36,7 @@ def _prepare_dest_with_bronze(dest_db: Path) -> None:
     con.close()
 
 
-def _write_config(tmp_path: Path, dest_db: Path, mode: str) -> Path:
+def _write_config(tmp_path: Path, dest_db: Path) -> Path:
     """Minimal config file with a single source (unused by run_transforms)."""
     source_db = tmp_path / "source.duckdb"
     # Touch a source file so config validation passes; run_transforms never
@@ -45,7 +45,6 @@ def _write_config(tmp_path: Path, dest_db: Path, mode: str) -> Path:
     config = {
         "sources": [{"type": "duckdb", "name": "src", "path": str(source_db)}],
         "destination": {"path": str(dest_db)},
-        "mode": mode,
     }
     config_file = tmp_path / "feather.yaml"
     config_file.write_text(yaml.dump(config))
@@ -80,14 +79,14 @@ def test_run_transforms_returns_list_of_transform_result(tmp_path: Path):
     dest_db = tmp_path / "feather_data.duckdb"
     _prepare_dest_with_bronze(dest_db)
     _write_two_transforms(tmp_path)
-    config_file = _write_config(tmp_path, dest_db, mode="dev")
+    config_file = _write_config(tmp_path, dest_db)
 
     cfg = load_config(config_file)
-    results = run_transforms(cfg)
+    results = run_transforms(cfg, force_views=True)
 
     assert isinstance(results, list)
     assert all(isinstance(r, TransformResult) for r in results)
-    # Dev: one result per transform (no rebuild pass).
+    # force_views=True: one result per transform (no rebuild pass).
     assert len(results) == 2
     by_name = {(r.schema, r.name): r for r in results}
     assert ("silver", "emp_clean") in by_name
@@ -96,15 +95,15 @@ def test_run_transforms_returns_list_of_transform_result(tmp_path: Path):
         assert r.status == "success", f"{r.schema}.{r.name}: {r.error}"
 
 
-def test_run_transforms_dev_mode_creates_views(tmp_path: Path):
-    """Dev mode: gold + silver both land as VIEWs in the destination."""
+def test_run_transforms_force_views_creates_views(tmp_path: Path):
+    """force_views=True: gold + silver both land as VIEWs in the destination."""
     dest_db = tmp_path / "feather_data.duckdb"
     _prepare_dest_with_bronze(dest_db)
     _write_two_transforms(tmp_path)
-    config_file = _write_config(tmp_path, dest_db, mode="dev")
+    config_file = _write_config(tmp_path, dest_db)
 
     cfg = load_config(config_file)
-    run_transforms(cfg)
+    run_transforms(cfg, force_views=True)
 
     con = duckdb.connect(str(dest_db))
     silver_type = con.execute(
@@ -121,17 +120,17 @@ def test_run_transforms_dev_mode_creates_views(tmp_path: Path):
     assert gold_type == ("VIEW",)
 
 
-def test_run_transforms_prod_mode_materializes_gold(tmp_path: Path):
-    """Prod mode: silver stays a VIEW; materialized gold becomes a TABLE."""
+def test_run_transforms_default_materializes_gold(tmp_path: Path):
+    """Default (force_views=False): silver stays a VIEW; materialized gold becomes a TABLE."""
     dest_db = tmp_path / "feather_data.duckdb"
     _prepare_dest_with_bronze(dest_db)
     _write_two_transforms(tmp_path)
-    config_file = _write_config(tmp_path, dest_db, mode="prod")
+    config_file = _write_config(tmp_path, dest_db)
 
     cfg = load_config(config_file)
-    results = run_transforms(cfg)
+    results = run_transforms(cfg, force_views=False)
 
-    # Prod path returns execute_transforms + rebuild_materialized_gold results.
+    # Default path returns execute_transforms + rebuild_materialized_gold results.
     # The single materialized gold transform contributes once from each pass:
     # 2 transforms (initial) + 1 gold rebuild = 3 results.
     assert len(results) == 3
@@ -152,10 +151,10 @@ def test_run_transforms_prod_mode_materializes_gold(tmp_path: Path):
     assert gold_type == ("BASE TABLE",)
 
 
-def test_run_transforms_prod_mode_no_materialized_gold_skips_rebuild_log(
+def test_run_transforms_default_no_materialized_gold_skips_rebuild_log(
     tmp_path: Path,
 ):
-    """Prod mode + silver-only transforms (no materialized gold) → the
+    """Default + silver-only transforms (no materialized gold) → the
     ``if count`` log branch in ``run_transforms`` takes the False side.
     """
     dest_db = tmp_path / "feather_data.duckdb"
@@ -166,7 +165,7 @@ def test_run_transforms_prod_mode_no_materialized_gold_skips_rebuild_log(
         "emp_clean",
         "SELECT id, name AS employee_name FROM bronze.src_employees",
     )
-    config_file = _write_config(tmp_path, dest_db, mode="prod")
+    config_file = _write_config(tmp_path, dest_db)
 
     cfg = load_config(config_file)
     results = run_transforms(cfg)
@@ -180,7 +179,7 @@ def test_run_transforms_no_transforms_returns_empty_list(tmp_path: Path):
     """No transforms directory: helper returns []."""
     dest_db = tmp_path / "feather_data.duckdb"
     duckdb.connect(str(dest_db)).close()
-    config_file = _write_config(tmp_path, dest_db, mode="dev")
+    config_file = _write_config(tmp_path, dest_db)
 
     cfg = load_config(config_file)
     results = run_transforms(cfg)

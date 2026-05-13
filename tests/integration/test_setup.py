@@ -74,36 +74,31 @@ def _write_gold_transform(project, *, materialized: bool) -> None:
     )
 
 
-def test_prod_mode_executes_only_gold_transforms(project):
-    """In prod mode, run_setup only runs the gold-schema transforms up-front;
-    silver is built later during extract. (setup.py:51-52)
-
-    This asserts the *selection* behaviour: the results list contains gold
-    entries and no silver entries. Whether each gold actually succeeds
-    depends on its dependencies, which are not part of run_setup's contract
-    in prod mode.
-    """
+def test_default_setup_materializes_gold_when_marked(project):
+    """By default, run_setup runs all transforms; gold marked materialized:true
+    becomes a TABLE. Both silver and gold are executed."""
     import duckdb
 
     config_path = _setup_project(project)
     _write_silver_transform(project)
     _write_gold_transform(project, materialized=True)
-    cfg = load_config(config_path, mode_override="prod")
+    cfg = load_config(config_path)
 
-    # Pre-create silver.orders_clean so the gold transform can succeed.
-    # (prod setup deliberately skips silver; the runtime extract step
-    # normally handles it.)
+    # Pre-seed bronze so silver and gold transforms can succeed.
     con = duckdb.connect(str(cfg.destination.path))
     con.execute("CREATE SCHEMA IF NOT EXISTS bronze")
-    con.execute("CREATE SCHEMA IF NOT EXISTS silver")
-    con.execute("CREATE TABLE bronze.orders (id INTEGER)")
-    con.execute("CREATE VIEW silver.orders_clean AS SELECT * FROM bronze.orders")
+    con.execute("CREATE TABLE bronze.orders (id INTEGER, product VARCHAR)")
     con.close()
 
     result = run_setup(cfg)
 
     assert result.transform_results is not None
-    # Only gold transforms are executed in prod mode — no silver entries
     schemas = {t.schema for t in result.transform_results}
-    assert schemas == {"gold"}
-    assert all(t.status == "success" for t in result.transform_results)
+    # Both silver and gold are executed
+    assert "silver" in schemas
+    assert "gold" in schemas
+    gold_results = [t for t in result.transform_results if t.schema == "gold" and t.name == "orders_summary"]
+    assert gold_results, "expected a gold orders_summary result"
+    # Materialized gold ends up as a TABLE (the last result for that name reflects final state)
+    gold_types = {t.type for t in gold_results}
+    assert "table" in gold_types

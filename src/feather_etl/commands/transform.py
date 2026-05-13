@@ -3,13 +3,11 @@
 Calls ``transforms.run_transforms(config)`` directly. No source connection is
 ever opened — the no-source-touch invariant is what makes this verb cheap.
 
-Mode interaction: inherits the same resolution chain as ``feather run``
-(``--mode`` flag, ``FEATHER_MODE`` env, ``feather.yaml`` ``mode:``,
-default ``dev``). The resolved mode drives only DDL kind here: silver is
-always a VIEW; gold marked ``-- materialized: true`` becomes a TABLE in
-prod and a VIEW in dev/test; unmarked gold is always a VIEW.
+DDL kind: silver is always a VIEW; gold marked ``-- materialized: true``
+becomes a TABLE by default; ``--force-views`` overrides that and creates
+everything as VIEWs. Unmarked gold is always a VIEW.
 
-Summary output: in prod, ``run_transforms`` returns one ``TransformResult``
+Summary output: ``run_transforms`` returns one ``TransformResult``
 per execute_transforms pass plus one per rebuild_materialized_gold pass —
 so a materialized gold transform produces two entries (the initial VIEW
 and the rebuilt TABLE). The summary de-duplicates by ``(schema, name)``,
@@ -30,10 +28,9 @@ from feather_etl.commands._common import _load_and_validate
 
 def transform(
     config: Path = typer.Option("feather.yaml", "--config"),
-    mode: str | None = typer.Option(
-        None,
-        "--mode",
-        help="Override mode (dev/prod/test). Precedence: flag > FEATHER_MODE env > yaml > dev.",
+    force_views: bool = typer.Option(
+        False, "--force-views",
+        help="Create all transforms as VIEWs, skipping gold materialization.",
     ),
 ) -> None:
     """Re-run silver and gold transforms against the existing destination."""
@@ -48,7 +45,7 @@ def transform(
     # 1. Load config. Spec: exit 2 if invalid. _load_and_validate raises
     #    typer.Exit(code=1) on its own; trap and re-raise with code=2.
     try:
-        cfg = _load_and_validate(config, mode_override=mode)
+        cfg = _load_and_validate(config)
     except typer.Exit:
         raise typer.Exit(code=2)
     except Exception as e:  # noqa: BLE001 - presenting the error is the goal
@@ -69,7 +66,6 @@ def transform(
 
         # 4. Zero-transforms case.
         if not transforms_list:
-            typer.echo(f"Mode: {cfg.mode}")
             typer.echo("0 transforms.")
             return
 
@@ -91,7 +87,7 @@ def transform(
         con.close()
 
     # 6. Execute transforms. run_transforms opens/closes its own connection.
-    results = run_transforms(cfg)
+    results = run_transforms(cfg, force_views=force_views)
 
     # 7. Write _runs rows. trigger='transform' for every entry.
     state_path = cfg.config_dir / "feather_state.duckdb"
@@ -100,8 +96,8 @@ def transform(
     now = datetime.now(timezone.utc)
 
     # De-duplicate by (schema, name) for both _runs writes and summary
-    # rendering. In prod mode, run_transforms returns N + M results where
-    # M = materialized gold count; keep the last entry per key so the
+    # rendering. When force_views=False, run_transforms returns N + M results
+    # where M = materialized gold count; keep the last entry per key so the
     # table-vs-view kind reflects final destination state.
     deduped: dict[tuple[str, str], object] = {}
     for r in results:
@@ -124,7 +120,6 @@ def transform(
         )
 
     # 8. Summary output.
-    typer.echo(f"Mode: {cfg.mode}")
     for r in final_results:
         status = "success" if r.status == "success" else "failure"
         typer.echo(f"  {r.schema}.{r.name}  {r.type}  {status}")

@@ -62,13 +62,9 @@ def _setup_jsonl_logging(config_dir: Path) -> None:
     feather_logger.setLevel(logging.INFO)
 
 
-def _resolve_target(table: TableConfig, mode: str) -> str:
-    """Derive effective target from mode unless explicitly set."""
-    if table.target_table:
-        return table.target_table
-    if mode == "prod":
-        return f"silver.{table.name}"
-    return f"bronze.{table.name}"
+def _resolve_target(table: TableConfig) -> str:
+    """Return explicit target_table or default to bronze.<name>."""
+    return table.target_table or f"bronze.{table.name}"
 
 
 def _apply_column_map(data: pa.Table, column_map: dict[str, str]) -> pa.Table:
@@ -209,14 +205,10 @@ def run_table(
 
     if source is None:
         source = config.sources[0]
-    effective_target = _resolve_target(table, config.mode)
+    effective_target = _resolve_target(table)
 
-    # Prod mode with column_map: extract only mapped columns
-    prod_columns = (
-        list(table.column_map.keys())
-        if config.mode == "prod" and table.column_map
-        else None
-    )
+    # column_map present: extract only mapped columns
+    prod_columns = list(table.column_map.keys()) if table.column_map else None
 
     # Change detection: check if source file changed since last run
     wm = state.read_watermark(table.name)
@@ -323,9 +315,9 @@ def run_table(
                 watermark_column=table.timestamp_column,
                 watermark_value=effective_wm_str,
             )
-            if config.mode == "test" and config.defaults.row_limit:
+            if config.defaults.row_limit:
                 data = data.slice(0, config.defaults.row_limit)
-            if config.mode == "prod" and table.column_map:
+            if table.column_map:
                 data = _apply_column_map(data, table.column_map)
             data = _apply_dedup(data, table)
 
@@ -378,9 +370,9 @@ def run_table(
             data = source.extract(
                 table.source_table, columns=prod_columns, filter=table.filter
             )
-            if config.mode == "test" and config.defaults.row_limit:
+            if config.defaults.row_limit:
                 data = data.slice(0, config.defaults.row_limit)
-            if config.mode == "prod" and table.column_map:
+            if table.column_map:
                 data = _apply_column_map(data, table.column_map)
             data = _apply_dedup(data, table)
             rows_loaded = dest.load_append(effective_target, data, run_id)
@@ -392,9 +384,9 @@ def run_table(
                 )
             else:
                 data = source.extract(table.source_table, columns=prod_columns)
-            if config.mode == "test" and config.defaults.row_limit:
+            if config.defaults.row_limit:
                 data = data.slice(0, config.defaults.row_limit)
-            if config.mode == "prod" and table.column_map:
+            if table.column_map:
                 data = _apply_column_map(data, table.column_map)
             data = _apply_dedup(data, table)
             rows_loaded = dest.load_full(effective_target, data, run_id)
@@ -533,6 +525,7 @@ def run_all(
     config: FeatherConfig,
     config_path: Path,
     table_filter: str | None = None,
+    force_views: bool = False,
 ) -> list[RunResult]:
     """Run all configured tables (or a single table if table_filter is set).
 
@@ -566,15 +559,14 @@ def run_all(
         result = run_table(config, table, working_dir, source=table_source)
         results.append(result)
 
-    # Post-extraction transforms (mode-dependent)
-    # Include skipped tables: transforms must run even when extraction is
-    # skipped (e.g. mode switch dev→prod needs to rematerialise gold).
+    # Post-extraction transforms
+    # Include skipped tables: transforms must run even when extraction is skipped.
     any_ok = any(r.status in ("success", "skipped") for r in results)
     if any_ok:
         try:
             from feather_etl.transforms import run_transforms
 
-            run_transforms(config)
+            run_transforms(config, force_views=force_views)
         except Exception as e:
             logger.error("Transform rebuild failed: %s", e)
 
