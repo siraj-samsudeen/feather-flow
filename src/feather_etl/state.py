@@ -602,9 +602,14 @@ class StateManager:
         transport_used: str,
         run_id: str,
     ) -> None:
-        """Upsert a window into _extract_windows. Standalone helper opens its
-        own connection; the destination's transactional path bypasses this and
-        writes to the attached state DB directly to keep both writes in one txn."""
+        """Upsert a window into _extract_windows.
+
+        Standard write path: called by the destination after a successful bronze
+        commit, and by tests or other direct callers. Opens its own connection,
+        so the state write is a separate commit from the bronze write. This is
+        safe because the destination's DELETE-before-INSERT contract makes each
+        window idempotent — a crash between the two commits simply re-runs the
+        window on the next attempt with identical results."""
         con = self._connect()
         try:
             con.execute(

@@ -175,3 +175,16 @@ def test_rejects_unqualified_table_name(tmp_path: Path) -> None:
         dest.load_batched_append(
             "foo", spec, iter(()), "r1", state, "pyodbc",
         )
+
+
+def test_zero_batches_with_no_prior_table_raises(tmp_path: Path) -> None:
+    """Truly empty iterator and bronze table doesn't exist → RuntimeError, no state written."""
+    dest, state = _make_dest_and_state(tmp_path)
+    spec = WindowSpec("all", "1=1", None, None)
+
+    with pytest.raises(RuntimeError, match="cannot infer schema"):
+        dest.load_batched_append(
+            "bronze.foo", spec, iter(()), "r1", state, "pyodbc",
+        )
+
+    assert state.get_committed_windows("bronze.foo") == set()
