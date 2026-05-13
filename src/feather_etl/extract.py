@@ -18,6 +18,7 @@ import pyarrow as pa
 from feather_etl.config import FeatherConfig, TableConfig
 from feather_etl.curation import resolve_source
 from feather_etl.destinations.duckdb import DuckDBDestination
+from feather_etl.extract_windows import plan_windows
 from feather_etl.pipeline import _setup_jsonl_logging
 from feather_etl.state import StateManager
 
@@ -136,15 +137,30 @@ def run_extract(
 
         try:
             target = f"bronze.{table.name}"
-            with dest.streaming_full_load(target, run_id) as session:
-                for batch in _iter_source_batches(
-                    source,
-                    table.source_table,
-                    heartbeat_every_rows=extract_defaults.heartbeat_every_rows,
-                    heartbeat_every_seconds=extract_defaults.heartbeat_every_seconds,
-                ):
-                    session.append(batch)
-                rows = session.rows_loaded
+            if refresh:
+                state.clear_windows_for_table(target)
+
+            committed = state.get_committed_windows(target)
+            windows = [w for w in plan_windows(table) if w.window_key not in committed]
+
+            rows = 0
+            transport_used = getattr(source, "transport_name", "pyodbc")
+            for window in windows:
+                result = dest.load_batched_append(
+                    table=target,
+                    window=window,
+                    batches=_iter_source_batches(
+                        source,
+                        table.source_table,
+                        heartbeat_every_rows=extract_defaults.heartbeat_every_rows,
+                        heartbeat_every_seconds=extract_defaults.heartbeat_every_seconds,
+                    ),
+                    run_id=run_id,
+                    state=state,
+                    transport_used=transport_used,
+                )
+                rows += result.rows_loaded
+
             logger.info(
                 "extract_complete",
                 extra={
