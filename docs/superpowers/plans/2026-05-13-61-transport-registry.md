@@ -4,7 +4,8 @@
 
 **Goal:** Decouple the SQL Server source from `pyodbc`. Introduce a per-source `Transport` abstraction with three implementations — `pyodbc`, `arrow-odbc` (new default), `connectorx` (opt-in for parallel reads) — selected from `feather.yaml` without source-class forks.
 
-**Spec source:** GitHub issue [#61](https://github.com/siraj-samsudeen/feather-etl/issues/61). The issue body is the authoritative requirements doc; this plan is the implementation decomposition.
+**Design spec:** [`docs/superpowers/specs/2026-05-13-transport-registry-design.md`](../specs/2026-05-13-transport-registry-design.md) — the authoritative requirements + design doc. This plan is the implementation decomposition.
+**Issue:** [#61](https://github.com/siraj-samsudeen/feather-etl/issues/61).
 
 **Position in stack:** #62 → **#61** → #63.
 `#62` (batched-append + `_extract_windows`) is already on `main`. `extract.py` already reads `getattr(source, "transport_name", ...)` for `_extract_windows.transport_used` — once this plan lands, that label flips from `"SqlServerSource"` to the real transport name with no further wiring. `#63` (pre-flight planner) will read `source.transport.supports_partition_on()` to gate its `large` bucket recommendation.
