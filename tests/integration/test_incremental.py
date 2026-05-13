@@ -345,15 +345,14 @@ def test_incremental_second_run_zero_new_rows_success_path(project):
     assert total == 5
 
 
-def test_incremental_test_mode_applies_row_limit(project):
-    """On the subsequent-incremental path, test mode + defaults.row_limit
-    slices the extracted data. (pipeline.py:322)"""
+def test_incremental_row_limit_applies(project):
+    """On the subsequent-incremental path, defaults.row_limit slices the
+    extracted data unconditionally. (pipeline.py)"""
     src_path = _make_source_db(project.root)
 
     project.write_config(
         sources=[{"type": "duckdb", "name": "src", "path": str(src_path)}],
         destination={"path": str(project.data_db_path)},
-        mode="test",
         defaults={"overlap_window_minutes": 0, "row_limit": 1},
     )
     write_curation(
@@ -391,15 +390,14 @@ def test_incremental_test_mode_applies_row_limit(project):
     assert result.rows_loaded == 1
 
 
-def test_incremental_prod_mode_applies_column_map(project):
-    """On the subsequent-incremental path, prod mode + column_map renames
-    the extracted columns. (pipeline.py:324)"""
+def test_incremental_column_map_applies(project):
+    """On the subsequent-incremental path, column_map renames the extracted
+    columns unconditionally when set. (pipeline.py)"""
     src_path = _make_source_db(project.root)
 
     project.write_config(
         sources=[{"type": "duckdb", "name": "src", "path": str(src_path)}],
         destination={"path": str(project.data_db_path)},
-        mode="prod",
         defaults={"overlap_window_minutes": 0},
     )
     write_curation(
@@ -422,6 +420,8 @@ def test_incremental_prod_mode_applies_column_map(project):
         "amount": "order_amount",
         "modified_at": "modified_at",
     }
+    # explicit target_table so data lands in silver with renamed columns
+    cfg.tables[0].target_table = "silver.src_orders"
 
     run_table(cfg, cfg.tables[0], project.root)
 
@@ -434,7 +434,7 @@ def test_incremental_prod_mode_applies_column_map(project):
     assert result.status == "success"
     assert result.rows_loaded >= 1
 
-    # Prod mode lands in silver with renamed columns per column_map
+    # data lands in silver with renamed columns per column_map
     cols = [
         r[0]
         for r in project.query(
@@ -447,15 +447,14 @@ def test_incremental_prod_mode_applies_column_map(project):
     assert "amount" not in cols  # renamed
 
 
-def test_append_test_mode_applies_row_limit(project):
-    """Append strategy + test mode + row_limit slices the loaded batch.
-    (pipeline.py:376)"""
+def test_append_row_limit_applies(project):
+    """Append strategy + row_limit slices the loaded batch unconditionally.
+    (pipeline.py)"""
     src_path = _make_source_db(project.root)
 
     project.write_config(
         sources=[{"type": "duckdb", "name": "src", "path": str(src_path)}],
         destination={"path": str(project.data_db_path)},
-        mode="test",
         defaults={"row_limit": 2},
     )
     write_curation(
@@ -477,15 +476,14 @@ def test_append_test_mode_applies_row_limit(project):
     assert result.rows_loaded == 2  # row_limit applied
 
 
-def test_append_prod_mode_applies_column_map(project):
-    """Append strategy + prod mode + column_map renames columns.
-    (pipeline.py:378)"""
+def test_append_column_map_applies(project):
+    """Append strategy + column_map renames columns unconditionally when set.
+    (pipeline.py)"""
     src_path = _make_source_db(project.root)
 
     project.write_config(
         sources=[{"type": "duckdb", "name": "src", "path": str(src_path)}],
         destination={"path": str(project.data_db_path)},
-        mode="prod",
     )
     write_curation(
         project.root,
@@ -504,6 +502,8 @@ def test_append_prod_mode_applies_column_map(project):
         "order_id": "order_id",
         "amount": "order_amount",
     }
+    # explicit target_table so data lands in silver with renamed columns
+    cfg.tables[0].target_table = "silver.src_orders"
 
     result = run_table(cfg, cfg.tables[0], project.root)
     assert result.status == "success"

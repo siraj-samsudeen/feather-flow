@@ -2,7 +2,6 @@
 
 Scenarios here exercise `feather extract` across:
 - basic extraction to bronze
-- prod-mode hard-error guard
 - missing curation.json pre-check
 - --table / --source selectors
 - --refresh flag (force re-extract)
@@ -50,33 +49,6 @@ def test_cold_run_extracts_tables(project, cli):
     result = cli("extract")
     assert result.exit_code == 0
     assert "extracted" in result.output
-
-
-# ---------------------------------------------------------------------------
-# Prod-mode hard-error guard
-# ---------------------------------------------------------------------------
-
-
-def test_rejects_yaml_mode_prod(project, cli):
-    project.copy_fixture("client.duckdb")
-    project.write_config(
-        mode="prod",
-        sources=[{"type": "duckdb", "name": "icube", "path": "./client.duckdb"}],
-        destination={"path": "./feather_data.duckdb"},
-    )
-    project.write_curation([("icube", "icube.InventoryGroup", "inv")])
-
-    result = cli("extract")
-    assert result.exit_code == 2
-    assert "dev-only" in result.output
-
-
-def test_rejects_feather_mode_env_prod(project, cli, monkeypatch):
-    monkeypatch.setenv("FEATHER_MODE", "prod")
-    _setup_single_table(project)
-    result = cli("extract")
-    assert result.exit_code == 2
-    assert "dev-only" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +179,6 @@ def test_grouped_output_with_failure_expansion(project, cli):
     assert result.exit_code == 1
     out = result.output
 
-    assert "Mode: dev (extract)" in out
     # Grouped: a line starts with "icube" (source_db), has counts
     assert "icube" in out
     # Summary: totals across groups

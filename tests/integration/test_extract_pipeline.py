@@ -73,8 +73,8 @@ def test_writes_to_unified_watermarks(project):
     """After run_extract, _watermarks is populated with source_db set.
 
     Since schema v2, _cache_watermarks is unified into _watermarks (with a
-    source_db column). run_extract writes via write_cache_watermark which
-    delegates to write_watermark.
+    source_db column). run_extract calls write_watermark directly with
+    source_db set.
 
     ``_runs`` IS written (one row per table, ``trigger='extract'``) per the
     transform-command spec — observability requirement, not a state-machine

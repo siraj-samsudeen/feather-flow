@@ -181,35 +181,6 @@ class StateManager:
         finally:
             con.close()
 
-    def read_cache_watermark(self, table_name: str) -> dict[str, object] | None:
-        """Deprecated — delegates to read_watermark."""
-        return self.read_watermark(table_name)
-
-    def write_cache_watermark(
-        self,
-        table_name: str,
-        source_db: str,
-        last_run_at: datetime,
-        last_file_mtime: float | None = None,
-        last_file_hash: str | None = None,
-        last_checksum: str | None = None,
-        last_row_count: int | None = None,
-    ) -> None:
-        """Deprecated — delegates to write_watermark with source_db."""
-        # Normalize checksum to str at the boundary — SQL Server's
-        # CHECKSUM_AGG returns int, Postgres md5() returns a hex string.
-        checksum_str = str(last_checksum) if last_checksum is not None else None
-        self.write_watermark(
-            table_name=table_name,
-            strategy=None,
-            last_run_at=last_run_at,
-            last_file_mtime=last_file_mtime,
-            last_file_hash=last_file_hash,
-            last_checksum=checksum_str,
-            last_row_count=last_row_count,
-            source_db=source_db,
-        )
-
     _SENTINEL = object()
 
     def write_watermark(

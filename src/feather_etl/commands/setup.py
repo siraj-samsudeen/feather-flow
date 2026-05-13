@@ -17,14 +17,15 @@ from feather_etl.setup import run_setup
 def setup(
     ctx: typer.Context,
     config: Path = typer.Option("feather.yaml", "--config"),
-    mode: str | None = typer.Option(None, "--mode"),
+    force_views: bool = typer.Option(
+        False, "--force-views",
+        help="Create all transforms as VIEWs, skipping gold materialization.",
+    ),
 ) -> None:
     """Preview and initialize state DB and schemas. Optional — feather run creates them automatically."""
-    cfg = _load_and_validate(config, mode_override=mode)
-    if not _is_json(ctx):
-        typer.echo(f"Mode: {cfg.mode}")
+    cfg = _load_and_validate(config)
 
-    result = run_setup(cfg)
+    result = run_setup(cfg, force_views=force_views)
 
     if not _is_json(ctx):
         typer.echo(f"State DB initialized: {result.state_db_path}")

@@ -70,7 +70,9 @@ def test_run_rebuilds_materialized_gold(tmp_path: Path):
     con.close()
 
 
-def test_run_mode_switch_rematerializes_gold(tmp_path: Path):
+def test_force_views_then_default_rematerializes_gold(tmp_path: Path):
+    """Toggling force_views: first run with force_views=True creates VIEW,
+    second run with default (force_views=False) promotes it to BASE TABLE."""
     source_db = tmp_path / "source.duckdb"
     con = duckdb.connect(str(source_db))
     con.execute("CREATE SCHEMA IF NOT EXISTS erp")
@@ -82,7 +84,6 @@ def test_run_mode_switch_rematerializes_gold(tmp_path: Path):
     config = {
         "sources": [{"type": "duckdb", "name": "src", "path": str(source_db)}],
         "destination": {"path": str(dest_db)},
-        "mode": "dev",
     }
     config_file = tmp_path / "feather.yaml"
     config_file.write_text(yaml.dump(config))
@@ -107,31 +108,31 @@ def test_run_mode_switch_rematerializes_gold(tmp_path: Path):
         ),
     )
 
-    cfg_dev = load_config(config_file)
-    results1 = run_all(cfg_dev, config_file)
+    # First run with force_views=True: gold stays a VIEW
+    cfg = load_config(config_file)
+    results1 = run_all(cfg, config_file, force_views=True)
     assert any(r.status == "success" for r in results1)
 
     con = duckdb.connect(str(dest_db))
-    gold_type_dev = con.execute(
+    gold_type_force_views = con.execute(
         "SELECT table_type FROM information_schema.tables "
         "WHERE table_schema='gold' AND table_name='emp_snapshot'"
     ).fetchone()[0]
     con.close()
-    assert gold_type_dev == "VIEW"
+    assert gold_type_force_views == "VIEW"
 
-    config["mode"] = "prod"
-    config_file.write_text(yaml.dump(config))
-    cfg_prod = load_config(config_file)
-    results2 = run_all(cfg_prod, config_file)
-    assert all(r.status == "skipped" for r in results2)
+    # Second run with default (force_views=False): gold materializes as TABLE
+    cfg2 = load_config(config_file)
+    results2 = run_all(cfg2, config_file, force_views=False)
+    assert all(r.status in ("success", "skipped") for r in results2)
 
     con = duckdb.connect(str(dest_db))
-    gold_type_prod = con.execute(
+    gold_type_default = con.execute(
         "SELECT table_type FROM information_schema.tables "
         "WHERE table_schema='gold' AND table_name='emp_snapshot'"
     ).fetchone()[0]
     con.close()
-    assert gold_type_prod == "BASE TABLE"
+    assert gold_type_default == "BASE TABLE"
 
 
 def test_run_no_rebuild_when_all_skipped(tmp_path: Path):

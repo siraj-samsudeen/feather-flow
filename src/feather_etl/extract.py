@@ -1,4 +1,4 @@
-"""`feather extract` orchestrator — dev-only bronze pull, isolated state.
+"""`feather extract` orchestrator — bronze pull, isolated state.
 
 Renamed from `feather_etl.cache` (verb `feather cache`) per the
 feather-transform change. The local-snapshot state is written to
@@ -77,7 +77,7 @@ def run_extract(
             )
             continue
 
-        wm = state.read_cache_watermark(table.name)
+        wm = state.read_watermark(table.name)
         change = source.detect_changes(table.source_table, last_state=wm)
 
         if not change.changed and not refresh:
@@ -102,14 +102,15 @@ def run_extract(
         try:
             data = source.extract(table.source_table)
             rows = dest.load_full(f"bronze.{table.name}", data, run_id)
-            state.write_cache_watermark(
+            state.write_watermark(
                 table_name=table.name,
-                source_db=source_db,
+                strategy=None,
                 last_run_at=now,
                 last_file_mtime=change.metadata.get("file_mtime"),
                 last_file_hash=change.metadata.get("file_hash"),
                 last_checksum=change.metadata.get("checksum"),
                 last_row_count=change.metadata.get("row_count"),
+                source_db=source_db,
             )
             ended_at = datetime.now(timezone.utc)
             state.record_run(

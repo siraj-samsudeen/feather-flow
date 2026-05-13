@@ -431,15 +431,15 @@ class TestRuns:
         assert status[0]["rows_loaded"] == 100
 
 
-class TestCacheWatermarks:
-    """Cache-scoped watermark methods — fully isolated from _watermarks."""
+class TestWatermarkRoundtrip:
+    """write_watermark / read_watermark round-trip — replaces the removed cache_watermark tests."""
 
     def test_read_returns_none_when_absent(self, tmp_path: Path):
         from feather_etl.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
-        assert sm.read_cache_watermark("nonexistent") is None
+        assert sm.read_watermark("nonexistent") is None
 
     def test_write_then_read_roundtrip(self, tmp_path: Path):
         from datetime import datetime, timezone
@@ -448,8 +448,9 @@ class TestCacheWatermarks:
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
         now = datetime.now(timezone.utc)
-        sm.write_cache_watermark(
+        sm.write_watermark(
             table_name="afans_sales",
+            strategy=None,
             source_db="afans",
             last_run_at=now,
             last_file_mtime=1234567890.5,
@@ -457,7 +458,7 @@ class TestCacheWatermarks:
             last_checksum="abc123",
             last_row_count=42,
         )
-        row = sm.read_cache_watermark("afans_sales")
+        row = sm.read_watermark("afans_sales")
         assert row is not None
         assert row["table_name"] == "afans_sales"
         assert row["source_db"] == "afans"
@@ -475,19 +476,21 @@ class TestCacheWatermarks:
         t1 = datetime(2026, 4, 1, tzinfo=timezone.utc)
         t2 = datetime(2026, 4, 2, tzinfo=timezone.utc)
 
-        sm.write_cache_watermark(
+        sm.write_watermark(
             table_name="t",
+            strategy=None,
             source_db="db",
             last_run_at=t1,
             last_file_hash="old",
         )
-        sm.write_cache_watermark(
+        sm.write_watermark(
             table_name="t",
+            strategy=None,
             source_db="db",
             last_run_at=t2,
             last_file_hash="new",
         )
-        row = sm.read_cache_watermark("t")
+        row = sm.read_watermark("t")
         assert row["last_file_hash"] == "new"
         # Only one row
         import duckdb
@@ -499,35 +502,35 @@ class TestCacheWatermarks:
         con.close()
         assert count == 1
 
-    def test_write_cache_watermark_writes_to_watermarks(self, tmp_path: Path):
-        """write_cache_watermark delegates to write_watermark (unified table)."""
+    def test_write_watermark_stores_source_db(self, tmp_path: Path):
+        """write_watermark stores source_db in the unified _watermarks table."""
         from datetime import datetime, timezone
         from feather_etl.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
-        sm.write_cache_watermark(
-            "orders", source_db="erp", last_run_at=datetime.now(timezone.utc)
+        sm.write_watermark(
+            "orders", strategy=None, source_db="erp", last_run_at=datetime.now(timezone.utc)
         )
         row = sm.read_watermark("orders")
         assert row is not None
         assert row["source_db"] == "erp"
 
-    def test_write_cache_watermark_normalizes_int_checksum_to_str(self, tmp_path: Path):
-        """Pins the documented boundary: int checksums (SQL Server CHECKSUM_AGG)
-        are stored as str so the VARCHAR column accepts them uniformly with
-        Postgres md5() hex strings."""
+    def test_write_watermark_normalizes_int_checksum_to_str(self, tmp_path: Path):
+        """Int checksums (SQL Server CHECKSUM_AGG) are stored as str so the
+        VARCHAR column accepts them uniformly with Postgres md5() hex strings."""
         from datetime import datetime, timezone
         from feather_etl.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
-        sm.write_cache_watermark(
+        sm.write_watermark(
             table_name="mssql_like",
+            strategy=None,
             source_db="db",
             last_run_at=datetime.now(timezone.utc),
-            last_checksum=12345,  # int, as SQL Server would emit
+            last_checksum=str(12345),  # normalise int -> str at call site, as extract.py does
         )
-        row = sm.read_cache_watermark("mssql_like")
+        row = sm.read_watermark("mssql_like")
         assert row["last_checksum"] == "12345"
         assert isinstance(row["last_checksum"], str)

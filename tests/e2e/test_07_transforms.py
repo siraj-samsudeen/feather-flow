@@ -59,8 +59,8 @@ def test_setup_creates_transforms(project, cli):
     assert "1 silver view(s)" in result.output
 
 
-def test_setup_reports_gold_views_in_dev_mode(project, cli):
-    """In dev mode, all transforms are views — including gold. The command
+def test_setup_reports_gold_views_with_force_views(project, cli):
+    """With --force-views, all transforms are views — including gold. The command
     reports gold view count separately from silver view count. (commands/setup.py:58)"""
     source_db = project.root / "source.duckdb"
     con = duckdb.connect(str(source_db))
@@ -79,7 +79,6 @@ def test_setup_reports_gold_views_in_dev_mode(project, cli):
     project.write_config(
         sources=[{"type": "duckdb", "name": "src", "path": str(source_db)}],
         destination={"path": str(project.data_db_path)},
-        mode="dev",
     )
     project.write_curation([("src", "erp.employees", "employees")])
 
@@ -96,14 +95,14 @@ def test_setup_reports_gold_views_in_dev_mode(project, cli):
         "SELECT COUNT(*) AS n FROM silver.emp_clean",
     )
 
-    result = cli("setup")
+    result = cli("setup", "--force-views")
     assert result.exit_code == 0
     assert "1 silver view(s)" in result.output
     assert "1 gold view(s)" in result.output
 
 
-def test_setup_reports_gold_tables_in_prod_mode(project, cli):
-    """In prod mode, gold transforms marked ``materialized: true`` are
+def test_setup_reports_gold_tables_by_default(project, cli):
+    """By default, gold transforms marked ``materialized: true`` are
     rebuilt as tables. The output reports them separately as 'gold table(s)'.
     (commands/setup.py:63)"""
     source_db = project.root / "source.duckdb"
@@ -115,20 +114,13 @@ def test_setup_reports_gold_tables_in_prod_mode(project, cli):
 
     con = duckdb.connect(str(project.data_db_path))
     con.execute("CREATE SCHEMA IF NOT EXISTS bronze")
-    con.execute("CREATE SCHEMA IF NOT EXISTS silver")
     con.execute("CREATE TABLE bronze.src_employees (id INT, name VARCHAR)")
     con.execute("INSERT INTO bronze.src_employees VALUES (1, 'A'), (2, 'B')")
-    # prod skips silver in run_setup — hand-roll it so gold can depend on it
-    con.execute(
-        "CREATE VIEW silver.emp_clean AS "
-        "SELECT id, name AS employee_name FROM bronze.src_employees"
-    )
     con.close()
 
     project.write_config(
         sources=[{"type": "duckdb", "name": "src", "path": str(source_db)}],
         destination={"path": str(project.data_db_path)},
-        mode="prod",
     )
     project.write_curation([("src", "erp.employees", "employees")])
 
