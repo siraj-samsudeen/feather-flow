@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import duckdb
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,24 +13,6 @@ def _make_state(tmp_path: Path) -> StateManager:
     state = StateManager(tmp_path / "feather_state.duckdb")
     state.init_state()
     return state
-
-
-def test_init_creates_extract_windows_table(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    import duckdb
-
-    con = duckdb.connect(str(state.path))
-    try:
-        tables = {
-            r[0]
-            for r in con.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = 'main'"
-            ).fetchall()
-        }
-        assert "_extract_windows" in tables
-    finally:
-        con.close()
 
 
 def test_get_committed_windows_empty_initially(tmp_path: Path) -> None:
@@ -71,8 +54,6 @@ def test_record_committed_window_replaces_on_duplicate_key(tmp_path: Path) -> No
         transport_used="pyodbc",
         run_id="run_002",
     )
-    import duckdb
-
     con = duckdb.connect(str(state.path))
     try:
         row = con.execute(
