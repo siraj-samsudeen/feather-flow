@@ -60,7 +60,7 @@ def test_run_rebuilds_materialized_gold(tmp_path: Path):
     )
 
     cfg = load_config(config_file)
-    results = run_all(cfg, config_file)
+    results = run_all(cfg)
 
     assert any(r.status == "success" for r in results)
 
@@ -110,7 +110,7 @@ def test_force_views_then_default_rematerializes_gold(tmp_path: Path):
 
     # First run with force_views=True: gold stays a VIEW
     cfg = load_config(config_file)
-    results1 = run_all(cfg, config_file, force_views=True)
+    results1 = run_all(cfg, force_views=True)
     assert any(r.status == "success" for r in results1)
 
     con = duckdb.connect(str(dest_db))
@@ -123,7 +123,7 @@ def test_force_views_then_default_rematerializes_gold(tmp_path: Path):
 
     # Second run with default (force_views=False): gold materializes as TABLE
     cfg2 = load_config(config_file)
-    results2 = run_all(cfg2, config_file, force_views=False)
+    results2 = run_all(cfg2, force_views=False)
     assert all(r.status in ("success", "skipped") for r in results2)
 
     con = duckdb.connect(str(dest_db))
@@ -159,10 +159,10 @@ def test_run_no_rebuild_when_all_skipped(tmp_path: Path):
 
     cfg = load_config(config_file)
 
-    results1 = run_all(cfg, config_file)
+    results1 = run_all(cfg)
     assert any(r.status == "success" for r in results1)
 
-    results2 = run_all(cfg, config_file)
+    results2 = run_all(cfg)
     assert all(r.status == "skipped" for r in results2)
 
     con = duckdb.connect(str(dest_db))
@@ -217,7 +217,7 @@ def test_run_all_transform_rebuild_failure_is_caught_and_logged(
     monkeypatch.setattr(transforms_mod, "discover_transforms", _boom)
 
     with caplog.at_level(logging.ERROR, logger="feather_etl.pipeline"):
-        results = run_all(cfg, config_file)
+        results = run_all(cfg)
 
     # Extract results are returned despite the failed transforms block.
     assert len(results) == 1
@@ -268,7 +268,7 @@ def test_run_auto_infers_silver_to_gold_dep(tmp_path: Path):
     )
 
     cfg = load_config(config_file)
-    results = run_all(cfg, config_file)
+    results = run_all(cfg)
 
     # run_all returns extraction RunResults, not transform-level results;
     # success of the inferred-dep ordering is proven by the gold rows

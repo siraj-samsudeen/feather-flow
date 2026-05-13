@@ -72,7 +72,7 @@ def test_append_second_run_appends_on_change(tmp_path: Path):
 
     cfg = load_config(config_path)
 
-    results1 = run_all(cfg, config_path)
+    results1 = run_all(cfg)
     assert all(r.status == "success" for r in results1)
 
     time.sleep(0.05)
@@ -83,7 +83,7 @@ def test_append_second_run_appends_on_change(tmp_path: Path):
     con.close()
 
     cfg2 = load_config(config_path)
-    results2 = run_all(cfg2, config_path)
+    results2 = run_all(cfg2)
     assert all(r.status == "success" for r in results2)
 
     dest_con = duckdb.connect(str(tmp_path / "feather_data.duckdb"), read_only=True)
@@ -101,10 +101,10 @@ def test_append_unchanged_source_skips(tmp_path: Path):
     config_path = _make_config(tmp_path, source_db)
 
     cfg = load_config(config_path)
-    run_all(cfg, config_path)
+    run_all(cfg)
 
     cfg2 = load_config(config_path)
-    results2 = run_all(cfg2, config_path)
+    results2 = run_all(cfg2)
     assert all(r.status == "skipped" for r in results2)
 
     dest_con = duckdb.connect(str(tmp_path / "feather_data.duckdb"), read_only=True)

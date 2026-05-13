@@ -143,7 +143,7 @@ class TestSampleErpFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        results = run_all(cfg, config)
+        results = run_all(cfg)
         assert all(r.status == "success" for r in results)
         assert {r.table_name for r in results} == {
             "src_orders",
@@ -156,7 +156,7 @@ class TestSampleErpFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         assert con.execute("SELECT COUNT(*) FROM bronze.src_orders").fetchone()[0] == 5
@@ -174,7 +174,7 @@ class TestSampleErpFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         row = con.execute(
@@ -189,7 +189,7 @@ class TestSampleErpFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         cols = {
@@ -209,7 +209,7 @@ class TestSampleErpFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         bronze_cols = {
@@ -236,8 +236,8 @@ class TestSampleErpFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        run_all(cfg, config)
-        run_all(cfg, config)
+        run_all(cfg)
+        run_all(cfg)
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         assert con.execute("SELECT COUNT(*) FROM bronze.src_orders").fetchone()[0] == 5
@@ -248,7 +248,7 @@ class TestSampleErpFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         state_path = config.parent / "feather_state.duckdb"
         assert state_path.exists()
@@ -286,7 +286,7 @@ class TestClientFixtureEdgeCases:
             [make_curation_entry("src", "icube.SALESINVOICEMASTER", "sim")],
         )
         cfg = load_config(config)
-        results = run_all(cfg, config)
+        results = run_all(cfg)
         assert results[0].status == "success"
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
@@ -311,7 +311,7 @@ class TestClientFixtureEdgeCases:
             [make_curation_entry("src", "icube.INVITEM", "invitem")],
         )
         cfg = load_config(config)
-        results = run_all(cfg, config)
+        results = run_all(cfg)
         assert results[0].status == "success"
         assert results[0].rows_loaded == 1058
 
@@ -335,7 +335,7 @@ class TestClientFixtureEdgeCases:
             ],
         )
         cfg = load_config(config)
-        results = run_all(cfg, config)
+        results = run_all(cfg)
 
         assert all(r.status == "success" for r in results), [
             (r.table_name, r.error_message) for r in results if r.status != "success"
@@ -387,7 +387,7 @@ class TestErrorIsolation:
             ],
         )
         cfg = load_config(config)
-        results = run_all(cfg, config)
+        results = run_all(cfg)
 
         good = next(r for r in results if r.table_name == "src_good")
         bad = next(r for r in results if r.table_name == "src_bad")
@@ -407,7 +407,7 @@ class TestErrorIsolation:
             [make_curation_entry("src", "erp.NOSUCH", "bad")],
         )
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         state_path = project.state_db_path
         con = duckdb.connect(str(state_path), read_only=True)
@@ -436,7 +436,7 @@ class TestErrorIsolation:
             ],
         )
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         assert con.execute("SELECT COUNT(*) FROM bronze.src_good").fetchone()[0] == 5
@@ -574,7 +574,7 @@ class TestPipelineReturnsOnFailure:
             [make_curation_entry("src", "erp.NOSUCH", "bad")],
         )
         cfg = load_config(config)
-        results = run_all(cfg, config)
+        results = run_all(cfg)
         assert len(results) == 1
         assert results[0].status == "failure"
 
@@ -608,7 +608,7 @@ class TestKnownBugs:
             ],
         )
         cfg = load_config(config)
-        results = run_all(cfg, config)
+        results = run_all(cfg)
         assert results[0].status == "success"
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         count = con.execute("SELECT COUNT(*) FROM bronze.src_orders").fetchone()[0]
@@ -640,7 +640,7 @@ class TestCsvFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        results = run_all(cfg, config)
+        results = run_all(cfg)
         assert all(r.status == "success" for r in results)
         assert {r.table_name for r in results} == {
             "csvs_orders",
@@ -653,7 +653,7 @@ class TestCsvFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         assert con.execute("SELECT COUNT(*) FROM bronze.csvs_orders").fetchone()[0] == 5
@@ -670,7 +670,7 @@ class TestCsvFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         row = con.execute(
@@ -685,7 +685,7 @@ class TestCsvFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         cols = {
@@ -724,7 +724,7 @@ class TestSqliteFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        results = run_all(cfg, config)
+        results = run_all(cfg)
         assert all(r.status == "success" for r in results)
         assert {r.table_name for r in results} == {
             "sqlitedb_orders",
@@ -737,7 +737,7 @@ class TestSqliteFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         assert (
@@ -759,7 +759,7 @@ class TestSqliteFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         row = con.execute(
@@ -774,7 +774,7 @@ class TestSqliteFullPipeline:
         from feather_etl.pipeline import run_all
 
         cfg = load_config(config)
-        run_all(cfg, config)
+        run_all(cfg)
 
         con = duckdb.connect(str(cfg.destination.path), read_only=True)
         cols = {

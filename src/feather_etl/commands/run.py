@@ -33,7 +33,7 @@ def run(
     if limit is not None:
         cfg.defaults.row_limit = limit
     try:
-        results = run_all(cfg, config, table_filter=table, force_views=force_views)
+        results = run_all(cfg, table_filter=table, force_views=force_views)
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1)

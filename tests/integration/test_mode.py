@@ -46,7 +46,7 @@ def _run_pipeline(
         cfg.tables[0].column_map = column_map
     if target_table is not None:
         cfg.tables[0].target_table = target_table
-    results = run_all(cfg, config_path)
+    results = run_all(cfg)
     return cfg, results, dest_path
 
 
@@ -74,7 +74,7 @@ def _run_with_transforms(tmp_path: Path, force_views: bool = False) -> Path:
     write_curation(tmp_path, [make_curation_entry("erp", "erp.customers", "customers")])
     cfg = load_config(config_path)
     cfg.tables[0].target_table = "bronze.erp_customers"
-    run_all(cfg, config_path, force_views=force_views)
+    run_all(cfg, force_views=force_views)
     return dest_path
 
 

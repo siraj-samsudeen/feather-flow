@@ -139,7 +139,7 @@ def test_other_tables_continue_when_one_fails(tmp_path: Path):
     )
 
     cfg = load_config(config_file)
-    results = run_all(cfg, config_file)
+    results = run_all(cfg)
 
     statuses = {r.table_name: r.status for r in results}
     assert statuses["icube_inventory_group"] == "success"

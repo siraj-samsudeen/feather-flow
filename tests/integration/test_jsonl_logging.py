@@ -33,7 +33,7 @@ def test_feather_log_jsonl_created(tmp_path: Path):
     )
     cfg = load_config(config_file)
 
-    run_all(cfg, config_file)
+    run_all(cfg)
 
     log_path = tmp_path / "feather_log.jsonl"
     assert log_path.exists()
@@ -57,7 +57,7 @@ def test_each_line_is_valid_json(tmp_path: Path):
     )
     cfg = load_config(config_file)
 
-    run_all(cfg, config_file)
+    run_all(cfg)
 
     log_path = tmp_path / "feather_log.jsonl"
     lines = log_path.read_text().strip().split("\n")
@@ -87,11 +87,11 @@ def test_log_is_append_only(tmp_path: Path):
     )
     cfg = load_config(config_file)
 
-    run_all(cfg, config_file)
+    run_all(cfg)
     log_path = tmp_path / "feather_log.jsonl"
     lines_after_first = len(log_path.read_text().strip().split("\n"))
 
-    run_all(cfg, config_file)
+    run_all(cfg)
     lines_after_second = len(log_path.read_text().strip().split("\n"))
 
     assert lines_after_second > lines_after_first

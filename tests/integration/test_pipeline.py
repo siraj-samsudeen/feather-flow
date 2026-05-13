@@ -74,7 +74,7 @@ def test_runs_all_tables(project):
     _setup_project(project)
     cfg = load_config(project.config_path)
 
-    results = run_all(cfg, project.config_path)
+    results = run_all(cfg)
 
     assert len(results) == 2
     assert all(r.status == "success" for r in results)
@@ -86,7 +86,7 @@ def test_failed_table_doesnt_stop_others(project):
     # Point one table to nonexistent source table
     cfg.tables[0].source_table = "icube.NONEXISTENT"
 
-    results = run_all(cfg, project.config_path)
+    results = run_all(cfg)
 
     statuses = {r.table_name: r.status for r in results}
     assert statuses["icube_inventory_group"] == "failure"
@@ -101,7 +101,7 @@ def test_run_all_does_not_write_validation_json(project):
     vj_path = project.config_path.parent / "feather_validation.json"
     vj_path.unlink(missing_ok=True)
 
-    run_all(cfg, project.config_path)
+    run_all(cfg)
 
     assert not vj_path.exists()
 
@@ -135,8 +135,8 @@ def test_second_run_skips_unchanged(project):
     _setup_project(project)
     cfg = load_config(project.config_path)
 
-    run_all(cfg, project.config_path)
-    results2 = run_all(cfg, project.config_path)
+    run_all(cfg)
+    results2 = run_all(cfg)
 
     assert all(r.status == "skipped" for r in results2)
 
@@ -146,7 +146,7 @@ def test_modified_source_reextracts(project):
     _setup_project(project)
     cfg = load_config(project.config_path)
 
-    run_all(cfg, project.config_path)
+    run_all(cfg)
 
     time.sleep(0.05)
     source_db = project.root / "client.duckdb"
@@ -156,7 +156,7 @@ def test_modified_source_reextracts(project):
     )
     con.close()
 
-    results2 = run_all(cfg, project.config_path)
+    results2 = run_all(cfg)
     assert all(r.status == "success" for r in results2)
 
 
@@ -165,12 +165,12 @@ def test_touch_source_skips(project):
     _setup_project(project)
     cfg = load_config(project.config_path)
 
-    run_all(cfg, project.config_path)
+    run_all(cfg)
 
     time.sleep(0.05)
     os.utime(project.root / "client.duckdb", None)
 
-    results2 = run_all(cfg, project.config_path)
+    results2 = run_all(cfg)
     assert all(r.status == "skipped" for r in results2)
 
 
@@ -179,8 +179,8 @@ def test_skipped_run_recorded_in_state(project):
     _setup_project(project)
     cfg = load_config(project.config_path)
 
-    run_all(cfg, project.config_path)
-    run_all(cfg, project.config_path)
+    run_all(cfg)
+    run_all(cfg)
 
     sm = StateManager(project.state_db_path)
     status = sm.get_status()

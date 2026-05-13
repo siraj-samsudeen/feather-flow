@@ -523,7 +523,6 @@ def run_table(
 
 def run_all(
     config: FeatherConfig,
-    config_path: Path,
     table_filter: str | None = None,
     force_views: bool = False,
 ) -> list[RunResult]:
