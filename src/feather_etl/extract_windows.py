@@ -20,6 +20,13 @@ class WindowSpec:
     `window_predicate` is interpolated directly into a DELETE statement on
     the bronze table — it MUST be safe SQL composed by the planner, never
     raw user input. The single-window case uses `1=1` (delete everything).
+
+    Today the planner does not push any per-window filter into the source
+    fetch — every window re-fetches the whole source table and relies on
+    DELETE-WHERE-predicate for window isolation. Issue #63 will likely
+    extend either this contract (adding a source-filter field) or the
+    planner's calling convention to push the predicate into the source's
+    extract call.
     """
 
     window_key: str
@@ -30,12 +37,14 @@ class WindowSpec:
 
 @dataclass
 class WindowResult:
-    """Per-window outcome returned by destination.load_batched_append."""
+    """Per-window outcome returned by destination.load_batched_append.
+
+    Only constructed for committed windows. Failures raise the underlying
+    exception from within load_batched_append after a transaction rollback.
+    """
 
     window_key: str
     rows_loaded: int
-    committed: bool
-    error: str | None = None
 
 
 def plan_windows(table: TableConfig) -> list[WindowSpec]:

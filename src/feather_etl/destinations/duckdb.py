@@ -189,7 +189,6 @@ class DuckDBDestination:
         return WindowResult(
             window_key=window.window_key,
             rows_loaded=rows_loaded,
-            committed=True,
         )
 
     def load_append(self, table: str, data: pa.Table, run_id: str) -> int:

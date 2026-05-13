@@ -61,7 +61,6 @@ def test_first_window_creates_table_and_inserts(tmp_path: Path) -> None:
         transport_used="pyodbc",
     )
     assert result.rows_loaded == 2
-    assert result.committed is True
     assert _all_rows(dest, "bronze.foo") == [(1, "a"), (2, "b")]
     assert state.get_committed_windows("bronze.foo") == {"all"}
 
@@ -166,7 +165,6 @@ def test_empty_iterator_records_zero_row_window(tmp_path: Path) -> None:
         "pyodbc",
     )
     assert result.rows_loaded == 0
-    assert result.committed is True
     assert state.get_committed_windows("bronze.foo") == {"empty-day"}
 
 
