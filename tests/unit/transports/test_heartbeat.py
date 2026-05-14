@@ -20,7 +20,7 @@ def _drain(it: Iterator[pa.RecordBatch]) -> int:
     return sum(b.num_rows for b in it)
 
 
-def test_passthrough_yields_all_batches(caplog: pytest.LogCaptureFixture) -> None:
+def test_passthrough_yields_all_batches() -> None:
     out = _emit_heartbeats(
         iter([_batch(5), _batch(7)]),
         table_label="t",
