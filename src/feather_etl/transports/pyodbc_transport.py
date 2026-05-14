@@ -72,26 +72,27 @@ class PyodbcTransport:
         con = pyodbc.connect(connection_string)
         try:
             cursor = con.cursor()
-            cursor.execute("SET NOCOUNT ON")
-            cursor.execute(query)
+            try:
+                cursor.execute("SET NOCOUNT ON")
+                cursor.execute(query)
 
-            if cursor.description is None:
+                if cursor.description is None:
+                    return
+
+                col_names = [d[0] for d in cursor.description]
+                col_types = [_pyodbc_type_to_arrow(d[1]) for d in cursor.description]
+                schema = pa.schema(
+                    [pa.field(n, t) for n, t in zip(col_names, col_types)]
+                )
+
+                yield from _emit_heartbeats(
+                    self._iter_cursor(cursor, schema, col_names, batch_size),
+                    table_label=table_label,
+                    heartbeat_every_rows=heartbeat_every_rows,
+                    heartbeat_every_seconds=heartbeat_every_seconds,
+                )
+            finally:
                 cursor.close()
-                return
-
-            col_names = [d[0] for d in cursor.description]
-            col_types = [_pyodbc_type_to_arrow(d[1]) for d in cursor.description]
-            schema = pa.schema(
-                [pa.field(n, t) for n, t in zip(col_names, col_types)]
-            )
-
-            yield from _emit_heartbeats(
-                self._iter_cursor(cursor, schema, col_names, batch_size),
-                table_label=table_label,
-                heartbeat_every_rows=heartbeat_every_rows,
-                heartbeat_every_seconds=heartbeat_every_seconds,
-            )
-            cursor.close()
         finally:
             con.close()
 

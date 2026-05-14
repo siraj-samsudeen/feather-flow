@@ -61,6 +61,28 @@ def test_stream_batches_yields_record_batches(mock_pyodbc: MagicMock) -> None:
 
 
 @patch("feather_etl.transports.pyodbc_transport.pyodbc")
+def test_multi_batch_fetch_yields_one_record_batch_per_chunk(
+    mock_pyodbc: MagicMock,
+) -> None:
+    """The normal production workload is N>1 populated fetchmany returns;
+    confirm the while-loop yields one RecordBatch per non-empty chunk."""
+    cursor = MagicMock()
+    cursor.description = [("id", int, None, None, None, None, None)]
+    cursor.fetchmany.side_effect = [[(1,)], [(2,)], [(3,), (4,)], []]
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    mock_pyodbc.connect.return_value = conn
+
+    batches = list(
+        PyodbcTransport().stream_batches(
+            FAKE_CONN, "SELECT id FROM t", batch_size=2, table_label="t"
+        )
+    )
+
+    assert [b.column("id").to_pylist() for b in batches] == [[1], [2], [3, 4]]
+
+
+@patch("feather_etl.transports.pyodbc_transport.pyodbc")
 def test_decimal_and_uuid_are_coerced(mock_pyodbc: MagicMock) -> None:
     import decimal
     import uuid
