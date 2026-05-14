@@ -26,6 +26,7 @@ dependencies = [
     "pyyaml>=6.0",
     "typer>=0.9",
     "pyodbc>=5.0",
+    "arrow-odbc>=8.0",
     "psycopg2-binary>=2.9",
     "python-dotenv>=1.0",
     "pytz",  # not imported directly, but DuckDB needs it for timestamp→Python conversion
