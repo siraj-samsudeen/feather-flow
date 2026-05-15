@@ -26,7 +26,10 @@ def test_stream_batches_passes_through_arrow_batches(mock_reader: MagicMock) -> 
         pa.RecordBatch.from_pylist([{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]),
         pa.RecordBatch.from_pylist([{"id": 3, "name": "c"}]),
     ]
-    mock_reader.return_value = iter(canned)
+    fake_reader = MagicMock()
+    fake_reader.__iter__.return_value = iter(canned)
+    fake_reader.schema = canned[0].schema
+    mock_reader.return_value = fake_reader
 
     out = list(
         ArrowOdbcTransport().stream_batches(
@@ -43,16 +46,24 @@ def test_stream_batches_passes_through_arrow_batches(mock_reader: MagicMock) -> 
     assert kwargs["connection_string"] == "DRIVER={ODBC Driver 18};SERVER=x"
     # arrow-odbc 10.4.0 uses the keyword `batch_size`.
     assert kwargs["batch_size"] == 100
+    assert kwargs["fetch_concurrently"] is False
 
 
 @patch("feather_etl.transports.arrow_odbc_transport.read_arrow_batches_from_odbc")
-def test_empty_result_yields_no_batches(mock_reader: MagicMock) -> None:
-    mock_reader.return_value = iter([])
-    assert (
-        list(
-            ArrowOdbcTransport().stream_batches(
-                "X", "SELECT 1 WHERE 0=1", batch_size=10, table_label="empty"
-            )
+def test_empty_result_yields_one_schema_only_batch(mock_reader: MagicMock) -> None:
+    """Match PyodbcTransport's contract: even an empty result set yields
+    one zero-row batch carrying the schema, so destinations can CREATE
+    TABLE from the first batch."""
+    fake_reader = MagicMock()
+    fake_reader.__iter__.return_value = iter([])
+    fake_reader.schema = pa.schema([("id", pa.int64()), ("name", pa.string())])
+    mock_reader.return_value = fake_reader
+
+    out = list(
+        ArrowOdbcTransport().stream_batches(
+            "X", "SELECT 1 WHERE 0=1", batch_size=10, table_label="empty"
         )
-        == []
     )
+    assert len(out) == 1
+    assert out[0].num_rows == 0
+    assert out[0].schema.names == ["id", "name"]

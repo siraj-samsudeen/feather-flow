@@ -3,6 +3,12 @@
 `arrow_odbc.read_arrow_batches_from_odbc` returns a BatchReader; iterating
 it yields native pa.RecordBatch instances. No Python-row coercion needed
 because the underlying Rust crate maps SQL->Arrow directly.
+
+Cleanup note: arrow-odbc's BatchReader releases its ODBC handle via
+``__del__``, not a context manager. If the generator is interrupted
+mid-fetch, the handle stays open until the local reference is dropped by
+the GC. Under CPython that is prompt (reference-counted), but anything
+holding a reference to a partly-consumed iterator delays cleanup.
 """
 
 from __future__ import annotations
@@ -41,10 +47,22 @@ class ArrowOdbcTransport:
             query=query,
             connection_string=connection_string,
             batch_size=batch_size,
+            # Bounded RSS is the reason this transport is the default.
+            # `fetch_concurrently=True` halves wall time at the cost of
+            # roughly 2x memory; flip back if throughput dominates RSS.
+            fetch_concurrently=False,
         )
-        yield from _emit_heartbeats(
-            iter(reader),
+        schema = reader.schema  # available before iteration
+        yielded_any = False
+        for batch in _emit_heartbeats(
+            reader,
             table_label=table_label,
             heartbeat_every_rows=heartbeat_every_rows,
             heartbeat_every_seconds=heartbeat_every_seconds,
-        )
+        ):
+            yielded_any = True
+            yield batch
+        if not yielded_any:
+            # Match PyodbcTransport's contract: every call yields >=1 batch
+            # so the destination can derive the schema from the first one.
+            yield pa.RecordBatch.from_pylist([], schema=schema)
