@@ -104,13 +104,13 @@ class SqlServerSource(DatabaseSource):
         from feather_etl.transports.registry import get_transport_class
 
         self._transport_cls = get_transport_class(transport)
-        self.transport = transport
+        self._transport = transport
 
         self._last_error: str | None = None
 
     @property
     def transport_name(self) -> str:
-        return self.transport
+        return self._transport
 
     @classmethod
     def from_yaml(cls, entry: dict, config_dir: Path) -> "SqlServerSource":
