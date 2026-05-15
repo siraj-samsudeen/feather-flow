@@ -228,9 +228,9 @@ def test_sqlserver_discover_returns_schemas(
     mock_cursor.fetchall.side_effect = [
         [("dbo", "orders"), ("dbo", "customers")],
         [("id", "int"), ("total", "decimal")],  # columns for orders
-        [("id",)],                               # PK for orders
+        [("id",)],  # PK for orders
         [("id", "int"), ("name", "nvarchar")],  # columns for customers
-        [("id",)],                               # PK for customers
+        [("id",)],  # PK for customers
     ]
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor

@@ -25,7 +25,14 @@ class _MinimalSource:
     def discover(self):
         return []
 
-    def extract(self, table, columns=None, filter=None, watermark_column=None, watermark_value=None):
+    def extract(
+        self,
+        table,
+        columns=None,
+        filter=None,
+        watermark_column=None,
+        watermark_value=None,
+    ):
         import pyarrow as pa
 
         return pa.table({})

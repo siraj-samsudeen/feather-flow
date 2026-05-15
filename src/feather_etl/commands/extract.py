@@ -1,6 +1,11 @@
 """`feather extract` command — local bronze pull.
 
 Renamed from `feather cache` per the feather-transform change.
+
+The ``extract`` verb is implemented as a Typer sub-app so that sub-commands
+(e.g. ``feather extract override``) can be nested beneath it.  Running
+``feather extract`` with no sub-command invokes the default extract logic
+(``invoke_without_command=True``).
 """
 
 from __future__ import annotations
@@ -10,9 +15,19 @@ from pathlib import Path
 import typer
 
 from feather_etl.commands._common import _load_and_validate
+from feather_etl.commands.override import override_app
+
+extract_app = typer.Typer(
+    name="extract",
+    help="Pull curated source tables into bronze.",
+    invoke_without_command=True,
+)
+extract_app.add_typer(override_app, name="override")
 
 
+@extract_app.callback()
 def extract(
+    ctx: typer.Context,
     config: Path = typer.Option("feather.yaml", "--config"),
     table: str | None = typer.Option(
         None,
@@ -44,6 +59,10 @@ def extract(
     ),
 ) -> None:
     """Pull curated source tables into bronze."""
+    # When a sub-command (e.g. ``override``) is invoked, do not execute the
+    # extract logic — just let Typer route to the sub-command.
+    if ctx.invoked_subcommand is not None:
+        return
     from feather_etl.extract import run_extract
 
     curation_path = Path(config).resolve().parent / "discovery" / "curation.json"
@@ -167,4 +186,4 @@ def _lookup_source_name(cfg, source_db: str) -> str:
 
 
 def register(app: typer.Typer) -> None:
-    app.command(name="extract")(extract)
+    app.add_typer(extract_app, name="extract")
