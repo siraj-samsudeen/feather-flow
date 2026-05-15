@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -226,8 +227,10 @@ def test_sqlserver_discover_returns_schemas(
     # Third call: columns for second table
     mock_cursor.fetchall.side_effect = [
         [("dbo", "orders"), ("dbo", "customers")],
-        [("id", "int"), ("total", "decimal")],
-        [("id", "int"), ("name", "nvarchar")],
+        [("id", "int"), ("total", "decimal")],  # columns for orders
+        [("id",)],                               # PK for orders
+        [("id", "int"), ("name", "nvarchar")],  # columns for customers
+        [("id",)],                               # PK for customers
     ]
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
@@ -239,8 +242,10 @@ def test_sqlserver_discover_returns_schemas(
     assert schemas[0].name == "dbo.orders"
     assert schemas[0].columns == [("id", "int"), ("total", "decimal")]
     assert schemas[0].supports_incremental is True
+    assert schemas[0].primary_key == ["id"]
     assert schemas[1].name == "dbo.customers"
     assert schemas[1].columns == [("id", "int"), ("name", "nvarchar")]
+    assert schemas[1].primary_key == ["id"]
 
 
 # --- get_schema ---
@@ -791,6 +796,202 @@ def test_sqlserver_detect_changes_first_run_when_row_is_none(
 # ---------------------------------------------------------------------------
 # extract() — column quoting
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# discover() — primary_key population
+# ---------------------------------------------------------------------------
+
+
+@patch("feather_etl.sources.sqlserver.pyodbc")
+def test_sqlserver_discover_populates_pk_single_column(
+    mock_pyodbc: MagicMock, source: SqlServerSource
+) -> None:
+    """discover() sets primary_key=[col] when one PK column is returned."""
+    mock_cursor = MagicMock()
+    # fetchall call sequence:
+    #   0: list tables → 1 table
+    #   1: columns for dbo.orders
+    #   2: PK columns for dbo.orders (single PK)
+    mock_cursor.fetchall.side_effect = [
+        [("dbo", "orders")],
+        [("id", "int"), ("name", "nvarchar")],
+        [("id",)],
+    ]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_pyodbc.connect.return_value = mock_conn
+
+    schemas = source.discover()
+
+    assert len(schemas) == 1
+    assert schemas[0].primary_key == ["id"]
+
+
+@patch("feather_etl.sources.sqlserver.pyodbc")
+def test_sqlserver_discover_populates_pk_composite(
+    mock_pyodbc: MagicMock, source: SqlServerSource
+) -> None:
+    """discover() sets primary_key as an ordered list for composite PKs."""
+    mock_cursor = MagicMock()
+    # fetchall call sequence:
+    #   0: list tables → 1 table
+    #   1: columns for dbo.order_items
+    #   2: PK columns for dbo.order_items (composite: order_id, item_id)
+    mock_cursor.fetchall.side_effect = [
+        [("dbo", "order_items")],
+        [("order_id", "int"), ("item_id", "int"), ("qty", "int")],
+        [("order_id",), ("item_id",)],
+    ]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_pyodbc.connect.return_value = mock_conn
+
+    schemas = source.discover()
+
+    assert len(schemas) == 1
+    assert schemas[0].primary_key == ["order_id", "item_id"]
+
+
+@patch("feather_etl.sources.sqlserver.pyodbc")
+def test_sqlserver_discover_no_pk_returns_none(
+    mock_pyodbc: MagicMock, source: SqlServerSource
+) -> None:
+    """discover() sets primary_key=None when table has no primary key."""
+    mock_cursor = MagicMock()
+    mock_cursor.fetchall.side_effect = [
+        [("dbo", "staging_log")],
+        [("event_id", "int"), ("payload", "nvarchar")],
+        [],  # no PK rows
+    ]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_pyodbc.connect.return_value = mock_conn
+
+    schemas = source.discover()
+
+    assert len(schemas) == 1
+    assert schemas[0].primary_key is None
+
+
+@patch("feather_etl.sources.sqlserver.pyodbc")
+def test_sqlserver_discover_pk_permission_error_falls_back_to_none(
+    mock_pyodbc: MagicMock, source: SqlServerSource
+) -> None:
+    """When the PK query raises pyodbc.Error (e.g. permission denied), discover()
+    falls back to primary_key=None without raising and still returns the table's
+    columns correctly."""
+    mock_pyodbc.Error = Exception  # make pyodbc.Error catchable in the stub
+
+    mock_cursor = MagicMock()
+    # fetchall call sequence:
+    #   0: list tables → 1 table
+    #   1: columns for dbo.restricted_table (succeeds)
+    # The third call (PK query) is via execute() which raises, so fetchall is never
+    # reached for PK.  We model this via execute side_effect on the 3rd call.
+    mock_cursor.fetchall.side_effect = [
+        [("dbo", "restricted_table")],
+        [("id", "int"), ("value", "nvarchar")],
+    ]
+    call_count: list[int] = [0]
+
+    def execute_side_effect(sql, *args):
+        call_count[0] += 1
+        # 1st call: list tables — succeeds (fetchall mocked above)
+        # 2nd call: columns query — succeeds (fetchall mocked above)
+        # 3rd call: PK query — raises permission error
+        if call_count[0] == 3:
+            raise Exception("permission denied")
+
+    mock_cursor.execute.side_effect = execute_side_effect
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_pyodbc.connect.return_value = mock_conn
+
+    schemas = source.discover()
+
+    # Table is still present in the result
+    assert len(schemas) == 1
+    assert schemas[0].name == "dbo.restricted_table"
+    # Columns are still correct
+    assert schemas[0].columns == [("id", "int"), ("value", "nvarchar")]
+    # PK falls back to None — no exception bubbles up
+    assert schemas[0].primary_key is None
+
+
+# ---------------------------------------------------------------------------
+# cheap_rowcount
+# ---------------------------------------------------------------------------
+
+
+@patch("feather_etl.sources.sqlserver.pyodbc")
+def test_sqlserver_cheap_rowcount_returns_int(
+    mock_pyodbc: MagicMock, source: SqlServerSource
+) -> None:
+    """cheap_rowcount() queries sys.dm_db_partition_stats and returns an int."""
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = (42000,)
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_pyodbc.connect.return_value = mock_conn
+
+    count = source.cheap_rowcount("dbo.orders")
+
+    assert count == 42000
+    assert isinstance(count, int)
+    # Verify the query references the partition stats DMV
+    execute_calls = [str(c) for c in mock_cursor.execute.call_args_list]
+    assert any("dm_db_partition_stats" in c for c in execute_calls)
+
+
+# ---------------------------------------------------------------------------
+# get_window_range
+# ---------------------------------------------------------------------------
+
+
+@patch("feather_etl.sources.sqlserver.pyodbc")
+def test_sqlserver_get_window_range_returns_min_max(
+    mock_pyodbc: MagicMock, source: SqlServerSource
+) -> None:
+    """get_window_range() returns (min, max) tuple for the given column."""
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = (
+        datetime.datetime(2020, 1, 1),
+        datetime.datetime(2026, 5, 15),
+    )
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_pyodbc.connect.return_value = mock_conn
+
+    result = source.get_window_range("dbo.orders", "updated_at")
+
+    assert result is not None
+    assert result[0] == datetime.datetime(2020, 1, 1)
+    assert result[1] == datetime.datetime(2026, 5, 15)
+
+
+@patch("feather_etl.sources.sqlserver.pyodbc")
+def test_sqlserver_get_window_range_empty_table_returns_none(
+    mock_pyodbc: MagicMock, source: SqlServerSource
+) -> None:
+    """get_window_range() returns None when MIN and MAX are both NULL (empty table)."""
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = (None, None)
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_pyodbc.connect.return_value = mock_conn
+
+    result = source.get_window_range("dbo.orders", "updated_at")
+
+    assert result is None
+
+
+def test_sqlserver_get_window_range_rejects_invalid_column(
+    source: SqlServerSource,
+) -> None:
+    """get_window_range() raises ValueError for column names that fail regex validation."""
+    with pytest.raises(ValueError, match="Invalid column name"):
+        source.get_window_range("dbo.orders", "col; DROP TABLE orders--")
 
 
 class TestSqlServerColumnQuoting:
