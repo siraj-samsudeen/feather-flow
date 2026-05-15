@@ -687,3 +687,59 @@ class TestSingularSourceMigrationError:
         msg = str(exc.value)
         assert "sources:" in msg
         assert "Wrap your existing source in a list" in msg
+
+
+class TestExtractDefaultsThresholds:
+    """Issue #63: bucket-threshold fields on ExtractDefaultsConfig."""
+
+    def test_extract_defaults_threshold_defaults(self):
+        """Dataclass defaults match the documented bucket boundaries."""
+        from feather_etl.config import ExtractDefaultsConfig
+
+        cfg = ExtractDefaultsConfig()
+        assert cfg.t_small_rows == 100_000
+        assert cfg.t_large_rows == 5_000_000
+        assert cfg.t_narrow_cols == 25
+        assert cfg.t_wide_cols == 60
+
+    def test_extract_defaults_threshold_yaml_override(self, tmp_path: Path):
+        """All four threshold fields can be overridden via YAML."""
+        from feather_etl.config import load_config
+
+        cfg = _minimal_config(tmp_path)
+        cfg["defaults"] = {
+            "extract": {
+                "t_small_rows": 50_000,
+                "t_large_rows": 10_000_000,
+                "t_narrow_cols": 20,
+                "t_wide_cols": 80,
+            }
+        }
+        config_file = write_config(tmp_path, cfg)
+        _minimal_curation(tmp_path)
+        result = load_config(config_file, validate=False)
+        ext = result.defaults.extract
+        assert ext.t_small_rows == 50_000
+        assert ext.t_large_rows == 10_000_000
+        assert ext.t_narrow_cols == 20
+        assert ext.t_wide_cols == 80
+
+    def test_extract_defaults_threshold_partial_yaml_keeps_other_defaults(
+        self, tmp_path: Path
+    ):
+        """Overriding one threshold leaves the others at their defaults."""
+        from feather_etl.config import load_config
+
+        cfg = _minimal_config(tmp_path)
+        cfg["defaults"] = {"extract": {"t_small_rows": 10_000}}
+        config_file = write_config(tmp_path, cfg)
+        _minimal_curation(tmp_path)
+        result = load_config(config_file, validate=False)
+        ext = result.defaults.extract
+        assert ext.t_small_rows == 10_000
+        assert ext.t_large_rows == 5_000_000
+        assert ext.t_narrow_cols == 25
+        assert ext.t_wide_cols == 60
+        # existing heartbeat fields also unaffected
+        assert ext.heartbeat_every_rows == 100_000
+        assert ext.heartbeat_every_seconds == 30
