@@ -71,12 +71,23 @@ def test_odbc_to_connectorx_uri_translates_known_fields() -> None:
     uri = _odbc_to_connectorx_uri(
         "DRIVER={ODBC Driver 18 for SQL Server};"
         "SERVER=host.example.com,1433;DATABASE=mydb;"
-        "UID=myuser;PWD=p@ss;TrustServerCertificate=yes"
+        "UID=myuser;PWD=plainpw;TrustServerCertificate=yes"
     )
-    assert uri.startswith("mssql://")
-    assert "myuser" in uri
-    assert "mydb" in uri
-    assert "host.example.com" in uri
+    # Pin the exact output so a regression in any field (port split,
+    # bracket-stripping, key lowercasing, ordering) is caught.
+    assert uri == "mssql://myuser:plainpw@host.example.com:1433/mydb"
+
+
+def test_odbc_to_connectorx_uri_percent_encodes_user_and_password() -> None:
+    """Passwords containing @, /, #, : would silently misparse as URI
+    delimiters without percent-encoding. ERP-generated credentials
+    frequently contain these characters, so this isn't hypothetical."""
+    uri = _odbc_to_connectorx_uri(
+        "DRIVER={ODBC Driver 18};SERVER=h;DATABASE=db;UID=u@corp;PWD=p/w#:@x"
+    )
+    # u@corp -> u%40corp
+    # p/w#:@x -> p%2Fw%23%3A%40x
+    assert uri == "mssql://u%40corp:p%2Fw%23%3A%40x@h/db"
 
 
 def test_missing_connectorx_dep_raises_clear_message(monkeypatch) -> None:
@@ -84,12 +95,17 @@ def test_missing_connectorx_dep_raises_clear_message(monkeypatch) -> None:
     a message that names the right install command — no AttributeError /
     'NoneType' confusion."""
     import sys
-
-    monkeypatch.setitem(sys.modules, "connectorx", None)
-
     import importlib
     import feather_etl.transports.connectorx_transport as mod
+
+    # Snapshot the real, working module before reload so later tests don't
+    # inherit a half-initialised module object cached in sys.modules.
+    real_mod = sys.modules["feather_etl.transports.connectorx_transport"]
+    monkeypatch.setitem(sys.modules, "connectorx", None)
 
     with pytest.raises(ImportError) as exc:
         importlib.reload(mod)
     assert "feather-etl[connectorx]" in str(exc.value)
+
+    # Restore the working module so other tests don't inherit our wreckage.
+    sys.modules["feather_etl.transports.connectorx_transport"] = real_mod

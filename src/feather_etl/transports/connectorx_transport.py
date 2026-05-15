@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Iterator
+from urllib.parse import quote as _quote
 
 import pyarrow as pa
 
@@ -57,7 +58,10 @@ def _odbc_to_connectorx_uri(odbc_conn: str) -> str:
     else:
         host_part = server
 
-    return f"mssql://{user}:{password}@{host_part}/{database}"
+    # Percent-encode user and password so passwords containing @, /, #, : —
+    # common in auto-generated ERP credentials — don't silently misparse as
+    # URI delimiters (database path / fragment / port / user-info splitter).
+    return f"mssql://{_quote(user, safe='')}:{_quote(password, safe='')}@{host_part}/{database}"
 
 
 class ConnectorxTransport:
@@ -79,6 +83,11 @@ class ConnectorxTransport:
         heartbeat_every_seconds: int = 30,
     ) -> Iterator[pa.RecordBatch]:
         uri = _odbc_to_connectorx_uri(connection_string)
+        # TODO(#61): connectorx 0.4.5 also supports return_type="arrow_stream"
+        # which yields a pa.RecordBatchReader directly. Switching would
+        # avoid assembling each partition fully in RAM before yielding —
+        # important for large partition_num. Defer until MSSQL streaming
+        # behaviour is verified stable on the operator's connectorx version.
         kwargs: dict[str, object] = {"return_type": "arrow"}
         if partition_on:
             kwargs["partition_on"] = partition_on
