@@ -112,6 +112,14 @@ class SqlServerSource(DatabaseSource):
     def transport_name(self) -> str:
         return self._transport
 
+    @property
+    def supports_partition_on(self) -> bool:
+        """Whether the configured transport supports parallel reads via
+        partition_on. Read by #63's pre-flight planner to decide whether
+        the `large` bucket can recommend partition_num > 1 on this source.
+        """
+        return self._transport_cls().supports_partition_on()
+
     @classmethod
     def from_yaml(cls, entry: dict, config_dir: Path) -> "SqlServerSource":
         name = entry.get("name", "")

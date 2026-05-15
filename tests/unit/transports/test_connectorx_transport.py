@@ -67,6 +67,29 @@ def test_stream_batches_without_partition_on(mock_cx: MagicMock) -> None:
     assert "partition_on" not in kwargs or kwargs["partition_on"] is None
 
 
+@patch("feather_etl.transports.connectorx_transport.cx")
+def test_empty_result_yields_one_schema_only_batch(mock_cx: MagicMock) -> None:
+    """Match PyodbcTransport / ArrowOdbcTransport: even an empty result set
+    yields one zero-row batch carrying the schema, so destinations can
+    CREATE TABLE from the first batch."""
+    empty_table = pa.table(
+        {"id": pa.array([], type=pa.int64()), "name": pa.array([], type=pa.string())}
+    )
+    mock_cx.read_sql.return_value = empty_table
+
+    out = list(
+        ConnectorxTransport().stream_batches(
+            "DRIVER={ODBC Driver 18};SERVER=h;DATABASE=db;UID=u;PWD=p",
+            "SELECT id, name FROM t WHERE 1=0",
+            batch_size=100,
+            table_label="empty",
+        )
+    )
+    assert len(out) == 1
+    assert out[0].num_rows == 0
+    assert out[0].schema.names == ["id", "name"]
+
+
 def test_odbc_to_connectorx_uri_translates_known_fields() -> None:
     uri = _odbc_to_connectorx_uri(
         "DRIVER={ODBC Driver 18 for SQL Server};"

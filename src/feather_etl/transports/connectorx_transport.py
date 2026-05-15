@@ -83,7 +83,7 @@ class ConnectorxTransport:
         heartbeat_every_seconds: int = 30,
     ) -> Iterator[pa.RecordBatch]:
         uri = _odbc_to_connectorx_uri(connection_string)
-        # TODO(#61): connectorx 0.4.5 also supports return_type="arrow_stream"
+        # TODO(#63): connectorx 0.4.5 also supports return_type="arrow_stream"
         # which yields a pa.RecordBatchReader directly. Switching would
         # avoid assembling each partition fully in RAM before yielding —
         # important for large partition_num. Defer until MSSQL streaming
@@ -97,9 +97,18 @@ class ConnectorxTransport:
         # `cx.read_sql(..., return_type="arrow")` returns a pa.Table — split
         # into batches so destinations see the same streaming shape as the
         # other transports.
-        yield from _emit_heartbeats(
+        schema = table.schema  # available even when the table is empty
+        yielded_any = False
+        for batch in _emit_heartbeats(
             iter(table.to_batches(max_chunksize=batch_size)),
             table_label=table_label,
             heartbeat_every_rows=heartbeat_every_rows,
             heartbeat_every_seconds=heartbeat_every_seconds,
-        )
+        ):
+            yielded_any = True
+            yield batch
+        if not yielded_any:
+            # Match PyodbcTransport / ArrowOdbcTransport: every call yields
+            # >=1 batch so the destination can derive the schema from the
+            # first one even on zero-row queries.
+            yield pa.RecordBatch.from_pylist([], schema=schema)

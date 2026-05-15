@@ -38,6 +38,19 @@ def test_explicit_connectorx_transport(tmp_path: Path) -> None:
     assert src.transport_name == "connectorx"
 
 
+def test_supports_partition_on_reflects_transport_choice(tmp_path: Path) -> None:
+    """#63's planner reads source.supports_partition_on to gate the
+    large-bucket parallel-reads recommendation. Only connectorx
+    supports it."""
+    pyodbc_src = SqlServerSource.from_yaml(_yaml_entry(transport="pyodbc"), tmp_path)
+    arrow_src = SqlServerSource.from_yaml(_yaml_entry(transport="arrow-odbc"), tmp_path)
+    cx_src = SqlServerSource.from_yaml(_yaml_entry(transport="connectorx"), tmp_path)
+
+    assert pyodbc_src.supports_partition_on is False
+    assert arrow_src.supports_partition_on is False
+    assert cx_src.supports_partition_on is True
+
+
 def test_unknown_transport_raises_at_yaml_load(tmp_path: Path) -> None:
     with pytest.raises(ValueError) as exc:
         SqlServerSource.from_yaml(_yaml_entry(transport="bogus"), tmp_path)
