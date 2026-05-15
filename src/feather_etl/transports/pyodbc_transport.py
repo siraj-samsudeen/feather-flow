@@ -115,6 +115,4 @@ class PyodbcTransport:
             yield pa.RecordBatch.from_pydict(cols, schema=schema)
             yielded_any = True
         if not yielded_any:
-            yield pa.RecordBatch.from_pydict(
-                {n: [] for n in col_names}, schema=schema
-            )
+            yield pa.RecordBatch.from_pydict({n: [] for n in col_names}, schema=schema)

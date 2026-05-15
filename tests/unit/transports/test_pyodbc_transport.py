@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
-import pytest
 
 from feather_etl.transports.pyodbc_transport import PyodbcTransport
 
