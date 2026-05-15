@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -16,6 +17,28 @@ SCHEMA_VERSION = 2
 # wrote the row, not the invocation source. Legacy rows (written before
 # this column existed) have trigger=NULL; no backfill.
 VALID_TRIGGERS: frozenset[str] = frozenset({"run", "extract", "transform", "schedule"})
+
+# Accepted values for _extract_overrides.window_strategy. None means "inherit
+# auto-derive from source config"; any non-None value MUST be in this set.
+VALID_WINDOW_STRATEGIES: frozenset[str] = frozenset({"date", "pk_range", "single"})
+
+# Fields that callers may pass to set_override(). table_name is positional;
+# created_at is server-managed. Any other kwarg is rejected.
+_OVERRIDE_FIELDS: frozenset[str] = frozenset(
+    {"window_strategy", "window_column", "window_grain", "partition_on"}
+)
+
+
+@dataclass(frozen=True)
+class ExtractOverride:
+    """Immutable snapshot of one _extract_overrides row."""
+
+    table_name: str
+    window_strategy: str | None
+    window_column: str | None
+    window_grain: str | None
+    partition_on: str | None
+    created_at: datetime
 
 
 class StateManager:
@@ -154,6 +177,17 @@ class StateManager:
                     committed_at TIMESTAMP,
                     run_id VARCHAR,
                     PRIMARY KEY (table_name, window_key)
+                )
+            """)
+
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS _extract_overrides (
+                    table_name      VARCHAR PRIMARY KEY,
+                    window_strategy VARCHAR,
+                    window_column   VARCHAR,
+                    window_grain    VARCHAR,
+                    partition_on    VARCHAR,
+                    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
@@ -664,5 +698,126 @@ class StateManager:
                 "SELECT DISTINCT table_name FROM _extract_windows"
             ).fetchall()
             return [r[0] for r in rows]
+        finally:
+            con.close()
+
+    # --- Extract overrides (#63) ---
+
+    def get_override(self, table_name: str) -> ExtractOverride | None:
+        """Return the stored override for *table_name*, or None if absent."""
+        con = self._connect()
+        try:
+            row = con.execute(
+                "SELECT table_name, window_strategy, window_column, window_grain, "
+                "partition_on, created_at "
+                "FROM _extract_overrides WHERE table_name = ?",
+                [table_name],
+            ).fetchone()
+            if row is None:
+                return None
+            return ExtractOverride(
+                table_name=row[0],
+                window_strategy=row[1],
+                window_column=row[2],
+                window_grain=row[3],
+                partition_on=row[4],
+                created_at=row[5],
+            )
+        finally:
+            con.close()
+
+    def set_override(self, table_name: str, **fields: object) -> None:
+        """Upsert an override for *table_name*.
+
+        Only fields in ``_OVERRIDE_FIELDS`` are accepted; others raise
+        ``ValueError``.  Only the explicitly supplied fields change; any
+        existing values for the remaining fields are preserved.
+
+        ``window_strategy`` must be one of ``VALID_WINDOW_STRATEGIES`` or
+        ``None``; any other non-None value raises ``ValueError``.
+        """
+        unknown = set(fields) - _OVERRIDE_FIELDS
+        if unknown:
+            raise ValueError(
+                f"Unknown override field(s): {sorted(unknown)}. "
+                f"Allowed: {sorted(_OVERRIDE_FIELDS)}."
+            )
+        if "window_strategy" in fields:
+            ws = fields["window_strategy"]
+            if ws is not None and ws not in VALID_WINDOW_STRATEGIES:
+                raise ValueError(
+                    f"Invalid window_strategy {ws!r}. "
+                    f"Expected one of {sorted(VALID_WINDOW_STRATEGIES)} or None."
+                )
+
+        # Read existing row so we can merge (partial-update semantics).
+        existing = self.get_override(table_name)
+        if existing is not None:
+            merged = {
+                "window_strategy": existing.window_strategy,
+                "window_column": existing.window_column,
+                "window_grain": existing.window_grain,
+                "partition_on": existing.partition_on,
+                "created_at": existing.created_at,
+            }
+        else:
+            merged = {
+                "window_strategy": None,
+                "window_column": None,
+                "window_grain": None,
+                "partition_on": None,
+                "created_at": datetime.now(timezone.utc),
+            }
+        merged.update(fields)
+
+        con = self._connect()
+        try:
+            con.execute(
+                "INSERT OR REPLACE INTO _extract_overrides "
+                "(table_name, window_strategy, window_column, window_grain, "
+                " partition_on, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    table_name,
+                    merged["window_strategy"],
+                    merged["window_column"],
+                    merged["window_grain"],
+                    merged["partition_on"],
+                    merged["created_at"],
+                ],
+            )
+        finally:
+            con.close()
+
+    def clear_override(self, table_name: str) -> None:
+        """Delete the override for *table_name*. No-op if no row exists."""
+        con = self._connect()
+        try:
+            con.execute(
+                "DELETE FROM _extract_overrides WHERE table_name = ?", [table_name]
+            )
+        finally:
+            con.close()
+
+    def list_overrides(self) -> list[ExtractOverride]:
+        """Return all rows in _extract_overrides. Returns [] when the table is empty."""
+        con = self._connect()
+        try:
+            rows = con.execute(
+                "SELECT table_name, window_strategy, window_column, window_grain, "
+                "partition_on, created_at "
+                "FROM _extract_overrides ORDER BY table_name"
+            ).fetchall()
+            return [
+                ExtractOverride(
+                    table_name=r[0],
+                    window_strategy=r[1],
+                    window_column=r[2],
+                    window_grain=r[3],
+                    partition_on=r[4],
+                    created_at=r[5],
+                )
+                for r in rows
+            ]
         finally:
             con.close()

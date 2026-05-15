@@ -37,6 +37,7 @@ class TestStateInit:
             "_dq_results",
             "_schema_snapshots",
             "_extract_windows",
+            "_extract_overrides",
         }
         assert tables == expected
 
@@ -82,7 +83,6 @@ class TestStateInit:
 
     def test_v1_to_v2_migration(self, tmp_path: Path):
         """Upgrading a v1 state DB: _cache_watermarks rows land in _watermarks."""
-        import feather_etl
         from datetime import datetime, timezone
 
         from feather_etl.state import StateManager
@@ -540,3 +540,117 @@ class TestWatermarkRoundtrip:
         row = sm.read_watermark("mssql_like")
         assert row["last_checksum"] == "12345"
         assert isinstance(row["last_checksum"], str)
+
+
+class TestExtractOverrides:
+    """Tests for _extract_overrides table + StateManager CRUD methods."""
+
+    def _make_sm(self, tmp_path):
+        from feather_etl.state import StateManager
+
+        sm = StateManager(tmp_path / "state.duckdb")
+        sm.init_state()
+        return sm
+
+    def test_extract_overrides_table_created_on_init(self, tmp_path):
+        sm = self._make_sm(tmp_path)
+        con = sm._connect()
+        tables = {
+            r[0]
+            for r in con.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'main'"
+            ).fetchall()
+        }
+        con.close()
+        assert "_extract_overrides" in tables
+
+    def test_set_override_creates_row(self, tmp_path):
+        sm = self._make_sm(tmp_path)
+        sm.set_override("orders", window_strategy="date", window_column="created_at")
+
+        from feather_etl.state import ExtractOverride
+
+        override = sm.get_override("orders")
+        assert override is not None
+        assert isinstance(override, ExtractOverride)
+        assert override.table_name == "orders"
+        assert override.window_strategy == "date"
+        assert override.window_column == "created_at"
+        # Unset fields are None
+        assert override.window_grain is None
+        assert override.partition_on is None
+        assert isinstance(override.created_at, datetime)
+
+    def test_set_override_partial_preserves_other_fields(self, tmp_path):
+        sm = self._make_sm(tmp_path)
+        sm.set_override("orders", window_strategy="date", window_column="created_at")
+        # Partial update: only window_grain — other fields must survive
+        sm.set_override("orders", window_grain="month")
+
+        override = sm.get_override("orders")
+        assert override.window_strategy == "date"
+        assert override.window_column == "created_at"
+        assert override.window_grain == "month"
+        assert override.partition_on is None
+
+    def test_set_override_idempotent_upsert(self, tmp_path):
+        sm = self._make_sm(tmp_path)
+        sm.set_override("orders", window_strategy="date")
+        sm.set_override("orders", window_strategy="date")
+
+        # Exactly one row in the DB
+        con = sm._connect()
+        count = con.execute(
+            "SELECT COUNT(*) FROM _extract_overrides WHERE table_name = 'orders'"
+        ).fetchone()[0]
+        con.close()
+        assert count == 1
+
+    def test_clear_override_removes_row(self, tmp_path):
+        sm = self._make_sm(tmp_path)
+        sm.set_override("orders", window_strategy="date")
+        assert sm.get_override("orders") is not None
+
+        sm.clear_override("orders")
+        assert sm.get_override("orders") is None
+
+        # Row is gone from DB
+        con = sm._connect()
+        count = con.execute(
+            "SELECT COUNT(*) FROM _extract_overrides WHERE table_name = 'orders'"
+        ).fetchone()[0]
+        con.close()
+        assert count == 0
+
+    def test_clear_override_missing_table_no_error(self, tmp_path):
+        sm = self._make_sm(tmp_path)
+        # Should be a silent no-op
+        sm.clear_override("nonexistent_table")
+        assert sm.get_override("nonexistent_table") is None
+
+    def test_set_override_unknown_kwarg_raises(self, tmp_path):
+        sm = self._make_sm(tmp_path)
+        with pytest.raises(ValueError, match="bogus_field"):
+            sm.set_override("table_a", bogus_field="x")
+
+    def test_set_override_invalid_window_strategy_raises(self, tmp_path):
+        sm = self._make_sm(tmp_path)
+        with pytest.raises(ValueError, match="date|pk_range|single"):
+            sm.set_override("table_a", window_strategy="bad_value")
+
+    def test_list_overrides_returns_all(self, tmp_path):
+        sm = self._make_sm(tmp_path)
+        sm.set_override("orders", window_strategy="date")
+        sm.set_override("customers", window_strategy="pk_range", partition_on="id")
+
+        overrides = sm.list_overrides()
+        assert len(overrides) == 2
+        names = {o.table_name for o in overrides}
+        assert names == {"orders", "customers"}
+
+    def test_list_overrides_empty_returns_empty_list(self, tmp_path):
+        sm = self._make_sm(tmp_path)
+        result = sm.list_overrides()
+        assert result == []
+        assert isinstance(result, list)
