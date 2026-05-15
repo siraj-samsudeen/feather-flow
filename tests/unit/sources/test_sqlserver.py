@@ -16,13 +16,15 @@ FAKE_CONN_STR = "DRIVER={ODBC Driver 18};SERVER=fake;DATABASE=testdb"
 
 @pytest.fixture
 def source() -> SqlServerSource:
-    return SqlServerSource(connection_string=FAKE_CONN_STR, batch_size=100)
+    return SqlServerSource(
+        connection_string=FAKE_CONN_STR, batch_size=100, transport="pyodbc"
+    )
 
 
 # --- extract ---
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_etl.transports.pyodbc_transport.pyodbc")
 def test_sqlserver_full_extract_loads_rows(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -52,7 +54,7 @@ def test_sqlserver_full_extract_loads_rows(
     mock_cursor.execute.assert_any_call("SET NOCOUNT ON")
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_etl.transports.pyodbc_transport.pyodbc")
 def test_sqlserver_incremental_extract_with_watermark(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -84,7 +86,7 @@ def test_sqlserver_incremental_extract_with_watermark(
     assert "updated_at > '2026-03-26'" in query_call[0]
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_etl.transports.pyodbc_transport.pyodbc")
 def test_sqlserver_extract_with_filter_and_columns(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -115,7 +117,7 @@ def test_sqlserver_extract_with_filter_and_columns(
     assert "status = 'active'" in query_call[0]
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_etl.transports.pyodbc_transport.pyodbc")
 def test_sqlserver_empty_table(mock_pyodbc: MagicMock, source: SqlServerSource) -> None:
     """Extract on empty table returns empty table with correct schema."""
     mock_cursor = MagicMock()
@@ -699,7 +701,7 @@ def test_sqlserver_missing_driver18_on_linux_adds_linux_hint(
 # ---------------------------------------------------------------------------
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_etl.transports.pyodbc_transport.pyodbc")
 def test_sqlserver_extract_description_none_returns_empty_table(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -720,7 +722,7 @@ def test_sqlserver_extract_description_none_returns_empty_table(
     mock_conn.close.assert_called_once()
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_etl.transports.pyodbc_transport.pyodbc")
 def test_sqlserver_extract_coerces_decimal_and_uuid(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -792,7 +794,7 @@ def test_sqlserver_detect_changes_first_run_when_row_is_none(
 
 
 class TestSqlServerColumnQuoting:
-    @patch("feather_etl.sources.sqlserver.pyodbc")
+    @patch("feather_etl.transports.pyodbc_transport.pyodbc")
     def test_columns_are_bracket_quoted(self, mock_pyodbc, source):
         mock_cursor = MagicMock()
         mock_cursor.description = [
@@ -809,12 +811,12 @@ class TestSqlServerColumnQuoting:
         query = executed[1][0][0]
         assert "[Invoice Date], [Quantity]" in query
 
-    @patch("feather_etl.sources.sqlserver.pyodbc")
+    @patch("feather_etl.transports.pyodbc_transport.pyodbc")
     def test_columns_with_bracket_rejected(self, mock_pyodbc, source):
         with pytest.raises(ValueError, match="cannot be bracket-quoted"):
             source.extract("dbo.Sales", columns=["col]name"])
 
-    @patch("feather_etl.sources.sqlserver.pyodbc")
+    @patch("feather_etl.transports.pyodbc_transport.pyodbc")
     def test_columns_none_uses_star(self, mock_pyodbc, source):
         mock_cursor = MagicMock()
         mock_cursor.description = [

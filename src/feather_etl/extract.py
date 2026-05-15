@@ -179,9 +179,9 @@ def run_extract(
             windows = [w for w in plan_windows(table) if w.window_key not in committed]
 
             rows = 0
-            # Until #61's transport registry lands, sources don't expose a transport
-            # name — record the source class so _extract_windows.transport_used is at
-            # least diagnostic instead of misleading.
+            # Sources implementing the transport-registry contract (#61) expose
+            # transport_name. Sources that don't (csv, sqlite, file sources) fall
+            # back to the class name — those paths don't trip the transport choice.
             transport_used = getattr(source, "transport_name", type(source).__name__)
             # NOTE (#62/#63): `_iter_source_batches` streams the full source table for
             # every window. Today windows is always `[WindowSpec("all", "1=1", ...)]`,

@@ -1,12 +1,19 @@
 """Shared fetchmany → RecordBatch generator with progress heartbeat.
 
-Used by SQL Server, MySQL, and Postgres sources. Owns the per-batch
-fetch loop, per-DB row coercion (via a callback), and heartbeat emission
-so the three concrete sources stay free of duplication.
+Used by SQL Server (control-plane only post #61), MySQL, and Postgres
+sources. Owns the per-batch fetch loop, per-DB row coercion (via a
+callback), and heartbeat emission so the three concrete sources stay free
+of duplication.
 
 Heartbeats fire on whichever cadence trips first: row count or wall time.
 They are emitted as `logger.info` records with structured `extra` fields
 so `pipeline._JsonlFormatter` picks them up into `feather_log.jsonl`.
+
+# TODO(#61): dedupe with transports.base._emit_heartbeats — the cadence
+# math is identical. Deferred because tests/unit/sources/test_fetch_batches.py
+# imports `_should_emit_heartbeat` directly and asserts on the
+# `feather_etl.sources.fetch_batches` logger, so a clean swap requires
+# touching that test file too.
 """
 
 from __future__ import annotations

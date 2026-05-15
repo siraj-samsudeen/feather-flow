@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import datetime
-import decimal
 import platform
-import uuid
 from pathlib import Path
 from typing import ClassVar, Iterator
 
@@ -16,36 +13,11 @@ from feather_etl.sources import ChangeResult, StreamSchema
 from feather_etl.sources.database_source import DatabaseSource
 
 
-def _sqlserver_coerce_row(val, _col_name):
-    """Per-cell coercion for pyodbc types PyArrow can't auto-convert."""
-    if isinstance(val, decimal.Decimal):
-        return float(val)
-    if isinstance(val, uuid.UUID):
-        return str(val)
-    return val
-
-
 _SQLSERVER_CONN_TEMPLATE = (
     "DRIVER={{ODBC Driver 18 for SQL Server}};"
     "SERVER={host},{port};DATABASE={database};UID={user};PWD={password};"
     "TrustServerCertificate=yes"
 )
-
-# pyodbc type code → PyArrow type mapping
-# pyodbc cursor.description[1] returns Python types — map them all
-_PYODBC_TYPE_MAP: dict[type, pa.DataType] = {
-    int: pa.int64(),
-    float: pa.float64(),
-    str: pa.string(),
-    bool: pa.bool_(),
-    bytes: pa.binary(),
-    bytearray: pa.binary(),
-    decimal.Decimal: pa.float64(),
-    datetime.datetime: pa.timestamp("us"),
-    datetime.date: pa.date32(),
-    datetime.time: pa.time64("us"),
-    uuid.UUID: pa.string(),
-}
 
 # SQL Server INFORMATION_SCHEMA type name → PyArrow type
 _SQL_TYPE_MAP: dict[str, pa.DataType] = {
@@ -77,11 +49,6 @@ _SQL_TYPE_MAP: dict[str, pa.DataType] = {
     "image": pa.binary(),
     "xml": pa.string(),
 }
-
-
-def _pyodbc_type_to_arrow(type_code: type) -> pa.DataType:
-    """Map a pyodbc cursor.description type_code to a PyArrow type."""
-    return _PYODBC_TYPE_MAP.get(type_code, pa.string())
 
 
 def _is_missing_odbc_driver_18_error(message: str, connection_string: str) -> bool:
@@ -120,6 +87,7 @@ class SqlServerSource(DatabaseSource):
         database: str | None = None,
         databases: list[str] | None = None,
         batch_size: int = 120_000,
+        transport: str = "arrow-odbc",
     ) -> None:
         super().__init__(connection_string)
         self.name = name
@@ -130,7 +98,19 @@ class SqlServerSource(DatabaseSource):
         self.database = database
         self.databases = databases
         self.batch_size = batch_size
+
+        # Resolve at construction so config errors surface at config-load,
+        # not at extract time after the user has waited for connect+plan.
+        from feather_etl.transports.registry import get_transport_class
+
+        self._transport_cls = get_transport_class(transport)
+        self.transport = transport
+
         self._last_error: str | None = None
+
+    @property
+    def transport_name(self) -> str:
+        return self.transport
 
     @classmethod
     def from_yaml(cls, entry: dict, config_dir: Path) -> "SqlServerSource":
@@ -173,6 +153,7 @@ class SqlServerSource(DatabaseSource):
             password=password,
             database=database,
             databases=databases,
+            transport=entry.get("transport", "arrow-odbc"),
         )
         source._explicit_name = bool(entry.get("name"))
         return source
@@ -308,9 +289,7 @@ class SqlServerSource(DatabaseSource):
         heartbeat_every_rows: int = 100_000,
         heartbeat_every_seconds: int = 30,
     ) -> Iterator[pa.RecordBatch]:
-        """Stream `pa.RecordBatch` chunks from SQL Server with progress heartbeat."""
-        from feather_etl.sources.fetch_batches import fetch_batches
-
+        """Stream `pa.RecordBatch` chunks via the configured transport."""
         if columns:
             bad = [c for c in columns if "]" in c]
             if bad:
@@ -319,41 +298,19 @@ class SqlServerSource(DatabaseSource):
                     f"bracket-quoted: {bad}"
                 )
 
-        con = pyodbc.connect(self.connection_string)
-        try:
-            cursor = con.cursor()
-            cursor.execute("SET NOCOUNT ON")
+        col_clause = ", ".join(f"[{c}]" for c in columns) if columns else "*"
+        where = self._build_where_clause(filter, watermark_column, watermark_value)
+        query = f"SELECT {col_clause} FROM {table}{where}"
 
-            col_clause = ", ".join(f"[{c}]" for c in columns) if columns else "*"
-            where = self._build_where_clause(filter, watermark_column, watermark_value)
-            query = f"SELECT {col_clause} FROM {table}{where}"
-            cursor.execute(query)
-
-            if cursor.description is None:
-                cursor.close()
-                return
-
-            col_names = [desc[0] for desc in cursor.description]
-            col_types = [_pyodbc_type_to_arrow(desc[1]) for desc in cursor.description]
-            arrow_schema = pa.schema(
-                [pa.field(name, typ) for name, typ in zip(col_names, col_types)]
-            )
-
-            try:
-                yield from fetch_batches(
-                    cursor=cursor,
-                    arrow_schema=arrow_schema,
-                    col_names=col_names,
-                    batch_size=self.batch_size,
-                    table_label=table,
-                    coerce_row=_sqlserver_coerce_row,
-                    heartbeat_every_rows=heartbeat_every_rows,
-                    heartbeat_every_seconds=heartbeat_every_seconds,
-                )
-            finally:
-                cursor.close()
-        finally:
-            con.close()
+        transport = self._transport_cls()
+        yield from transport.stream_batches(
+            self.connection_string,
+            query,
+            batch_size=self.batch_size,
+            table_label=table,
+            heartbeat_every_rows=heartbeat_every_rows,
+            heartbeat_every_seconds=heartbeat_every_seconds,
+        )
 
     def detect_changes(
         self, table: str, last_state: dict[str, object] | None = None
