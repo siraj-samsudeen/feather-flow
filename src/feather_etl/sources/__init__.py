@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, Protocol
+from typing import Any, ClassVar, Protocol
 
 import pyarrow as pa
 
@@ -66,3 +66,14 @@ class Source(Protocol):
     ) -> ChangeResult: ...
 
     def get_schema(self, table: str) -> list[tuple[str, str]]: ...
+
+    def cheap_rowcount(self, table: str) -> int:
+        """Return a fast approximate row count; raise NotImplementedError if unsupported."""
+        raise NotImplementedError
+
+    def get_window_range(self, table: str, column: str) -> tuple[Any, Any] | None:
+        """Return (min, max) of *column* for *table*, or None if the table has no rows.
+
+        Raise NotImplementedError if the source does not support window sizing.
+        """
+        raise NotImplementedError
