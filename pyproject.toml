@@ -39,6 +39,9 @@ Homepage = "https://github.com/siraj-samsudeen/feather-etl"
 Repository = "https://github.com/siraj-samsudeen/feather-etl"
 Issues = "https://github.com/siraj-samsudeen/feather-etl/issues"
 
+[project.optional-dependencies]
+connectorx = ["connectorx>=0.4"]
+
 [project.scripts]
 feather = "feather_etl.cli:app"
 feather-etl = "feather_etl.cli:app"

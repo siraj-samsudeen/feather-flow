@@ -7,9 +7,6 @@ import pytest
 from feather_etl.transports.registry import get_transport_class, TRANSPORT_CLASSES
 
 
-@pytest.mark.xfail(
-    reason="PyodbcTransport lands in Task 2, ArrowOdbcTransport in Task 3, ConnectorxTransport in Task 4"
-)
 def test_known_names_resolve() -> None:
     for name in ("pyodbc", "arrow-odbc", "connectorx"):
         cls = get_transport_class(name)
