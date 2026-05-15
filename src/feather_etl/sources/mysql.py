@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import decimal
+import logging
+import re
 from pathlib import Path
-from typing import ClassVar, Iterator
+from typing import Any, ClassVar, Iterator
 
 import mysql.connector
 import pyarrow as pa
@@ -12,6 +14,13 @@ from mysql.connector.constants import FieldFlag
 
 from feather_etl.sources import ChangeResult, StreamSchema
 from feather_etl.sources.database_source import DatabaseSource
+
+_log = logging.getLogger(__name__)
+
+# Validates identifiers (column / schema / table names) before interpolating
+# them into SQL.  Allows letters, digits, underscore and internal spaces
+# (MySQL permits spaces in backtick-quoted identifiers).
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][\w\s]*$")
 
 
 def _mysql_coerce_row(val, _col_name):
@@ -240,11 +249,32 @@ class MySQLSource(DatabaseSource):
                     (self.database, table_name),
                 )
                 cols = cursor.fetchall()
+
+                # Populate primary_key via SHOW KEYS.  Result rows are ordered by
+                # Seq_in_index; Column_name is at index 4.  Falls back to None on
+                # any error (e.g. missing SHOW privilege).
+                primary_key: list[str] | None = None
+                try:
+                    qualified = f"`{self.database}`.`{table_name}`"
+                    cursor.execute(
+                        f"SHOW KEYS FROM {qualified} WHERE Key_name = 'PRIMARY'"
+                    )
+                    pk_rows = cursor.fetchall()
+                    if pk_rows:
+                        primary_key = [r[4] for r in pk_rows]
+                except mysql.connector.Error:
+                    _log.warning(
+                        "Could not read PK for %s.%s via SHOW KEYS; "
+                        "falling back to primary_key=None",
+                        self.database,
+                        table_name,
+                    )
+
                 schemas.append(
                     StreamSchema(
                         name=table_name,
                         columns=[(c[0], c[1]) for c in cols],
-                        primary_key=None,
+                        primary_key=primary_key,
                         supports_incremental=True,
                     )
                 )
@@ -330,6 +360,82 @@ class MySQLSource(DatabaseSource):
                 cursor.close()
         finally:
             conn.close()
+
+    def cheap_rowcount(self, table: str) -> int:
+        """Return an approximate row count using INFORMATION_SCHEMA.TABLES.TABLE_ROWS.
+
+        ``TABLE_ROWS`` is approximate for InnoDB (updated by background statistics
+        collection) and exact for MyISAM.  Reads in microseconds — much cheaper
+        than ``SELECT COUNT(*)``.
+
+        Raises mysql.connector.Error on connection or permission failure.
+        """
+        con = self._connect()
+        try:
+            cursor = con.cursor()
+            cursor.execute(
+                "SELECT TABLE_ROWS FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s",
+                (self.database, table),
+            )
+            row = cursor.fetchone()
+        finally:
+            cursor.close()
+            con.close()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def get_window_range(self, table: str, column: str) -> tuple[Any, Any] | None:
+        """Return (MIN, MAX) of *column* in *table*, or None for an empty table.
+
+        **Performance note:** this runs a full table scan unless *column* is
+        indexed.  The operator should ensure the window column (typically a
+        datetime watermark) has an index on the source table.
+
+        *column* and the schema/table components of *table* are validated
+        against ``^[A-Za-z_][\\w\\s]*$`` before interpolation to prevent
+        SQL injection.  The planner (Task 9) additionally gates on known-safe
+        column names from the discovered schema.
+
+        Raises:
+            ValueError: if *column* or any identifier in *table* fails
+                validation.
+            mysql.connector.Error: on connection or permission failure.
+        """
+        if not _IDENTIFIER_RE.match(column):
+            raise ValueError(
+                f"Invalid column name {column!r}: must match ^[A-Za-z_][\\w\\s]*$"
+            )
+
+        # Parse schema.table — default schema to self.database
+        parts = table.split(".")
+        if len(parts) == 2:
+            schema_name, table_name = parts
+        else:
+            schema_name = self.database or ""
+            table_name = parts[0]
+
+        for ident, label in ((schema_name, "schema"), (table_name, "table")):
+            if not _IDENTIFIER_RE.match(ident):
+                raise ValueError(
+                    f"Invalid {label} name {ident!r}: must match ^[A-Za-z_][\\w\\s]*$"
+                )
+
+        sql = (
+            f"SELECT MIN(`{column}`), MAX(`{column}`) "
+            f"FROM `{schema_name}`.`{table_name}`"
+        )
+        con = self._connect()
+        try:
+            cursor = con.cursor()
+            cursor.execute(sql)
+            row = cursor.fetchone()
+        finally:
+            cursor.close()
+            con.close()
+
+        if row is None or (row[0] is None and row[1] is None):
+            return None
+        return (row[0], row[1])
 
     def detect_changes(
         self, table: str, last_state: dict[str, object] | None = None

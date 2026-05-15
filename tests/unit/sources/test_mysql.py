@@ -366,7 +366,8 @@ class TestMySQLDiscoverIntegration:
         schemas = source.discover()
         sales = next(s for s in schemas if s.name == "erp_sales")
         assert sales.supports_incremental is True
-        assert sales.primary_key is None
+        # discover() now populates primary_key from SHOW KEYS
+        assert sales.primary_key == ["id"]
         col_names = [c[0] for c in sales.columns]
         assert "id" in col_names
         assert "amount" in col_names
@@ -870,3 +871,95 @@ class TestMySQLColumnQuoting:
         src.extract("erp_sales")
 
         assert any("SELECT *" in sql for sql in captured_sql)
+
+
+# ---------------------------------------------------------------------------
+# MySQLSource.discover() — primary_key population (mocked)
+# ---------------------------------------------------------------------------
+
+
+def test_mysql_discover_populates_pk() -> None:
+    """discover() sets primary_key=[col] when one PK column is returned."""
+    from unittest.mock import MagicMock, patch
+
+    from feather_etl.sources.mysql import MySQLSource
+
+    mock_cursor = MagicMock()
+    # fetchall call sequence:
+    #   0: list tables → 1 table
+    #   1: columns for orders
+    #   2: SHOW KEYS result for orders — one PK row
+    pk_row = MagicMock()
+    pk_row.__getitem__ = lambda self, i: "id" if i == 4 else None  # Column_name at [4]
+    mock_cursor.fetchall.side_effect = [
+        [("orders",)],
+        [("id", "int"), ("total", "decimal")],
+        [pk_row],
+    ]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    src = MySQLSource(connection_string="dummy")
+    src.database = "mydb"
+    with patch.object(src, "_connect", return_value=mock_conn):
+        schemas = src.discover()
+
+    assert len(schemas) == 1
+    assert schemas[0].primary_key == ["id"]
+
+
+# ---------------------------------------------------------------------------
+# MySQLSource.cheap_rowcount — mocked
+# ---------------------------------------------------------------------------
+
+
+def test_mysql_cheap_rowcount_returns_estimate() -> None:
+    """cheap_rowcount() queries INFORMATION_SCHEMA.TABLES.TABLE_ROWS and returns int."""
+    from unittest.mock import MagicMock, patch
+
+    from feather_etl.sources.mysql import MySQLSource
+
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = (75000,)
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    src = MySQLSource(connection_string="dummy")
+    src.database = "mydb"
+    with patch.object(src, "_connect", return_value=mock_conn):
+        count = src.cheap_rowcount("orders")
+
+    assert count == 75000
+    assert isinstance(count, int)
+    execute_calls = [str(c) for c in mock_cursor.execute.call_args_list]
+    assert any("INFORMATION_SCHEMA" in c for c in execute_calls)
+
+
+# ---------------------------------------------------------------------------
+# MySQLSource.get_window_range — mocked
+# ---------------------------------------------------------------------------
+
+
+def test_mysql_get_window_range_returns_min_max() -> None:
+    """get_window_range() returns (min, max) tuple for the given column."""
+    import datetime
+    from unittest.mock import MagicMock, patch
+
+    from feather_etl.sources.mysql import MySQLSource
+
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = (
+        datetime.datetime(2020, 1, 1),
+        datetime.datetime(2026, 5, 15),
+    )
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    src = MySQLSource(connection_string="dummy")
+    src.database = "mydb"
+    with patch.object(src, "_connect", return_value=mock_conn):
+        result = src.get_window_range("orders", "updated_at")
+
+    assert result is not None
+    assert result[0] == datetime.datetime(2020, 1, 1)
+    assert result[1] == datetime.datetime(2026, 5, 15)
