@@ -1287,6 +1287,137 @@ unfiltered output.
 
 ---
 
+### FR-Preflight: pre-flight sizing and adaptive bucket selection
+
+Before extracting from any DB source, feather-etl classifies each table by row and column count, derives an extraction shape (windowing strategy, transport hint, partition count), surfaces the plan as a banner, and refuses to silently take a slow path. File sources are not subject to pre-flight — they have no `cheap_rowcount` method and their extract path is unchanged.
+
+> **Scope: DB sources only.** SQL Server, PostgreSQL, and MySQL sources implement `cheap_rowcount()`. File sources (CSV, DuckDB, SQLite, Excel, JSON) do not. The planner runs only when `cheap_rowcount` is available on the source.
+
+> **Override mechanism.** Per-table overrides are stored in `_extract_overrides` in the state DuckDB (sibling to `_runs` and `_watermarks`). NULL columns inherit auto-derivation — an operator who only needs to correct the date column writes one field, not the whole record. The CLI surface is `feather extract override set/clear/list`.
+
+> **Exit-code contract.** `0` on success; `1` if extraction fails; `3` if any unaccepted blocker is detected. Exit code `3` is feather-etl's "needs a decision" signal — the operator must either fix the underlying condition or pass the named bypass flag.
+
+#### Bucket model
+
+Row and column thresholds are configurable under `defaults.extract.*` in `feather.yaml` and read into `ExtractDefaultsConfig`. Defaults:
+
+- `t_small_rows` — `100_000` (below this, the table is SMALL regardless of column count)
+- `t_large_rows` — `5_000_000` (at or above this AND cols ≥ `t_narrow_cols` → LARGE)
+- `t_narrow_cols` — `25` (below this, the table is treated as narrow)
+- `t_wide_cols` — `60` (above this AND no `transforms/bronze/<table>.sql` → wide-table blocker)
+
+Bucket assignment:
+
+- **SMALL** — `rows < t_small_rows` AND `cols < t_narrow_cols`
+- **LARGE** — `rows >= t_large_rows` AND `cols >= t_narrow_cols`
+- **MEDIUM** — neither
+
+Bucket → extraction shape:
+
+- **SMALL** — single window (today's behaviour); configured transport; no `partition_on`.
+- **MEDIUM** — date-windowed if a window column is auto-derivable; otherwise exit 3 unless `--single-window` is accepted.
+- **LARGE** — date-windowed required; proposes `connectorx` + `partition_on` if registered and `supports_partition_on()` returns True; exits 3 if `connectorx` is not registered unless `--accept-slow-transport` is accepted.
+
+Partition count when connectorx is used: `min(8, max(2, rows // 1_000_000))`. Bounded 2–8.
+
+#### Three blockers
+
+The planner refuses to extract — exits code 3 with a message naming the bypass flag — when any of the following conditions hold. All active blockers are shown before exiting; each must be accepted by its own named flag. There is no blanket `--yes` — cron jobs must list each accepted blocker explicitly so the pipeline owner's accepted trade-offs are documented in the cron line.
+
+| Blocker | Trigger | Bypass flag |
+|---------|---------|-------------|
+| Wide table, no projection | `cols > t_wide_cols` AND no `transforms/bronze/<table>.sql` | `--accept-wide` |
+| No window column | bucket ≥ MEDIUM AND no auto-derivable timestamp/PK column AND no override | `--single-window` |
+| LARGE without connectorx | bucket = LARGE AND connectorx not in the transport registry | `--accept-slow-transport` |
+
+Bypass flags are one-shot. Persistent acceptance means fixing the underlying condition: add a bronze projection SQL file, set a per-table override, or install and register `connectorx`.
+
+#### Override surface
+
+`_extract_overrides` schema (state DuckDB):
+
+- `table_name TEXT PRIMARY KEY`
+- `window_strategy TEXT` — `'date'` | `'pk_range'` | `'single'` | NULL (inherit auto-derive)
+- `window_column TEXT` — NULL = inherit auto-derive
+- `window_grain TEXT` — e.g. `'1d'`; NULL = default `'1d'`
+- `partition_on TEXT` — NULL = inherit auto-derive
+- `created_at TIMESTAMP`
+
+CLI: `feather extract override set/clear/list`. See §README and `feather extract override --help` for subcommand details.
+
+#### Requirements
+
+```
+# FR-Preflight.1
+WHEN feather run or feather extract is invoked against a DB source
+THE SYSTEM SHALL call cheap_rowcount() on each in-scope table and classify each
+as SMALL, MEDIUM, or LARGE according to the bucket thresholds in ExtractDefaultsConfig.
+
+# FR-Preflight.2
+WHEN the planner runs
+THE SYSTEM SHALL print a pre-flight banner per table to stdout, regardless of
+whether blockers fire.
+
+# FR-Preflight.3
+WHEN a blocker condition is detected
+THE SYSTEM SHALL exit with code 3 and print a message naming the bypass flag.
+All active blockers SHALL be shown before exiting.
+THE SYSTEM SHALL NOT proceed with extraction.
+
+# FR-Preflight.4
+WHEN all bypass flags are supplied for each active blocker
+THE SYSTEM SHALL proceed with extraction using the derived extraction shape.
+
+# FR-Preflight.5
+WHEN feather run --plan-only is invoked
+THE SYSTEM SHALL print the pre-flight banner and exit 0 without opening any
+source connection or writing any rows.
+
+# FR-Preflight.6
+WHEN the terminal is a TTY and no blockers are active
+THE SYSTEM SHALL prompt `Proceed? [Y/n]` (default Y) after the banner.
+WHEN the terminal is non-TTY
+THE SYSTEM SHALL proceed without prompting if no blockers are active.
+
+# FR-Preflight.7
+WHEN feather extract override set <table> is invoked
+THE SYSTEM SHALL upsert a row in _extract_overrides with the supplied fields.
+Unsupplied fields SHALL be stored as NULL (inherit auto-derive).
+
+# FR-Preflight.8
+WHEN feather extract override clear <table> is invoked
+THE SYSTEM SHALL remove the row for <table> from _extract_overrides.
+
+# FR-Preflight.9
+WHEN feather extract override list is invoked
+THE SYSTEM SHALL print the current contents of _extract_overrides as a table.
+
+# FR-Preflight.10
+WHEN a source does not implement cheap_rowcount()
+THE SYSTEM SHALL NOT run pre-flight for that source.
+File sources SHALL NOT be subject to pre-flight.
+```
+
+#### Acceptance Criteria
+
+**AC-FR-Preflight.a:** Given a DB source table with fewer than 100,000 rows and fewer than 25 columns, when `feather run` is invoked, then the pre-flight banner shows bucket=SMALL, no blockers fire, and the table extracts as a single window using the configured transport — identical to today's behaviour.
+
+**AC-FR-Preflight.b:** Given a 50M-row × 97-column SQL Server table with connectorx registered, when `feather run` is invoked, then the banner shows bucket=LARGE, transport=connectorx with partition_on and 8 partitions, windowing=date with auto-derived column, and the extract uses connectorx with `partition_on`.
+
+**AC-FR-Preflight.c:** Given a 50M-row × 97-column SQL Server table with connectorx NOT registered, when `feather run` is invoked without `--accept-slow-transport`, then the command exits 3 with a message naming `--accept-slow-transport`. When invoked with `--accept-slow-transport`, extraction proceeds using the configured (arrow-odbc) transport.
+
+**AC-FR-Preflight.d:** Given a table with `cols > t_wide_cols` and no `transforms/bronze/<table>.sql`, when `feather run` is invoked without `--accept-wide`, then the command exits 3 with a message naming `--accept-wide` and the projection file path.
+
+**AC-FR-Preflight.e:** Given a MEDIUM table whose discovery shows no timestamp column and no integer PK, when `feather run` is invoked without `--single-window`, then the command exits 3 naming `--single-window` and `feather extract override set`. When invoked with `--single-window`, extraction proceeds as a single window.
+
+**AC-FR-Preflight.f:** Given `feather extract override set zakya_dbo_sales --window-column "Invoice Date"`, when a subsequent `feather run` is invoked, then the banner shows `Invoice Date` as the window column and the planner uses it instead of the auto-derived choice.
+
+**AC-FR-Preflight.g:** Given `feather run --plan-only`, when invoked against any DB source, then the banner is printed and the command exits 0 with no source connection opened and no rows written.
+
+**AC-FR-Preflight.h:** Given file-based sources only, when `feather run` is invoked, then no pre-flight banner is printed, no `cheap_rowcount` call is made, and extraction behaviour is identical to today.
+
+---
+
 ## 5. Non-Functional Requirements
 
 **NFR1: Dependencies.** All 7 runtime dependencies ship with the package:
