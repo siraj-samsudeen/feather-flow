@@ -1,66 +1,32 @@
-# feather-etl — agent context
+This is a complete rewrite and reimagining of feather-etl, grounded in actual
+usage experience (see `docs/reference/` for context, `docs/prd/` for active
+requirements).
 
-Config-driven Python ETL for heterogeneous ERP sources → local DuckDB.
+Two prior implementations exist for consultation:
 
-**Full project context:** `.claude/rules/feather-etl-project.md`
-**Requirements:** `docs/prd.md`
-**Architecture (codebase):** `README.md`
-**Architecture (warehouse model):** `docs/architecture/warehouse-layers.md` — four-layer Bronze/Silver/Gold/Departmental-Data-Marts model. Read before writing any transform SQL.
-**Personas:** `docs/personas.md` — Builder, Analyst, artifact consumers. Cite by version in every feature spec.
-**Work conventions:** `docs/CONTRIBUTING.md`
+- `main` branch — the current shipped codebase before this rewrite began.
+- `code-reorg` branch — a partial rewrite attempt with installed OpenSpec
+  scaffolding.
 
-## Where to find things
+Both are references only. Do NOT automatically inherit decisions, conventions,
+file layouts, or abstractions from either. Inherit only when the prior choice
+is genuinely non-obvious and would not be reconstructed independently from
+the PRD.
 
-All project documentation lives under `docs/`. Start with [`docs/README.md`](docs/README.md) — it is the top-level map. Each sub-folder (`architecture/`, `conventions/`, `issues/`) has its own `README.md` hub listing every doc in that folder with a one-line summary. Read the relevant hub before reading individual docs, and update the hub when you add a new doc.
+The PRD at `docs/prd/001-explore-phase.md` is the source of truth for what to
+build. The user directs sequencing commit by commit.
 
-## Before you write a single line of code
+What is mentioned in PRD 001 is only a slice of the current feather-etl
+functionality. Other capabilities (curate, extract, transform, run, rerun,
+history, etc.) will be added in subsequent PRDs after this one is complete.
+Do NOT assume that functionality absent from PRD 001 has been dropped.
 
-Run the test suite and confirm green:
+Tests colocate as `<module>_test.py` siblings next to the code they test.
+Multi-module feature tests go in `scenarios/` within the feature's package.
+Repo-wide invariants live in `tests/invariants/`. Importable test helpers
+in `src/feather_etl/testing/`.
 
-```bash
-uv run pytest -q               # currently: 720 tests
-```
-
-If anything is red before you touch anything, report immediately.
-
----
-
-# Standing workflow preferences for superpowers skills
-
-Superpowers skills honor CLAUDE.md preferences over their built-in defaults. The
-rules below apply to every invocation of `/brainstorming`, `/writing-plans`,
-`/subagent-driven-development`, and `/finishing-a-development-branch` when
-working in this repo.
-
-The patched versions of `brainstorming/SKILL.md` and `writing-plans/SKILL.md`
-live vendored in `.claude/skills/`. See `.claude/skills/README.md` for
-provenance and how to re-sync with upstream.
-
-## After spec approval
-
-Do NOT ask "Subagent-Driven vs Inline Execution." Always use Subagent-Driven
-Development. Announce and proceed:
-
-> "Plan complete. Proceeding with Subagent-Driven execution."
-
-Inline execution is used only on explicit user request ("use executing-plans
-instead").
-
-## Branch setup
-
-Before dispatching the first implementer subagent: automatically create a git
-worktree on branch `feature/<slug>`, where `<slug>` = the plan filename minus
-the `YYYY-MM-DD-` prefix and `.md` suffix. Do not ask; do not present options.
-
-The worktree is created via the `superpowers:using-git-worktrees` skill (not
-plain `git checkout -b`), so implementation work stays isolated from the main
-workspace.
-
-Plain in-place branching is used only on explicit user request ("stay in this
-workspace" or "don't use a worktree").
-
-## Spec review gate is preserved
-
-The spec review gate in `brainstorming` (user approves the written spec before
-implementation begins) is kept. All other questions in that flow are also kept
-as defined by the skill. The autopilot starts ONLY after the spec is approved.
+Dogfood feather inside this repo. Create example client projects under
+`examples/<client>/` (e.g. `examples/rama_dw/`) using the verbs you build.
+Do not pre-scaffold example contents — they emerge from running `feather init`
+and subsequent verbs against real source data.

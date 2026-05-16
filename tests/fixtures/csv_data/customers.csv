@@ -1,5 +1,0 @@
-customer_id,name,email,city,credit_limit,created_at
-101,Acme Corp,billing@acme.com,Mumbai,50000.00,2024-01-01 00:00:00
-102,Globe Ltd,accounts@globe.co,Delhi,25000.00,2024-03-15 00:00:00
-103,Nexus Inc,finance@nexus.in,Bangalore,75000.00,2024-06-01 00:00:00
-104,Apex Co,pay@apex.com,Chennai,10000.00,2024-09-01 00:00:00
