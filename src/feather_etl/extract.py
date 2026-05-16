@@ -30,6 +30,7 @@ def _iter_source_batches(
     source_table: str,
     heartbeat_every_rows: int,
     heartbeat_every_seconds: int,
+    source_filter: str | None = None,
 ) -> Iterator[pa.RecordBatch]:
     """Yield RecordBatches from a source. Adapts non-streaming (file) sources.
 
@@ -37,10 +38,16 @@ def _iter_source_batches(
     stream + heartbeat natively. Other sources still go through `extract()`
     and we slice the materialized table into batches so the streaming-load
     session writes uniformly.
+
+    ``source_filter`` is a SQL WHERE fragment (no leading WHERE keyword) to push
+    down into the source fetch. For date/pk_range windows this is populated from
+    ``WindowSpec.source_filter`` so each window only fetches its slice of the
+    source table. ``None`` means fetch the full table (single-window case).
     """
     if hasattr(source, "extract_batches"):
         yield from source.extract_batches(
             source_table,
+            filter=source_filter,
             heartbeat_every_rows=heartbeat_every_rows,
             heartbeat_every_seconds=heartbeat_every_seconds,
         )
@@ -199,12 +206,6 @@ def run_extract(
             # transport_name. Sources that don't (csv, sqlite, file sources) fall
             # back to the class name — those paths don't trip the transport choice.
             transport_used = getattr(source, "transport_name", type(source).__name__)
-            # NOTE (#62/#63): `_iter_source_batches` streams the full source table for
-            # every window. Today windows is always `[WindowSpec("all", "1=1", ...)]`,
-            # so this is fine. Issue #63 introduces real `date` / `pk_range` windows;
-            # the planner there MUST also push the window predicate into the source
-            # fetch (per-window SELECT WHERE) — otherwise each window would re-fetch
-            # everything and the DELETE+INSERT would overwrite the prior window.
             for window in windows:
                 result = dest.load_batched_append(
                     table=target,
@@ -214,6 +215,7 @@ def run_extract(
                         table.source_table,
                         heartbeat_every_rows=extract_defaults.heartbeat_every_rows,
                         heartbeat_every_seconds=extract_defaults.heartbeat_every_seconds,
+                        source_filter=window.source_filter,
                     ),
                     run_id=run_id,
                     state=state,

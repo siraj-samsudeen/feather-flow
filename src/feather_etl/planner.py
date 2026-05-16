@@ -270,7 +270,7 @@ def pick_plan(
                 message=(
                     f"Table '{table.name}' has {column_count} columns "
                     f"(threshold: {defaults.t_wide_cols}). "
-                    f"Configure a projection in schema_{table.source_name or table.name}.json "
+                    f"Configure a projection in transforms/bronze/{table.name}.sql "
                     f"to narrow the extract."
                 ),
                 bypass_flag="--accept-wide",
@@ -294,7 +294,7 @@ def pick_plan(
                         f"Table '{table.name}' has no derivable window column "
                         f"(no timestamp or integer primary key found). "
                         f"Use --single-window to extract without windowing, or set "
-                        f"an override with `feather override set {table.name} --window-column <col>`."
+                        f"an override with `feather extract override set {table.name} --window-column <col>`."
                     ),
                     bypass_flag="--single-window",
                 )
