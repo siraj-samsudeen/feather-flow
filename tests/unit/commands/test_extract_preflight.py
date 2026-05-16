@@ -302,9 +302,7 @@ def test_extract_command_plan_only_exits_zero_without_extract(tmp_path):
             "feather_etl.commands._preflight.resolve_source",
             return_value=fake,
         ),
-        patch(
-            "feather_etl.commands.extract.run_extract", side_effect=fake_run_extract
-        ),
+        patch("feather_etl.commands.extract.run_extract", side_effect=fake_run_extract),
     ):
         result = runner.invoke(
             app,
@@ -312,9 +310,7 @@ def test_extract_command_plan_only_exits_zero_without_extract(tmp_path):
             catch_exceptions=False,
         )
 
-    assert result.exit_code == 0, (
-        f"Expected 0, got {result.exit_code}: {result.output}"
-    )
+    assert result.exit_code == 0, f"Expected 0, got {result.exit_code}: {result.output}"
     assert not extract_called, "run_extract should NOT be called with --plan-only"
 
 
@@ -351,9 +347,7 @@ def test_extract_command_blocker_accepted_by_flag_proceeds(tmp_path):
     """Blockers accepted by the corresponding flag do NOT block extraction."""
     config_file = _write_config(tmp_path)
     # 150 columns but col_0 is int — no no_window_column blocker, only wide_table.
-    wide_columns = [("col_0", "int")] + [
-        (f"col_{i}", "varchar") for i in range(1, 150)
-    ]
+    wide_columns = [("col_0", "int")] + [(f"col_{i}", "varchar") for i in range(1, 150)]
     fake = _fake_db_source(cheap_rows=500, columns=wide_columns, pk=["col_0"])
 
     extract_called = []
@@ -374,9 +368,7 @@ def test_extract_command_blocker_accepted_by_flag_proceeds(tmp_path):
             "feather_etl.commands._preflight.resolve_source",
             return_value=fake,
         ),
-        patch(
-            "feather_etl.commands.extract.run_extract", side_effect=fake_run_extract
-        ),
+        patch("feather_etl.commands.extract.run_extract", side_effect=fake_run_extract),
     ):
         result = runner.invoke(
             app,
@@ -447,13 +439,9 @@ def test_extract_command_tty_prompts_y_n_after_banner(tmp_path):
             "feather_etl.commands._preflight.resolve_source",
             return_value=fake,
         ),
-        patch(
-            "feather_etl.commands.extract.run_extract", side_effect=fake_run_extract
-        ),
+        patch("feather_etl.commands.extract.run_extract", side_effect=fake_run_extract),
         patch("feather_etl.commands._preflight.sys") as mock_sys,
-        patch(
-            "feather_etl.commands._preflight.input", return_value="y", create=True
-        ),
+        patch("feather_etl.commands._preflight.input", return_value="y", create=True),
     ):
         mock_sys.stdin.isatty.return_value = True
         result = runner.invoke(
@@ -496,9 +484,7 @@ def test_extract_command_non_tty_no_prompt(tmp_path):
             "feather_etl.commands._preflight.resolve_source",
             return_value=fake,
         ),
-        patch(
-            "feather_etl.commands.extract.run_extract", side_effect=fake_run_extract
-        ),
+        patch("feather_etl.commands.extract.run_extract", side_effect=fake_run_extract),
         patch("feather_etl.commands._preflight.sys") as mock_sys,
         patch("feather_etl.commands._preflight.input", fake_input, create=True),
     ):
@@ -560,9 +546,7 @@ def test_extract_command_table_filter_restricts_planning_and_extract_to_one_tabl
             catch_exceptions=False,
         )
 
-    assert result.exit_code == 0, (
-        f"Got: {result.exit_code}, output: {result.output!r}"
-    )
+    assert result.exit_code == 0, f"Got: {result.exit_code}, output: {result.output!r}"
     # Only the filtered table should be planned.
     # _sanitize_bronze_name("testdb", "orders") → "testdb_orders"
     assert planned_tables == ["testdb_orders"], (

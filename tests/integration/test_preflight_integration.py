@@ -63,10 +63,10 @@ _SMALL_COLUMNS: list[tuple[str, str]] = [
 
 # 32 columns: integer PK + 1 timestamp + 30 varchar.
 # "Invoice ID" (int) = pk → partition_on, "created_at" = timestamp → window col.
-_LARGE_COLUMNS: list[tuple[str, str]] = (
-    [("Invoice ID", "int"), ("created_at", "datetime")]
-    + [(f"field_{i}", "varchar(100)") for i in range(30)]
-)
+_LARGE_COLUMNS: list[tuple[str, str]] = [
+    ("Invoice ID", "int"),
+    ("created_at", "datetime"),
+] + [(f"field_{i}", "varchar(100)") for i in range(30)]
 
 # Window range for LARGE scenarios: 2025-04-01 → 2026-05-13 → 408 date windows.
 _WINDOW_START = datetime(2025, 4, 1)
@@ -231,7 +231,9 @@ def _register_stub_source():
 
     return patch.dict(
         source_registry.SOURCE_CLASSES,
-        {"stubbed_sqlserver": "tests.integration.test_preflight_integration.StubbedSqlServerSource"},
+        {
+            "stubbed_sqlserver": "tests.integration.test_preflight_integration.StubbedSqlServerSource"
+        },
     )
 
 
@@ -321,7 +323,9 @@ def test_large_table_connectorx_available_banner(tmp_path: Path) -> None:
         _register_stub_source(),
         preflight_patch,
         extract_patch,
-        patch.dict(transport_registry.TRANSPORT_CLASSES, transports_with_connectorx, clear=True),
+        patch.dict(
+            transport_registry.TRANSPORT_CLASSES, transports_with_connectorx, clear=True
+        ),
     ):
         result = runner.invoke(
             app,
@@ -377,7 +381,11 @@ def test_large_table_no_connectorx_exits_three(tmp_path: Path) -> None:
         _register_stub_source(),
         preflight_patch,
         extract_patch,
-        patch.dict(transport_registry.TRANSPORT_CLASSES, transports_without_connectorx, clear=True),
+        patch.dict(
+            transport_registry.TRANSPORT_CLASSES,
+            transports_without_connectorx,
+            clear=True,
+        ),
     ):
         result = runner.invoke(
             app,
