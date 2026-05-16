@@ -71,12 +71,22 @@ def run_extract(
     working_dir: Path,
     refresh: bool = False,
     refresh_all: bool = False,
+    pre_planned_windows: dict[str, list] | None = None,
 ) -> list[ExtractResult]:
     """Pull curated tables into bronze. Dev-only. No transforms, no DQ, no drift.
 
     Per-table errors (including unresolvable ``source_db`` and extract/load
     failures) are captured as ``ExtractResult(status="failure")`` and never
     raised — the caller can decide exit-code semantics from the result list.
+
+    Parameters
+    ----------
+    pre_planned_windows:
+        Optional mapping from table name to a pre-computed list of WindowSpec
+        objects.  When present for a table, the internal ``plan_windows()``
+        call is skipped and the provided windows are used directly.  This lets
+        the pre-flight runner (commands/_preflight.py) hand its computed windows
+        into the extract loop without re-planning.
     """
     state = StateManager(working_dir / "feather_state.duckdb")
     state.init_state()
@@ -176,7 +186,13 @@ def run_extract(
                 state.clear_windows_for_table(target)
 
             committed = state.get_committed_windows(target)
-            windows = [w for w in plan_windows(table) if w.window_key not in committed]
+            # Use pre-planned windows from the pre-flight runner if available;
+            # otherwise fall back to the internal single-window plan.
+            if pre_planned_windows and table.name in pre_planned_windows:
+                all_windows = pre_planned_windows[table.name]
+            else:
+                all_windows = plan_windows(table)
+            windows = [w for w in all_windows if w.window_key not in committed]
 
             rows = 0
             # Sources implementing the transport-registry contract (#61) expose

@@ -173,9 +173,7 @@ def _plan_pk_range_windows(
     total = max_int - min_int + 1
 
     if total <= 0:
-        raise ValueError(
-            f"pk_range: min ({min_int}) must be <= max ({max_int})"
-        )
+        raise ValueError(f"pk_range: min ({min_int}) must be <= max ({max_int})")
 
     # When total is very small, emit one window per value (up to 8 max via
     # the formula); the formula naturally handles this: total // 100_000 = 0,

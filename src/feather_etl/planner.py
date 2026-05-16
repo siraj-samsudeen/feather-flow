@@ -81,7 +81,7 @@ class ExtractPlan:
 # ---------------------------------------------------------------------------
 
 
-def _auto_derive_timestamp_column(discovery: StreamSchema) -> str | None:
+def auto_derive_timestamp_column(discovery: StreamSchema) -> str | None:
     """Return the name of the first (lowest ordinal) timestamp column, or None."""
     for col_name, col_type in discovery.columns:
         if _is_timestamp_type(col_type):
@@ -89,7 +89,7 @@ def _auto_derive_timestamp_column(discovery: StreamSchema) -> str | None:
     return None
 
 
-def _auto_derive_int_pk_column(discovery: StreamSchema) -> str | None:
+def auto_derive_int_pk_column(discovery: StreamSchema) -> str | None:
     """Return the first (lowest ordinal) column that is in primary_key and is int.
 
     Returns None if no PK exists, or if no PK column has an integer type.
@@ -190,8 +190,8 @@ def pick_plan(
     # -----------------------------------------------------------------------
     # Auto-derive: window column and int PK column
     # -----------------------------------------------------------------------
-    auto_timestamp_col = _auto_derive_timestamp_column(discovery)
-    auto_int_pk_col = _auto_derive_int_pk_column(discovery)
+    auto_timestamp_col = auto_derive_timestamp_column(discovery)
+    auto_int_pk_col = auto_derive_int_pk_column(discovery)
 
     # Field-by-field override precedence
     if override is not None and override.window_column is not None:

@@ -20,7 +20,7 @@ def _make_windows(n: int) -> list[WindowSpec]:
     return [
         WindowSpec(
             window_key=f"2025-01-{i + 1:02d}",
-            window_predicate=f'"col" >= \'2025-01-{i + 1:02d}\' AND "col" < \'2025-01-{i + 2:02d}\'',
+            window_predicate=f"\"col\" >= '2025-01-{i + 1:02d}' AND \"col\" < '2025-01-{i + 2:02d}'",
             window_start=None,
             window_end=None,
             source_filter=None,

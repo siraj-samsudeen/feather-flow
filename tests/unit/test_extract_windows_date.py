@@ -72,8 +72,8 @@ def test_plan_windows_date_strategy_inclusive_start_exclusive_end() -> None:
     assert len(windows) == 1
     w = windows[0]
     # Half-open [start, end): start = Apr 1 00:00, end = Apr 2 00:00
-    assert '"invoice_date" >= \'2026-04-01T00:00:00\'' in w.window_predicate
-    assert '"invoice_date" < \'2026-04-02T00:00:00\'' in w.window_predicate
+    assert "\"invoice_date\" >= '2026-04-01T00:00:00'" in w.window_predicate
+    assert "\"invoice_date\" < '2026-04-02T00:00:00'" in w.window_predicate
     assert w.window_start == _dt("2026-04-01T00:00:00")
     assert w.window_end == _dt("2026-04-02T00:00:00")
 
