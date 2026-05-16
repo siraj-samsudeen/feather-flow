@@ -30,6 +30,7 @@ def _iter_source_batches(
     source_table: str,
     heartbeat_every_rows: int,
     heartbeat_every_seconds: int,
+    source_filter: str | None = None,
 ) -> Iterator[pa.RecordBatch]:
     """Yield RecordBatches from a source. Adapts non-streaming (file) sources.
 
@@ -37,10 +38,16 @@ def _iter_source_batches(
     stream + heartbeat natively. Other sources still go through `extract()`
     and we slice the materialized table into batches so the streaming-load
     session writes uniformly.
+
+    ``source_filter`` is a SQL WHERE fragment (no leading WHERE keyword) to push
+    down into the source fetch. For date/pk_range windows this is populated from
+    ``WindowSpec.source_filter`` so each window only fetches its slice of the
+    source table. ``None`` means fetch the full table (single-window case).
     """
     if hasattr(source, "extract_batches"):
         yield from source.extract_batches(
             source_table,
+            filter=source_filter,
             heartbeat_every_rows=heartbeat_every_rows,
             heartbeat_every_seconds=heartbeat_every_seconds,
         )
@@ -71,12 +78,22 @@ def run_extract(
     working_dir: Path,
     refresh: bool = False,
     refresh_all: bool = False,
+    pre_planned_windows: dict[str, list] | None = None,
 ) -> list[ExtractResult]:
     """Pull curated tables into bronze. Dev-only. No transforms, no DQ, no drift.
 
     Per-table errors (including unresolvable ``source_db`` and extract/load
     failures) are captured as ``ExtractResult(status="failure")`` and never
     raised — the caller can decide exit-code semantics from the result list.
+
+    Parameters
+    ----------
+    pre_planned_windows:
+        Optional mapping from table name to a pre-computed list of WindowSpec
+        objects.  When present for a table, the internal ``plan_windows()``
+        call is skipped and the provided windows are used directly.  This lets
+        the pre-flight runner (commands/_preflight.py) hand its computed windows
+        into the extract loop without re-planning.
     """
     state = StateManager(working_dir / "feather_state.duckdb")
     state.init_state()
@@ -176,19 +193,19 @@ def run_extract(
                 state.clear_windows_for_table(target)
 
             committed = state.get_committed_windows(target)
-            windows = [w for w in plan_windows(table) if w.window_key not in committed]
+            # Use pre-planned windows from the pre-flight runner if available;
+            # otherwise fall back to the internal single-window plan.
+            if pre_planned_windows and table.name in pre_planned_windows:
+                all_windows = pre_planned_windows[table.name]
+            else:
+                all_windows = plan_windows(table)
+            windows = [w for w in all_windows if w.window_key not in committed]
 
             rows = 0
             # Sources implementing the transport-registry contract (#61) expose
             # transport_name. Sources that don't (csv, sqlite, file sources) fall
             # back to the class name — those paths don't trip the transport choice.
             transport_used = getattr(source, "transport_name", type(source).__name__)
-            # NOTE (#62/#63): `_iter_source_batches` streams the full source table for
-            # every window. Today windows is always `[WindowSpec("all", "1=1", ...)]`,
-            # so this is fine. Issue #63 introduces real `date` / `pk_range` windows;
-            # the planner there MUST also push the window predicate into the source
-            # fetch (per-window SELECT WHERE) — otherwise each window would re-fetch
-            # everything and the DELETE+INSERT would overwrite the prior window.
             for window in windows:
                 result = dest.load_batched_append(
                     table=target,
@@ -198,6 +215,7 @@ def run_extract(
                         table.source_table,
                         heartbeat_every_rows=extract_defaults.heartbeat_every_rows,
                         heartbeat_every_seconds=extract_defaults.heartbeat_every_seconds,
+                        source_filter=window.source_filter,
                     ),
                     run_id=run_id,
                     state=state,

@@ -1,6 +1,11 @@
 """`feather extract` command — local bronze pull.
 
 Renamed from `feather cache` per the feather-transform change.
+
+The ``extract`` verb is implemented as a Typer sub-app so that sub-commands
+(e.g. ``feather extract override``) can be nested beneath it.  Running
+``feather extract`` with no sub-command invokes the default extract logic
+(``invoke_without_command=True``).
 """
 
 from __future__ import annotations
@@ -10,9 +15,20 @@ from pathlib import Path
 import typer
 
 from feather_etl.commands._common import _load_and_validate
+from feather_etl.commands.override import override_app
+from feather_etl.extract import run_extract
+
+extract_app = typer.Typer(
+    name="extract",
+    help="Pull curated source tables into bronze.",
+    invoke_without_command=True,
+)
+extract_app.add_typer(override_app, name="override")
 
 
+@extract_app.callback()
 def extract(
+    ctx: typer.Context,
     config: Path = typer.Option("feather.yaml", "--config"),
     table: str | None = typer.Option(
         None,
@@ -42,9 +58,33 @@ def extract(
         "--limit",
         help="Override defaults.row_limit for this invocation.",
     ),
+    plan_only: bool = typer.Option(
+        False,
+        "--plan-only",
+        help="Print the pre-flight plan for each DB-source table and exit without "
+        "extracting. File sources are not shown (no planning needed).",
+    ),
+    accept_wide: bool = typer.Option(
+        False,
+        "--accept-wide",
+        help="Bypass the wide_table blocker and proceed with the full column set.",
+    ),
+    single_window: bool = typer.Option(
+        False,
+        "--single-window",
+        help="Bypass the no_window_column blocker and extract in a single window.",
+    ),
+    accept_slow_transport: bool = typer.Option(
+        False,
+        "--accept-slow-transport",
+        help="Bypass the slow_transport blocker and proceed without connectorx.",
+    ),
 ) -> None:
     """Pull curated source tables into bronze."""
-    from feather_etl.extract import run_extract
+    # When a sub-command (e.g. ``override``) is invoked, do not execute the
+    # extract logic — just let Typer route to the sub-command.
+    if ctx.invoked_subcommand is not None:
+        return
 
     curation_path = Path(config).resolve().parent / "discovery" / "curation.json"
     if not curation_path.exists():
@@ -97,8 +137,51 @@ def extract(
     if requested_sources:
         tables = [t for t in tables if t.database in requested_sources]
 
+    # ------------------------------------------------------------------
+    # Pre-flight: size, plan, and print banners for all DB-source tables.
+    # Pass the already-filtered ``tables`` list directly so run_preflight
+    # does not need to re-filter and we avoid mutating cfg.tables.
+    # ------------------------------------------------------------------
+    from feather_etl.commands._preflight import run_preflight
+    from feather_etl.state import StateManager
+
+    state = StateManager(cfg.config_dir / "feather_state.duckdb")
+    state.init_state()
+
+    preflight_result = run_preflight(
+        cfg,
+        state,
+        table_filter=None,  # tables list already filtered above
+        accept_wide=accept_wide,
+        single_window=single_window,
+        accept_slow_transport=accept_slow_transport,
+        plan_only=plan_only,
+        tables=tables,
+    )
+
+    # plan_only: exit 0 without extracting.
+    if preflight_result is None:
+        return
+
+    # Build the ordered set of (table, plan) from preflight.
+    planned_pairs = preflight_result  # list[(TableConfig, ExtractPlan | None)]
+
+    # Build pre-planned windows map: table.name -> list[WindowSpec]
+    pre_planned_windows: dict[str, list] = {}
+    for tbl, plan in planned_pairs:
+        if plan is not None and plan.windows:
+            pre_planned_windows[tbl.name] = plan.windows
+
+    # Use only tables returned by preflight (may be a subset due to filter).
+    extract_tables = [tbl for tbl, _ in planned_pairs]
+
     results = run_extract(
-        cfg, tables, cfg.config_dir, refresh=refresh, refresh_all=refresh_all
+        cfg,
+        extract_tables,
+        cfg.config_dir,
+        refresh=refresh,
+        refresh_all=refresh_all,
+        pre_planned_windows=pre_planned_windows,
     )
 
     # Grouped-by-source_db output
@@ -167,4 +250,4 @@ def _lookup_source_name(cfg, source_db: str) -> str:
 
 
 def register(app: typer.Typer) -> None:
-    app.command(name="extract")(extract)
+    app.add_typer(extract_app, name="extract")

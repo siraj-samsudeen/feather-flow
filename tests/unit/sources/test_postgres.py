@@ -7,6 +7,7 @@ the local PostgreSQL instance is not reachable.
 from __future__ import annotations
 
 import pytest
+from unittest.mock import MagicMock, patch
 
 from tests.db_bootstrap import POSTGRES_DSN as CONN_STR, postgres_marker
 
@@ -179,7 +180,8 @@ class TestPostgresSourceIntegration:
         schemas = source.discover()
         sales = next(s for s in schemas if s.name == "erp.sales")
         assert sales.supports_incremental is True
-        assert sales.primary_key is None
+        # discover() now populates primary_key from INFORMATION_SCHEMA
+        assert sales.primary_key == ["id"]
         col_names = [c[0] for c in sales.columns]
         assert "id" in col_names
         assert "amount" in col_names
@@ -748,3 +750,88 @@ class TestPostgresColumnQuoting:
         src.extract("erp.sales")
 
         assert any("SELECT *" in sql for sql in captured_sql)
+
+
+# ---------------------------------------------------------------------------
+# PostgresSource.discover() — primary_key population (mocked)
+# ---------------------------------------------------------------------------
+
+
+@patch("feather_etl.sources.postgres.psycopg2")
+def test_postgres_discover_populates_pk(mock_psycopg2: MagicMock) -> None:
+    """discover() sets primary_key=[col] when one PK column is returned."""
+    from feather_etl.sources.postgres import PostgresSource
+
+    mock_cursor = MagicMock()
+    # fetchall call sequence:
+    #   0: list tables → 1 table
+    #   1: columns for erp.orders
+    #   2: PK columns for erp.orders (single PK)
+    mock_cursor.fetchall.side_effect = [
+        [("erp", "orders")],
+        [("id", "integer"), ("total", "numeric")],
+        [("id",)],
+    ]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_psycopg2.connect.return_value = mock_conn
+
+    src = PostgresSource(connection_string="dummy")
+    schemas = src.discover()
+
+    assert len(schemas) == 1
+    assert schemas[0].primary_key == ["id"]
+
+
+# ---------------------------------------------------------------------------
+# PostgresSource.cheap_rowcount — mocked
+# ---------------------------------------------------------------------------
+
+
+@patch("feather_etl.sources.postgres.psycopg2")
+def test_postgres_cheap_rowcount_returns_estimate(mock_psycopg2: MagicMock) -> None:
+    """cheap_rowcount() queries pg_class.reltuples and returns an int."""
+    from feather_etl.sources.postgres import PostgresSource
+
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = (55000,)
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_psycopg2.connect.return_value = mock_conn
+
+    src = PostgresSource(connection_string="dummy")
+    count = src.cheap_rowcount("erp.orders")
+
+    assert count == 55000
+    assert isinstance(count, int)
+    execute_calls = [str(c) for c in mock_cursor.execute.call_args_list]
+    assert any("pg_class" in c for c in execute_calls)
+
+
+# ---------------------------------------------------------------------------
+# PostgresSource.get_window_range — mocked
+# ---------------------------------------------------------------------------
+
+
+@patch("feather_etl.sources.postgres.psycopg2")
+def test_postgres_get_window_range_returns_min_max(mock_psycopg2: MagicMock) -> None:
+    """get_window_range() returns (min, max) tuple for the given column."""
+    import datetime
+
+    from feather_etl.sources.postgres import PostgresSource
+
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = (
+        datetime.datetime(2020, 1, 1),
+        datetime.datetime(2026, 5, 15),
+    )
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_psycopg2.connect.return_value = mock_conn
+
+    src = PostgresSource(connection_string="dummy")
+    result = src.get_window_range("erp.orders", "updated_at")
+
+    assert result is not None
+    assert result[0] == datetime.datetime(2020, 1, 1)
+    assert result[1] == datetime.datetime(2026, 5, 15)

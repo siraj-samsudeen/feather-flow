@@ -162,8 +162,15 @@ feather extract                        # pull curated tables into bronze.* (dev-
 feather extract --table sales,customer # comma-separated table filter
 feather extract --source afans,nim     # comma-separated source_db filter
 feather extract --refresh              # force re-pull, ignore change detection
+feather extract --plan-only            # print pre-flight banner and exit; no extraction
 feather transform                      # re-run silver/gold against existing destination — no source touch
 feather transform --mode prod          # honour `-- materialized: true` markers; gold becomes TABLEs
+
+# Per-table extraction overrides (stored in state DB)
+feather extract override list                                    # show all active overrides
+feather extract override set <table> --window-column "Col"      # fix auto-derived window column
+feather extract override set <table> --window-strategy single   # force single-window extract
+feather extract override clear <table>                          # remove override for a table
 ```
 
 > **Breaking change — `feather cache` → `feather extract`.** The previous `feather cache` verb has been renamed to `feather extract`. The old name no longer works; running `feather cache` returns "No such command". Update any scripts that invoke `feather cache`. The rename is hard (no alias) — see [`openspec/changes/feather-transform/specs/extract-verb-rename/spec.md`](openspec/changes/feather-transform/specs/extract-verb-rename/spec.md) for the rationale.
@@ -202,6 +209,68 @@ feather extract --refresh --table sales        # force re-pull of specific table
 `feather extract` never runs silver/gold transforms. After a fresh extract, run `feather transform` (re-runs silver/gold with no source touch) or `feather run` (full pipeline) to create silver views and materialize gold tables.
 
 `feather extract` is dev-only. It will refuse to run when the effective mode is `prod` (via `mode: prod` in `feather.yaml` or `FEATHER_MODE=prod`).
+
+#### Pre-flight banner
+
+Before extracting from any DB source (SQL Server, PostgreSQL, MySQL), feather-etl classifies each table by estimated row and column count, derives the extraction shape, and prints a banner:
+
+```
+[zakya_dbo_sales] pre-flight:
+    rows (est)      : 49,830,000 (sys.dm_db_partition_stats)
+    columns         : 97 (32 in transforms/bronze/zakya_dbo_sales.sql)
+    bucket          : LARGE
+    transport       : connectorx (partition_on=Invoice ID, partitions=8)
+    windowing       : date, Invoice Date, 1d windows
+    windows planned : 408 (2025-04-01 → 2026-05-13)
+    windows done    : 12 (skipping)
+    windows to run  : 396
+    est wall time   : 6h 45m at 2,100 rows/sec
+```
+
+Each line explained:
+
+- `rows (est)` — cheap rowcount from the DB catalog (e.g. `sys.dm_db_partition_stats` for SQL Server); never a full `COUNT(*)`.
+- `columns` — total columns in the source; if a bronze projection SQL exists, the projected count is shown in parentheses.
+- `bucket` — SMALL / MEDIUM / LARGE, derived from the row and column thresholds in `defaults.extract.*`.
+- `transport` — which transport will be used and with what parameters (`partition_on`, `partitions`).
+- `windowing` — strategy (date / pk_range / single), the chosen window column, and the window grain.
+- `windows planned / done / to run` — total windows, already committed (skipped), and remaining.
+- `est wall time` — derived from the last 5 successful runs in `_runs`; falls back to `2,000 rows/sec` (arrow-odbc) or `6,000 rows/sec` (connectorx with partition_on) if no history exists.
+
+Three conditions block extraction and exit code 3 (operator decision required):
+
+- **Wide table, no projection** — `cols > t_wide_cols` (default 60) and no `transforms/bronze/<table>.sql` exists. Bypass: `--accept-wide`.
+- **No window column** — bucket is MEDIUM or LARGE and no timestamp/integer-PK column can be auto-derived and no override is set. Bypass: `--single-window`.
+- **LARGE without connectorx** — bucket is LARGE and connectorx is not in the transport registry. Bypass: `--accept-slow-transport`.
+
+All active blockers are shown before exiting. Bypass flags are one-shot — the cron line explicitly names each accepted trade-off. There is no blanket `--yes`.
+
+In a TTY with no blockers, feather prompts `Proceed? [Y/n]` (default Y). In a non-TTY (cron, CI), it proceeds silently if no blockers are active. `--plan-only` exits 0 after printing the banner, without opening any source connection.
+
+File sources (CSV, DuckDB, Excel, JSON, SQLite) are not subject to pre-flight — no banner, no rowcount call, no behaviour change.
+
+#### `feather extract override`
+
+Per-table overrides let operators correct auto-derived extraction parameters without touching `feather.yaml`. Overrides are stored in `_extract_overrides` in the state DuckDB and persist across runs.
+
+```bash
+feather extract override list
+# → prints the current override table (table_name, window_strategy, window_column, window_grain, partition_on)
+
+feather extract override set zakya_dbo_sales --window-column "Invoice Date"
+# → next run uses "Invoice Date" as the window column instead of the auto-derived choice
+
+feather extract override set zakya_dbo_sales --window-strategy single
+# → bypass windowing for this table permanently (no --single-window flag needed each run)
+
+feather extract override set zakya_dbo_sales --window-grain 7d
+# → use 7-day windows instead of the default 1d
+
+feather extract override clear zakya_dbo_sales
+# → remove the override; auto-derivation resumes
+```
+
+`set` is an upsert — only the supplied fields are written; unset fields remain NULL (inherit auto-derivation). See `feather extract override --help` for all options.
 
 ### `feather transform`
 

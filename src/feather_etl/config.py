@@ -78,6 +78,11 @@ class DestinationConfig:
 class ExtractDefaultsConfig:
     heartbeat_every_rows: int = 100_000
     heartbeat_every_seconds: int = 30
+    # Bucket-size thresholds for the pre-flight planner (issue #63).
+    t_small_rows: int = 100_000
+    t_large_rows: int = 5_000_000
+    t_narrow_cols: int = 25
+    t_wide_cols: int = 60
 
 
 @dataclass
@@ -329,6 +334,10 @@ def load_config(
         extract=ExtractDefaultsConfig(
             heartbeat_every_rows=extract_raw.get("heartbeat_every_rows", 100_000),
             heartbeat_every_seconds=extract_raw.get("heartbeat_every_seconds", 30),
+            t_small_rows=extract_raw.get("t_small_rows", 100_000),
+            t_large_rows=extract_raw.get("t_large_rows", 5_000_000),
+            t_narrow_cols=extract_raw.get("t_narrow_cols", 25),
+            t_wide_cols=extract_raw.get("t_wide_cols", 60),
         ),
     )
 

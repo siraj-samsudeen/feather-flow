@@ -532,11 +532,27 @@ def run_all(
     config: FeatherConfig,
     table_filter: str | None = None,
     force_views: bool = False,
+    pre_planned_windows: dict[str, list] | None = None,
 ) -> list[RunResult]:
     """Run all configured tables (or a single table if table_filter is set).
 
     After extraction, rebuilds materialized gold transforms if any tables
     succeeded and transform SQL files exist.
+
+    Parameters
+    ----------
+    config:
+        Loaded FeatherConfig.
+    table_filter:
+        If set, only run the table with this exact name.
+    force_views:
+        Pass through to run_transforms.
+    pre_planned_windows:
+        Optional mapping of table_name → list[WindowSpec] from a preceding
+        pre-flight call.  When provided, run_table will use these windows
+        instead of re-deriving them internally.  Currently stored for future
+        use — run_table's per-table windowing will honour this when the
+        windowed-run feature is implemented.
 
     Raises ValueError if table_filter names a table not in config.
     """

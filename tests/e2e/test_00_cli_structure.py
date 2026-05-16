@@ -23,8 +23,17 @@ def test_cli_registers_expected_commands_on_app() -> None:
     registered_command_names = {
         command.name for command in app.registered_commands if command.name
     }
+    # Sub-apps registered via add_typer() appear in registered_groups, not
+    # registered_commands. Collect both so commands-converted-to-sub-apps
+    # (like ``extract``, which now hosts ``override``) remain detectable.
+    registered_group_names = {
+        group.typer_instance.info.name
+        for group in app.registered_groups
+        if group.typer_instance.info.name
+    }
+    all_registered = registered_command_names | registered_group_names
 
-    assert registered_command_names == {
+    assert all_registered == {
         "init",
         "validate",
         "discover",

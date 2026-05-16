@@ -27,15 +27,68 @@ def run(
         "--limit",
         help="Override defaults.row_limit for this invocation.",
     ),
+    plan_only: bool = typer.Option(
+        False,
+        "--plan-only",
+        help="Print the pre-flight plan for each DB-source table and exit without "
+        "extracting. File sources are not shown (no planning needed).",
+    ),
+    accept_wide: bool = typer.Option(
+        False,
+        "--accept-wide",
+        help="Bypass the wide_table blocker and proceed with the full column set.",
+    ),
+    single_window: bool = typer.Option(
+        False,
+        "--single-window",
+        help="Bypass the no_window_column blocker and extract in a single window.",
+    ),
+    accept_slow_transport: bool = typer.Option(
+        False,
+        "--accept-slow-transport",
+        help="Bypass the slow_transport blocker and proceed without connectorx.",
+    ),
 ) -> None:
     """Extract all configured tables (or a single table with --table)."""
+    from feather_etl.commands._preflight import run_preflight
     from feather_etl.pipeline import run_all
+    from feather_etl.state import StateManager
 
     cfg = _load_and_validate(config)
     if limit is not None:
         cfg.defaults.row_limit = limit
+
+    # Pre-flight: size, plan, and banner for DB-source tables.
+    state = StateManager(cfg.config_dir / "feather_state.duckdb")
+    state.init_state()
+
+    preflight_result = run_preflight(
+        cfg,
+        state,
+        table_filter=table,
+        accept_wide=accept_wide,
+        single_window=single_window,
+        accept_slow_transport=accept_slow_transport,
+        plan_only=plan_only,
+    )
+
+    # plan_only: exit 0 without running.
+    if preflight_result is None:
+        return
+
+    # Build pre-planned windows map from preflight to avoid re-planning in run_all.
+    pre_planned_windows: dict[str, list] = {}
+    for tbl, plan in preflight_result:
+        if plan is not None and plan.windows:
+            pre_planned_windows[tbl.name] = plan.windows
+
     try:
-        results = run_all(cfg, table_filter=table, force_views=force_views)
+        results = run_all(
+            cfg,
+            table_filter=table,
+            force_views=force_views,
+            pre_planned_windows=pre_planned_windows or None,
+        )
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1)
