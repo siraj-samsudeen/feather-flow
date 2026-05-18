@@ -2,6 +2,7 @@
 
 Created: 2026-05-15
 Revised: 2026-05-16 — after manual rehearsal with real client (rama_dw); see `/Users/siraj/Desktop/NonDropBoxProjects/rama_dw/tally/store_sales_2026_05_11/agent_log.md`
+Revised: 2026-05-18 — `feather init` design locked. §6.1 reshaped (no `--force`/`--json`/`--name`; per-file rules; `pyproject.toml` added; no folder pre-creation; `.gitignore` shrunk to `.env`). §6.5 + §7.4 sample threshold default = 100K. §7.2 `--json` narrowed to data-emitting verbs. §7.7 project tree updated.
 Status: DRAFT — revised against actual session evidence
 Sequence: First phase of the operator's journey. Precedes curate / extract / transform / deploy.
 
@@ -159,24 +160,29 @@ Each feature has three subsections:
 ### 6.1 `feather init`
 
 #### Requirements
-- Scaffold a new feather project in the current directory.
-- Create `feather.yaml` with a commented-out `sources:` block and project defaults.
-- Create `.env` for secrets (empty, gitignored).
-- Create `.gitignore` covering `.env`, `explore/`, `.feather/`, `*.duckdb`.
-- Create empty directories: `explore/`, `tally/`, `tables/`.
-- Refuse to scaffold over an existing project unless `--force`.
+- Scaffold a new feather project in a target directory. With no argument, the target is the current working directory. With one argument, the target is `./<DIR>` (created if absent).
+- Stamp exactly four files into the target — every file is independent; init never overwrites and never merges:
+  - `feather.yaml` — minimal, with a commented-out `sources:` block and one active default (`defaults.sample_threshold: 100000`). Absent → create. Present → skip and print "delete this file and re-run to reset."
+  - `pyproject.toml` — declares `feather-etl` as a project dependency so every later verb works as `uv run feather <verb>`. The dependency is sourced from the local feather-etl checkout (auto-detected via `feather_etl.__file__`, written as a `[tool.uv.sources]` editable path) or, if no enclosing repo is found, pinned to a PyPI version (`feather-etl>=0.1.0`). The project's `name` field is the target directory's basename. Absent → create. Present → skip with the same reset hint.
+  - `.env` — empty file, ready for `feather source add` to write password references. Absent → touch. Present → skip silently.
+  - `.gitignore` — one line: `.env`. Absent → create with that one line. Present → skip and print "ensure `.env` is listed." Other entries (`explore/`, `*.duckdb`, `.feather/`) are added by the verbs that create those files; each verb owns its own gitignore entries.
+- Do **not** create the `explore/`, `tally/`, or `tables/` directories. Each verb mkdirs its own paths on first write.
+- Do **not** create `.feather/state.yaml` or add `.feather/` to `.gitignore`. `feather use` owns that footprint end-to-end.
+- Do **not** inspect, refuse on, or modify files in the target other than the four above.
 
 #### Acceptance criteria
-- After `feather init` in an empty directory, every file/dir listed above exists.
+- After `feather init` in an empty directory, the four files listed above exist; `explore/`, `tally/`, `tables/`, and `.feather/` do not.
+- After `feather init`, re-running `feather init` exits 0 and prints per-file outcomes; no file is modified.
 - After `feather init`, `feather use` exits 0 and prints `(none)`.
 - After `feather init`, `feather sample` (with no source registered) exits 1 with a message pointing at `feather source add`.
-- `feather init` in a non-empty directory exits 1 unless `--force`.
+- `feather init <dir>` creates the sub-directory if absent and scaffolds inside it.
+- `feather init` against a target that is an existing regular file exits non-zero with a message naming the offending path.
 
 #### Contract
 ```bash
-feather init [--name PROJECT_NAME] [--force] [--json]
+feather init [DIR]
 ```
-Exit codes: `0` success; `1` non-empty directory without `--force`.
+Exit codes: `0` on every successful completion (including all combinations of created and skipped outcomes). Non-zero exits are reserved for I/O-class failures (target is a regular file, permission denied, disk full, etc.). There is no `--force`, no `--json`, no `--name`.
 
 ### 6.2 `feather source add`
 
@@ -301,7 +307,7 @@ Exit codes: `0` success; `1` source or database not registered.
 - Connect to a source via the current context (or via an explicit source-prefixed argument).
 - Return up to N rows from a table reference. Default N = 100.
 - **Auto-detect table size and pick the right strategy:**
-  - **Small tables** (under a configurable row threshold, default 1M): use `LIMIT N` — returns the first N rows. Fast, deterministic.
+  - **Small tables** (under a configurable row threshold, default 100K): use `LIMIT N` — returns the first N rows. Fast, deterministic.
   - **Huge tables** (above the threshold): use driver-appropriate **representative sampling** (e.g. `TABLESAMPLE` on Postgres / SQL Server, `ROWS RANDOM()` on SQLite + LIMIT). Returns up to N rows drawn from across the table, not just the first page.
   - The strategy used is printed to stderr and recorded in the log entry. Operator can override with `--method limit` or `--method sample`.
 - Auto-save the full result to a CSV under `explore/<date>/<time>-<label>.csv`.
@@ -324,7 +330,7 @@ Exit codes: `0` success; `1` source or database not registered.
 feather sample [<source>.<database>.]<table> [--limit N] [--method limit|sample] [--threshold ROWS] [--label NAME] [--json]
 ```
 
-Defaults: `--limit 100`. `--threshold 1000000` (tunable per source via `sources.<name>.sample_threshold` in `feather.yaml`). `--method auto` (decides limit-vs-sample by threshold). `--label` defaults to `sample-<table>`.
+Defaults: `--limit 100`. `--threshold 100000` (tunable per source via `sources.<name>.sample_threshold` in `feather.yaml`; project-wide default lives in `feather.yaml`'s `defaults.sample_threshold`, stamped at init). `--method auto` (decides limit-vs-sample by threshold). `--label` defaults to `sample-<table>`.
 
 Edge cases:
 - Table doesn't exist → exit 1 with Levenshtein suggestion.
@@ -627,7 +633,7 @@ explore/
 
 Every command in §6 must:
 
-1. **Have a `--json` output mode.** Default is human-readable; `--json` is machine-readable and complete. This is the **interface skills depend on**.
+1. **Data-emitting verbs have a `--json` output mode.** That includes `feather sample`, `feather sql`, `feather compare`, `feather tally --list`, and `feather explore log`. Default output is human-readable; `--json` is machine-readable and complete. Status-only verbs (`feather init`, `feather use`, `feather source add`, `feather source test`) emit text only — both humans and LLM-driven skills read small status text fluently; structured output earns its keep when the verb's value is rows, diffs, or lists.
 2. **Have no required interactive prompt.** Every prompt has a flag equivalent.
 3. **Return distinct exit codes:** `0` success, `1` error, `3` needs decision (drift, structural mismatch, ambiguity).
 4. **Never modify source data.** Explore is read-only on sources, write-only to `explore/` / `tally/`.
@@ -654,7 +660,7 @@ Every command in §6 must:
 
 ### 7.4 Performance
 
-- `feather sample`: auto-decides LIMIT vs TABLESAMPLE by table size (default threshold 1M rows). Default N = 100. Strategy reported on stderr + in log. (See §6.5.)
+- `feather sample`: auto-decides LIMIT vs TABLESAMPLE by table size (default threshold 100K rows; project-wide default stamped by `feather init` into `feather.yaml`'s `defaults.sample_threshold`). Default N = 100. Strategy reported on stderr + in log. (See §6.5.)
 - `feather sql`: `--timeout SECONDS` (default 60). Configurable per source.
 - `feather compare` / tally diff: in-memory for under ~1M rows; streaming via DuckDB above.
 
@@ -703,11 +709,13 @@ Full tree of a feather project after `feather init` and a working explore sessio
 ```
 <project-root>/
   feather.yaml                                # source connections, project defaults
+  pyproject.toml                              # declares feather-etl as a dep (auto-detected editable path; see §6.1)
   .env                                        # secrets (gitignored)
-  .gitignore                                  # includes .env, explore/, .feather/, *.duckdb
-  .feather/
+  .gitignore                                  # `feather init` writes .env; each later verb appends its own entries
+                                              #   (`feather use` → .feather/, `feather sample` → explore/, etc.)
+  .feather/                                   # created by `feather use` on first context write
     state.yaml                                # current source/database context (gitignored)
-  explore/                                    # ad-hoc queries (gitignored)
+  explore/                                    # ad-hoc queries (gitignored); created on first `feather sample`/`sql`
     2026-05-15/
       09:14:12-sample-sales.{sql,csv}
       09:32:01-attempt-1.{sql,csv}
@@ -772,7 +780,7 @@ Genuinely unresolved. Decisions previously listed as open but answered in the PR
 
 4. **Skill ↔ verb JSON schema.** Skills call verbs with `--json`. Should each verb's output have a published JSON schema (versioned)? Probably yes; defer specifics until skill re-implementation begins (post-step-8).
 
-5. **Threshold default of 1M for `feather sample`.** Driver semantics for `COUNT(*)` and `TABLESAMPLE` vary widely. Design phase picks the actual value; PRD just says "tunable per source."
+5. **Driver semantics for `COUNT(*)` and `TABLESAMPLE`.** The threshold default is locked at 100K (see "Decisions captured" below), but the actual cost-check strategy on each driver (cheap catalog read vs full COUNT) is a design-phase decision.
 
 ### Decisions captured (previously open)
 
@@ -787,6 +795,11 @@ Genuinely unresolved. Decisions previously listed as open but answered in the PR
 - **`feather tally <event>` (no baseline).** Error, exit 1. Explicit beats magic.
 - **One tally per date.** Folder is scoped to one point-in-time reference. Multi-date validation = copy folder. Date-parameter substitution out of MVP.
 - **Verb composability.** `feather tally` is equivalent to `feather sql` + `feather compare` modulo destination path. Tested in integration suite.
+- **`feather init` per-file rules.** Init never overwrites and never merges. Marker files (`feather.yaml`, `pyproject.toml`) skip if present with a "rm to reset" hint; `.env` skips silently; `.gitignore` skips with a one-line hint. No `--force`, no `--json`, no `--name`. See §6.1.
+- **`feather init` does not pre-create folders.** `explore/`, `tally/`, `tables/`, `.feather/` are created by the verbs that own them. Each verb also owns its own `.gitignore` entries (see §6.1).
+- **`feather init` stamps `pyproject.toml`.** Client projects are uv-resolvable workspaces so `uv run feather <verb>` works. Source path is auto-detected from `feather_etl.__file__` (editable local checkout) with a PyPI version-pin fallback.
+- **`--json` is per-verb, not blanket.** Data-emitting verbs only (see §7.2). Status verbs emit text.
+- **Sample threshold default = 100K rows.** See §6.5, §7.4. Tunable per source.
 
 ---
 

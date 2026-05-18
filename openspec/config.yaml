@@ -1,20 +1,79 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+# Project context — shown to AI when creating any OpenSpec artifact in this
+# project. These are the load-bearing references. Read them before drafting.
+context: |
+  Project: feather-etl rewrite. The PRD at `docs/prd/PRD-NNN-<phase>.md` is the
+  source of truth for what to build. Prior implementations on `main` and
+  `code-reorg` branches are reference-only — inherit nothing automatically.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  Required reading before writing any artifact:
+  - `CLAUDE.md` — repo-wide agent instructions and current PRD path.
+  - `docs/prd/PRD-001-explore-phase.md` — active PRD (explore phase).
+  - `docs/spec-conventions.md` — requirement/scenario numbering (`1`, `1a`, `1b`,
+    `2a`, ...) with local scope per spec file. Cross-file refs: `<capability>.<N><letter>`.
+  - `docs/testing.md` — test cadence (A + II: vertical scenario commits,
+    test-first batch per slice, Option 4 layering). 100% line+branch coverage.
+
+  Cross-project principles to apply (in `~/Dropbox/Siraj/Projects/siraj-claude-vault/cross-project/principles/`):
+  - `core-earns-complexity.md` — default to KISS on the edges; sophistication
+    only where it carries the feature's load-bearing value.
+  - `plan-preflight.md` — present plans as lightweight altitude outlines; deep
+    detail goes in the artifact file the user reviews.
+  - `spec-sections-natural-shape.md`, `spec-sections-pull-unique-weight.md` —
+    right-size sections; skip sections that add no signal.
+
+  Conventions:
+  - `feather init` is verb 1 of the explore phase; every later verb assumes a
+    scaffolded project. Build verbs in PRD §10 workflow order.
+  - Tests colocate as `<module>_test.py` siblings next to the code they test.
+  - Each verb owns its full footprint, including its own `.gitignore` entries
+    and any directories it writes into (lazy creation on first write).
+  - Dogfood feather inside this repo under `examples/<client>/`.
+
+# Per-artifact rules — the AI sees only the rules for the artifact it's
+# currently working on. Keep each rule tight and actionable.
+rules:
+  proposal:
+    - Keep proposals concise. State Why, What, What this change does NOT do, and
+      Impact. The "does NOT do" section lists options considered and rejected,
+      with one-line reasoning each — this prevents re-litigation later.
+    - The Impact section names every file/section touched outside the change
+      folder (PRD edits, CLAUDE.md edits, vault principle updates, etc.).
+    - Reference the PRD section the change implements (e.g. "PRD §6.1") at the
+      top of "Why". If the change updates the PRD, list those edits in Impact.
+
+  specs:
+    - Number every Requirement and Scenario per `docs/spec-conventions.md`.
+      Requirements use sequential integers (`1`, `2`, `3`) within the spec file.
+      Scenarios use the parent requirement's number plus a lowercase letter
+      (`1a`, `1b`, `2a`). Numbering is local per spec.md file; do not number
+      across files.
+    - OpenSpec's parser is strict — scenarios MUST use exactly four hashtags
+      (`#### Scenario:`) and requirements use three (`### Requirement:`). The
+      position number goes inside the name, after the prefix, e.g.
+      `### Requirement: 1. Target directory resolution`.
+    - Every requirement MUST have at least one scenario. Use SHALL/MUST for
+      normative requirements (avoid should/may).
+
+  design:
+    - Include design.md only when the change has real decisions worth recording
+      (architectural choice, security/performance concern, alternatives evaluated).
+      Skip it for trivial changes.
+    - Structure `## Decisions` as numbered decisions with rejected alternatives
+      inline (`Rejected: X — Y`). This makes the trail of considered options
+      visible to future readers.
+    - Risks / Trade-offs section uses the format
+      `**[risk]** — mitigation / acceptance reason`. Be specific about which
+      risks are accepted vs which are mitigated.
+
+  tasks:
+    - Slice vertically by spec scenario (or a tight cluster of related scenarios),
+      not horizontally by layer. Each commit ends with a green test run, 100%
+      line+branch coverage on the touched code, and a working CLI that does
+      more than the previous commit. See `docs/testing.md` for the full A + II
+      cadence (vertical scenario commits, test-first batch within each slice).
+    - Tasks within a commit are ordered caller-to-callee or simplest-to-most-
+      complex. Each task is a single `- [ ] N.M description` checkbox.
+    - The last commit of a change is typically a doc/PRD reconciliation commit —
+      delete it if the doc edits were already made earlier in the same change.

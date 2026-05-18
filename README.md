@@ -10,8 +10,8 @@ run, and beyond.
 
 ## Where to look
 
-- `docs/prd/` — active product requirements (the source of truth for what
-  to build, by phase).
+- `docs/prd/PRD-NNN-<phase>.md` — active product requirements (the source of
+  truth for what to build, one file per phase).
 - `docs/reference/` — background context (warehouse layers, personas,
   Jobs-to-be-Done reframing).
 - `CLAUDE.md` — agent instructions for working in this repo.
