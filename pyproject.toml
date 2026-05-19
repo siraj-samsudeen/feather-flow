@@ -37,3 +37,8 @@ python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "--import-mode=importlib"
+
+[tool.coverage.run]
+branch = true
+source = ["src/feather_etl"]
+omit = ["*_test.py"]
