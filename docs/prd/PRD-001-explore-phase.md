@@ -2,7 +2,8 @@
 
 Created: 2026-05-15
 Revised: 2026-05-16 — after manual rehearsal with real client (rama_dw); see `/Users/siraj/Desktop/NonDropBoxProjects/rama_dw/tally/store_sales_2026_05_11/agent_log.md`
-Revised: 2026-05-18 — `feather init` design locked. §6.1 reshaped (no `--force`/`--json`/`--name`; per-file rules; `pyproject.toml` added; no folder pre-creation; `.gitignore` shrunk to `.env`). §6.5 + §7.4 sample threshold default = 100K. §7.2 `--json` narrowed to data-emitting verbs. §7.7 project tree updated.
+Revised: 2026-05-18 — `feather init` design locked. §6.1 reshaped (no `--force`/`--json`/`--name`; per-file rules; minimal `pyproject.toml` skeleton stamped, operator wires `feather-etl` via `uv add`; no folder pre-creation; `.gitignore` shrunk to `.env`). §6.5 + §7.4 sample threshold default = 100K. §7.2 `--json` narrowed to data-emitting verbs. §7.7 project tree updated.
+Revised: 2026-05-19 — `feather init` gains `--dev` flag (the only flag). Default mode writes portable `pyproject.toml` with `dependencies = ["feather-etl>=0.1.0"]`; `--dev` auto-detects local checkout and writes editable `[tool.uv.sources]` block. `--dev` errors if no local checkout discoverable (no silent fallback). One-line source-wiring confirmation replaces the prior next-step hint.
 Status: DRAFT — revised against actual session evidence
 Sequence: First phase of the operator's journey. Precedes curate / extract / transform / deploy.
 
@@ -86,7 +87,7 @@ The verbs feather provides for the explore phase. Detail in §6.
 
 | Verb | Purpose |
 |---|---|
-| `feather init` | Scaffold a project: feather.yaml, .env, .gitignore, project directories. |
+| `feather init` | Scaffold a project: feather.yaml, pyproject.toml, .env, .gitignore. |
 | `feather source add` | Register a new source interactively; validate connection; set current context. |
 | `feather source test` | Re-test a registered source's connection. |
 | `feather use` | Set, show, or clear the project's current source/database context. |
@@ -163,7 +164,7 @@ Each feature has three subsections:
 - Scaffold a new feather project in a target directory. With no argument, the target is the current working directory. With one argument, the target is `./<DIR>` (created if absent).
 - Stamp exactly four files into the target — every file is independent; init never overwrites and never merges:
   - `feather.yaml` — minimal, with a commented-out `sources:` block and one active default (`defaults.sample_threshold: 100000`). Absent → create. Present → skip and print "delete this file and re-run to reset."
-  - `pyproject.toml` — declares `feather-etl` as a project dependency so every later verb works as `uv run feather <verb>`. The dependency is sourced from the local feather-etl checkout (auto-detected via `feather_etl.__file__`, written as a `[tool.uv.sources]` editable path) or, if no enclosing repo is found, pinned to a PyPI version (`feather-etl>=0.1.0`). The project's `name` field is the target directory's basename. Absent → create. Present → skip with the same reset hint.
+  - `pyproject.toml` — a `[project]` block (`name` = target dir basename, `version = "0.1.0"`, `requires-python = ">=3.10"`) plus a `feather-etl` dependency. The dependency form is controlled by the `--dev` flag: **default** writes `dependencies = ["feather-etl>=0.1.0"]` (portable, resolves from PyPI on any machine); **`--dev`** auto-detects the local feather-etl checkout via `Path(feather_etl.__file__).resolve().parent.parent.parent` and writes `dependencies = ["feather-etl"]` plus a `[tool.uv.sources]` block with an editable path. `--dev` exits non-zero if no local checkout is discoverable. After successful stamping, init prints a one-line confirmation naming how `feather-etl` was wired (PyPI pin or editable path). Absent → create. Present → skip with the same reset hint.
   - `.env` — empty file, ready for `feather source add` to write password references. Absent → touch. Present → skip silently.
   - `.gitignore` — one line: `.env`. Absent → create with that one line. Present → skip and print "ensure `.env` is listed." Other entries (`explore/`, `*.duckdb`, `.feather/`) are added by the verbs that create those files; each verb owns its own gitignore entries.
 - Do **not** create the `explore/`, `tally/`, or `tables/` directories. Each verb mkdirs its own paths on first write.
@@ -176,13 +177,13 @@ Each feature has three subsections:
 - After `feather init`, `feather use` exits 0 and prints `(none)`.
 - After `feather init`, `feather sample` (with no source registered) exits 1 with a message pointing at `feather source add`.
 - `feather init <dir>` creates the sub-directory if absent and scaffolds inside it.
-- `feather init` against a target that is an existing regular file exits non-zero with a message naming the offending path.
+- `feather init` propagates any I/O failure (permission denied, disk full, target is a file, etc.) as the underlying Python exception's exit code; init does not introduce a typed error class for these cases.
 
 #### Contract
 ```bash
-feather init [DIR]
+feather init [DIR] [--dev]
 ```
-Exit codes: `0` on every successful completion (including all combinations of created and skipped outcomes). Non-zero exits are reserved for I/O-class failures (target is a regular file, permission denied, disk full, etc.). There is no `--force`, no `--json`, no `--name`.
+The `--dev` flag is the only flag and is reserved for the feather-etl core development team — it switches pyproject.toml's dependency form to an editable local-checkout source. Default mode is the right choice for everyone else (beta customers, post-v1 PyPI users, any shared/committed project). Exit codes: `0` on every successful completion. Non-zero exits are reserved for I/O failures and the spec-enumerated `--dev`-without-checkout failure. There is no `--force`, no `--json`, no `--name`.
 
 ### 6.2 `feather source add`
 
@@ -709,9 +710,9 @@ Full tree of a feather project after `feather init` and a working explore sessio
 ```
 <project-root>/
   feather.yaml                                # source connections, project defaults
-  pyproject.toml                              # declares feather-etl as a dep (auto-detected editable path; see §6.1)
+  pyproject.toml                              # minimal `[project]` skeleton; `uv add feather-etl` (or `--editable <path>`) wires the dep — see §6.1
   .env                                        # secrets (gitignored)
-  .gitignore                                  # `feather init` writes .env; each later verb appends its own entries
+  .gitignore                                  # `feather init` writes .env; each later verb owns its own entries
                                               #   (`feather use` → .feather/, `feather sample` → explore/, etc.)
   .feather/                                   # created by `feather use` on first context write
     state.yaml                                # current source/database context (gitignored)
@@ -797,7 +798,7 @@ Genuinely unresolved. Decisions previously listed as open but answered in the PR
 - **Verb composability.** `feather tally` is equivalent to `feather sql` + `feather compare` modulo destination path. Tested in integration suite.
 - **`feather init` per-file rules.** Init never overwrites and never merges. Marker files (`feather.yaml`, `pyproject.toml`) skip if present with a "rm to reset" hint; `.env` skips silently; `.gitignore` skips with a one-line hint. No `--force`, no `--json`, no `--name`. See §6.1.
 - **`feather init` does not pre-create folders.** `explore/`, `tally/`, `tables/`, `.feather/` are created by the verbs that own them. Each verb also owns its own `.gitignore` entries (see §6.1).
-- **`feather init` stamps `pyproject.toml`.** Client projects are uv-resolvable workspaces so `uv run feather <verb>` works. Source path is auto-detected from `feather_etl.__file__` (editable local checkout) with a PyPI version-pin fallback.
+- **`feather init` stamps `pyproject.toml` in one of two modes.** Default writes `dependencies = ["feather-etl>=0.1.0"]` (portable, resolves from PyPI on any machine). `--dev` flag auto-detects the local feather-etl checkout via `Path(feather_etl.__file__).resolve().parent.parent.parent` and writes `dependencies = ["feather-etl"]` plus a `[tool.uv.sources]` editable block; errors out if no local checkout is discoverable. The split keeps committed/shared `pyproject.toml` clean and machine-portable while giving the core team a one-command editable-source setup. An earlier draft auto-detected unconditionally in default mode — rejected because it baked machine-specific absolute paths into shareable artifacts.
 - **`--json` is per-verb, not blanket.** Data-emitting verbs only (see §7.2). Status verbs emit text.
 - **Sample threshold default = 100K rows.** See §6.5, §7.4. Tunable per source.
 

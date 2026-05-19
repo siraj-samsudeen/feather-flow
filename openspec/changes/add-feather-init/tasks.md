@@ -3,8 +3,8 @@
 - **Commit 1** — 1a + 2a — basic CWD init + correct `feather.yaml` content. Observability dependency: 1a's "files are stamped" assertion is meaningless without 2a defining what gets stamped.
 - **Commit 2** — 2b — `feather.yaml` idempotency. Stands alone — establishes the skip-if-exists pattern that later file commits replay.
 - **Commit 3** — 1b + 1c — `feather init <dir>` target resolution for both branches. Same code path: `if not target.exists(): mkdir(...)`. Scenario 1c additionally exercises the skip-if-exists pattern from commit 2 through the subdir path.
-- **Commit 4** — 3a + 3b — `pyproject.toml` create + preserve. Same code path: two branches of `if exists:` for the second marker file.
-- **Commit 5** — 6a — next-step hint.
+- **Commit 4** — 3a + 3d + 6a — default-mode pyproject end-to-end: stamp the PyPI-pin template, preserve if present, print the default-mode confirmation line. Vertical slice: "default `feather init` produces a working uv-resolvable project."
+- **Commit 5** — 3b + 3c + 6b — `--dev` flag end-to-end: detect local checkout, write the editable source block, fail clearly when detection is impossible, print the `--dev`-mode confirmation line. Vertical slice: "`feather init --dev` produces a working uv-resolvable project against the local feather-etl checkout."
 - **Commit 6** — 4a + 4b — `.env` touch + preserve. Same code path: two branches of `if exists:` for the secrets file (with silent skip on present).
 - **Commit 7** — 5a + 5b — `.gitignore` create + preserve. Same code path: two branches of `if exists:` for the gitignore file.
 - **Commit 8** — no spec scenarios. Cross-verb infrastructure (CLI smoke test).
@@ -44,27 +44,30 @@ After this commit, `feather init rama_dw` works whether `./rama_dw/` exists or n
 - [ ] 3.2 Extend target resolution in `core.init_project` to handle the positional-arg case (`if not target.exists(): target.mkdir(parents=True)`; existing-directory case needs no extra logic — file stamping operates on `target / filename` regardless).
 - [ ] 3.3 Run coverage.
 
-## Commit 4 — `pyproject.toml` stamping
+## Commit 4 — Default-mode `pyproject.toml` end-to-end
 
-After this commit, init also stamps a minimal `[project]` skeleton for `pyproject.toml`. Spec scope: scenarios 3a + 3b — two branches of the same `if exists:` code path.
+After this commit, `feather init` (without any flag) stamps a portable `pyproject.toml` with `dependencies = ["feather-etl>=0.1.0"]` (no `[tool.uv.sources]`), preserves it if already present, and prints a default-mode confirmation line. The project is uv-resolvable on any machine. Spec scope: scenarios 3a + 3d + 6a — the full default-mode vertical slice.
 
 - [ ] 4.1 Write tests for:
-      - 3a — `pyproject.toml` name derived from target directory basename
-      - 3b — existing `pyproject.toml` is preserved with reset-hint message
+      - 3a — default mode stamps `pyproject.toml` with PyPI version pin and no `[tool.uv.sources]` block; project name derived from target directory basename
+      - 3d — existing `pyproject.toml` is preserved with reset-hint message (applies in both default and `--dev` modes)
+      - 6a — default-mode confirmation line names PyPI as the source (e.g., `feather-etl: pinned to PyPI (>=0.1.0)`)
 
       Confirm RED.
-- [ ] 4.2 Extend `core.init_project` to stamp `pyproject.toml` following the same template + skip-if-exists shape as `feather.yaml`.
+- [ ] 4.2 Extend `core.init_project` to stamp `pyproject.toml` using the default-mode template + skip-if-exists shape. Have `cli.py` print the confirmation line after the per-file output lines (per Decision 2 and Req 6).
 - [ ] 4.3 Run coverage.
 
-## Commit 5 — Next-step hint
+## Commit 5 — `--dev` flag: editable source block + failure path
 
-After this commit, init prints the `uv add` command pair (editable form with auto-detected path + PyPI form) so the operator knows how to wire `feather-etl`. Spec scope: scenario 6a.
+After this commit, `feather init --dev` auto-detects the local feather-etl checkout, writes an editable `[tool.uv.sources]` block into `pyproject.toml`, and prints a `--dev`-mode confirmation showing the absolute path. When `--dev` is requested but no local checkout is discoverable, init exits non-zero with a clear error. Spec scope: scenarios 3b + 3c + 6b — the full `--dev` vertical slice.
 
-- [ ] 5.1 Write test for:
-      - 6a — hint shows both editable (auto-detected path) and PyPI `uv add` commands
+- [ ] 5.1 Write tests for:
+      - 3b — `--dev` with local checkout writes `dependencies = ["feather-etl"]` plus a `[tool.uv.sources]` block with the auto-detected absolute path; monkeypatch `feather_etl.__file__` to a synthetic checkout layout
+      - 3c — `--dev` with no discoverable local checkout (no `pyproject.toml` at `parent.parent.parent`) exits non-zero with a message naming the directory checked and the install instructions
+      - 6b — `--dev`-mode confirmation line names the editable path (e.g., `feather-etl: editable from /Users/x/Projects/feather-etl`)
 
-      Monkeypatch `feather_etl.__file__` to verify the path substitution. Confirm RED.
-- [ ] 5.2 Add the source-path helper in `core.py` (per design decision 3) and have `cli.py` print the hint after the per-file output lines.
+      Confirm RED.
+- [ ] 5.2 Add the `--dev` Typer option to `cli.py`. Add `feather_etl_source_path()` helper in `core.py` returning `Path | None` (per Decision 3). Extend `core.init_project` to accept a mode flag and switch templates; raise the spec-driven typed error when `--dev` requests an undiscoverable checkout. `cli.py` catches that exception and exits non-zero with the operator-facing message.
 - [ ] 5.3 Run coverage.
 
 ## Commit 6 — `.env` touching
