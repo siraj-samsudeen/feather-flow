@@ -1,6 +1,0 @@
-[
-  {"id": 101, "name": "Acme Corp", "city": "Mumbai", "active": true},
-  {"id": 102, "name": "Beta Ltd", "city": "Delhi", "active": true},
-  {"id": 103, "name": "Gamma Inc", "city": "Chennai", "active": false},
-  {"id": 104, "name": "Delta Co", "city": "Bangalore", "active": true}
-]

@@ -1,21 +1,43 @@
-.worktrees/
-.claude/worktrees/
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.egg-info/
-dist/
-.venv/
-*.duckdb.wal
-feather_data.duckdb
-feather_state.duckdb
-feather_validation.json
-feather_discover_state.json
-.env
-.DS_Store
+.pytest_cache/
+.ruff_cache/
 .coverage
 .testmondata
 .testmondata-journal
-.nvmrc
-repomix-output.xml
+htmlcov/
+dist/
+build/
+
+# Virtual envs
+.venv/
+venv/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Local agent / worktree state
+.claude/settings.local.json
+.claude/worktrees/
+.codegraph/
+.planning/
 .playwright-mcp/
 .superpowers/
+.worktrees/
+
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# Tooling artefacts
+uv.lock
+repomix-output.xml
+
+# Local DuckDB outputs from explore / tally runs
+*.duckdb
+*.duckdb.wal
