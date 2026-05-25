@@ -9,9 +9,9 @@
 Lands the **verb-template skeleton** (core/cli split, register-pattern, accumulator dataclass) every later verb (`source add`, `curate`, `extract`) inherits. The skeleton is the load-bearing contract; file contents are minimal.
 
 ### Tasks
-- [ ] 1.1 Write test for init.1a — Init with no arg stamps files into CWD, if empty.
-- [ ] 1.2 Write test for init.2a — Stamped feather.yaml content matches template.
-- [ ] 1.3 Implement verb skeleton + `_stamp_feather_yaml` so 1.1 + 1.2 pass.
+- [x] 1.1 Write test for init.1a — Init with no arg stamps files into CWD, if empty.
+- [x] 1.2 Write test for init.2a — Stamped feather.yaml content matches template.
+- [x] 1.3 Implement verb skeleton + `_stamp_feather_yaml` so 1.1 + 1.2 pass.
 
 ### Design decisions/hints
 

@@ -12,6 +12,9 @@ dependencies = [
     "typer",
 ]
 
+[project.scripts]
+feather = "feather_etl.cli:app"
+
 [project.optional-dependencies]
 dev = [
     "pytest",
