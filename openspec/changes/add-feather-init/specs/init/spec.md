@@ -17,7 +17,7 @@
 
 #### Scenario: 1c. Init reuses an existing sub-directory, ignoring sibling files
 - **WHEN** the operator runs `feather init rama_dw` and `./rama_dw/` exists, possibly containing unrelated files such as `README.md`, `data/`, or `notes.txt`
-- **THEN** missing init files (`feather.yaml`, `pyproject.toml`, `.env`, `.gitignore`) are stamped; existing init files are skipped with the per-file message specified in their own requirement (e.g. Req 2 for `feather.yaml`); files unrelated to init are neither inspected nor modified
+- **THEN** missing init files (`feather.yaml`, `pyproject.toml`, `.env`, `.gitignore`) are stamped; existing init files are skipped with the per-file message specified in their own requirement (e.g. the `feather.yaml stamping` requirement for `feather.yaml`); files unrelated to init are neither inspected nor modified
 
 ### Requirement: 2. feather.yaml stamping
 

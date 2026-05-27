@@ -129,7 +129,7 @@ _The minimum impl needed to pass the above tests — a floor, not a ceiling. Add
 
 - **YAML template constant.**
   - Module-level `FEATHER_YAML_TEMPLATE: str`.
-  - Verbatim content from spec Req 2.
+  - Verbatim content from the `feather.yaml stamping` requirement in spec.md.
   - Uses `sample_threshold: 100_000`.
 - **Frozen result dataclass.**
   - `@dataclass(frozen=True) class InitResult`.

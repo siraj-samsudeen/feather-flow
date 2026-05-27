@@ -179,17 +179,17 @@ class InitResult:
 
 **Core composes per-file messages; cli.py prints them verbatim.** `files` is the programmatic source of truth (4 entries for init: feather.yaml, pyproject.toml, .env, .gitignore). `messages` is the human-readable output, one entry per line cli will print. Three rules govern which files contribute a message:
 
-- **Create path → no message.** A freshly-stamped file contributes only to `files` (`"created"`); it does not append to `messages`. The source-wiring confirmation (Req 6) is the only happy-path output; per-file create lines would be noise.
+- **Create path → no message.** A freshly-stamped file contributes only to `files` (`"created"`); it does not append to `messages`. The source-wiring confirmation is the only happy-path output; per-file create lines would be noise.
 - **Loud-skip → one message.** Files governed by the reset-by-delete rule (`feather.yaml`, `pyproject.toml`, `.gitignore`) append one entry naming the file and the reset instruction.
-- **Silent-skip → no message.** `.env` is the silent-skip case (Req 4b); it contributes neither to `messages` nor produces any other output.
+- **Silent-skip → no message.** `.env` is the silent-skip case (scenario `init.4b`); it contributes neither to `messages` nor produces any other output.
 
 This keeps cli truly thin (`for m in result.messages: typer.echo(m, err=True)`) and puts presentation strings next to the file-stamping rules that govern them (single source of truth for per-file behaviour).
 
-The **next-step source-wiring confirmation** (the "feather-etl: pinned to PyPI" / "feather-etl: editable from …" line, spec Req 6) is NOT part of `messages` — it's composed by cli.py using the `feather_etl_source_path` field on `InitResult`.
+The **next-step source-wiring confirmation** (the "feather-etl: pinned to PyPI" / "feather-etl: editable from …" line, per the `Source-wiring confirmation` requirement in spec.md) is NOT part of `messages` — it's composed by cli.py using the `feather_etl_source_path` field on `InitResult`.
 
 Single-detection pattern (avoid double calls and races): core calls `feather_etl_source_path()` once during `init_project`, uses it to substitute `--dev` template paths, and stores the same resolved `Path | None` on `InitResult.feather_etl_source_path`. cli reads the field to compose the confirmation line. Default mode leaves the field at `None` and cli prints the PyPI form; `--dev` mode populates it and cli prints the editable form.
 
-Blank-line rule (spec Req 6 says "separated by a blank line"): cli prints a blank line before the confirmation only when `result.messages` is non-empty. When no per-file lines printed (the all-fresh case), there is nothing to separate from — the confirmation prints alone with no leading blank.
+Blank-line rule (the `Source-wiring confirmation` requirement in spec.md says "separated by a blank line"): cli prints a blank line before the confirmation only when `result.messages` is non-empty. When no per-file lines printed (the all-fresh case), there is nothing to separate from — the confirmation prints alone with no leading blank.
 
 ---
 
@@ -389,7 +389,7 @@ If any `_stamp_*` raises, the exception propagates. cli.py prints the traceback 
 
 If the operator passed `--dev` but feather-etl was installed from PyPI, their request is contradictory. Silently falling back to default-mode behavior would hide the contradiction — the operator might not realize they didn't get what they asked for. Explicit non-zero exit with a clear message (`--dev requires a local feather-etl checkout. Checked: <path>. No pyproject.toml found there.`) tells them what's wrong.
 
-The failure is raised by core as `DevModeUnavailableError(checked_path: Path)`. cli.py catches it, prints the message defined in spec.md Req 3, and exits non-zero. The exception carries the checked path so the message can name it.
+The failure is raised by core as `DevModeUnavailableError(checked_path: Path)`. cli.py catches it, prints the message defined in the `pyproject.toml stamping` requirement in spec.md, and exits non-zero. The exception carries the checked path so the message can name it.
 
 #### Templates
 
