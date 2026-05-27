@@ -96,7 +96,7 @@ _Design intents — knowing them prevents over-engineering or premature generali
   - Once wrapped in frozen `InitResult`, it's locked.
   - Build freely, then seal.
 
-- **Core hides orchestration; cli stays thin.**
+- **Core hides orchestration; CLI stays thin.**
   - `cli.py` calls exactly one thing: `core.init_project(Path.cwd())`. It knows nothing about how many files exist, what order they stamp, or what messages to compose.
   - Ousterhout's deep-module rule applied: small interface, hidden complexity.
   - Adding a fifth stamped file later means zero changes to `cli.py`.

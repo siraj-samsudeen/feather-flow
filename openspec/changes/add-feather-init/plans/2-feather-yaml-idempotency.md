@@ -4,7 +4,7 @@
 
 ### What this commit ships?
 
-This commit makes `feather init` idempotent for `feather.yaml` and in doing so lands three reusable patterns in one scenario: the **skip-if-exists branch** inside `_stamp_feather_yaml`, the **`messages` channel** on `InitResult`, and **cli's per-message echo loop** on stderr. 
+This commit makes `feather init` idempotent for `feather.yaml` and in doing so lands three reusable patterns in one scenario: the **skip-if-exists branch** inside `_stamp_feather_yaml`, the **`messages` channel** on `InitResult`, and **CLI's per-message echo loop** on stderr. 
 
 The observable change is small (one extra branch, one new field, a four-line loop — re-running init no longer clobbers an existing `feather.yaml`); the architectural deposit is the contract that every subsequent file-stamper inherits.
 
@@ -45,19 +45,15 @@ _No new files. Root `src/feather_etl/cli.py` unchanged._
 
 ### How the runtime flows after this commit — what calls what?
 
-1. **Operator** types `feather init` in a directory that already contains `feather.yaml`.
-2. **Console script `feather`** resolves to `feather_etl.cli:app`.
-3. **Root `cli.py`** dispatches the `"init"` sub-command.
-4. **`commands/init/cli.py`** — `init()` callback runs.
-5. **`core.init_project(Path.cwd())`**, which:
-   - allocates `files = {}` and `messages: list[str] = []`
-   - calls `_stamp_feather_yaml(target, files, messages)`, which:
-     - checks `(target / "feather.yaml").exists()`
-     - if PRESENT: sets `files["feather.yaml"] = "skipped"`; appends `"feather.yaml: present (delete this file and re-run to reset)"` to `messages`
-     - if ABSENT: writes `FEATHER_YAML_TEMPLATE`; sets `files["feather.yaml"] = "created"`; no message appended
-   - returns `InitResult(target=target, files=files, messages=messages)`
-6. **`cli.py`** iterates `for m in result.messages: typer.echo(m, err=True)`.
-7. **Typer exits 0**.
+**Delta from Task 1 — what changes inside the flow:**
+
+- `_stamp_feather_yaml` now takes a `messages` accumulator and branches on `(target / "feather.yaml").exists()`:
+  - PRESENT → `files["feather.yaml"] = "skipped"`; append `"feather.yaml: present (delete this file and re-run to reset)"` to `messages`; no write.
+  - ABSENT → unchanged from Task 1.
+- `init_project` allocates `messages: list[str] = []` alongside `files`, threads it through, returns it inside `InitResult`.
+- After `core.init_project(...)` returns, `commands/init/cli.py` iterates `result.messages` and echoes each to stderr.
+
+Dispatch chain (root `cli.py` → `commands/init/cli.py` → `core.init_project`) is unchanged — see Task 1's flow.
 
 ---
 
@@ -73,8 +69,8 @@ _Codebase-specific patterns referenced below._
 
 - **`messages` accumulator.**
   - Mutable `list[str]` allocated in `init_project`, passed by reference to each `_stamp_*` helper, wrapped in frozen `InitResult` at return.
-  - Same mutate-then-seal pattern as `files` (Commit 1's plan §2).
-  - cli's contract: print every entry verbatim on stderr in order — no parsing, no formatting.
+  - Same mutate-then-seal pattern as `files` (Task 1's plan §2).
+  - CLI's contract: print every entry verbatim on stderr in order — no parsing, no formatting.
 
 - **Reset-by-delete.**
   - The product contract: init never overwrites a marker file.
@@ -97,8 +93,8 @@ _Design intents — knowing them prevents over-engineering or premature generali
   - This commit lands the first instance of that branch; `feather.yaml` is the test case for the whole atomicity story.
   - Every later loud-skip file (`pyproject.toml`, `.gitignore`) reuses this same single-branch shape.
 
-- **Core composes, cli prints — "the split" lands here.**
-  - Decision 4's "the split" rule (core composes per-file messages; cli prints verbatim) was theoretical in Commit 1 because nothing produced output yet.
+- **Core composes, CLI prints — "the split" lands here.**
+  - Decision 4's "the split" rule (core composes per-file messages; CLI prints verbatim) was theoretical in Task 1 because nothing produced output yet.
   - This commit grounds the rule by introducing the first message and the first echo loop together.
   - Every later loud-skip path inherits the shape without re-deciding.
 
@@ -143,9 +139,9 @@ _The minimum impl needed to pass the above tests — a floor, not a ceiling. Add
 
 ### Test — `commands/init/cli_test.py` — add init.2b
 
-- **Sentinel content** for the pre-stamped `feather.yaml` must differ from `FEATHER_YAML_TEMPLATE` so the byte-identical assertion is meaningful.
-- **`result.stderr`** is available without `mix_stderr=False` (Click 8.2+ default — same convention as Commit 1's tests).
-- **Existing Commit 1 tests stay untouched** and continue to pass — neither pre-creates `feather.yaml`, so both still hit the absent arm.
+- **Sentinel content** must differ from `FEATHER_YAML_TEMPLATE`. If they matched, the byte-identical assertion would pass even on overwrite — the test would not distinguish preserve from clobber.
+- **`result.stderr`** is available without `mix_stderr=False` (Click 8.2+ default — same convention as Task 1's tests).
+- **Existing Task 1 tests stay untouched** and continue to pass — neither pre-creates `feather.yaml`, so both still hit the absent arm.
 
 ---
 
