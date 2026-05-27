@@ -8,8 +8,8 @@
 
 ## 2. feather.yaml idempotency
 
-- [ ] 2.1 Write test for init.2b — feather.yaml present is preserved.
-- [ ] 2.2 Add skip-if-exists branch to `_stamp_feather_yaml` + loud-skip message so 2.1 passes.
+- [x] 2.1 Write test for init.2b — feather.yaml present is preserved.
+- [x] 2.2 Add skip-if-exists branch to `_stamp_feather_yaml` + loud-skip message so 2.1 passes.
 
 ## 3. Target-dir resolution
 

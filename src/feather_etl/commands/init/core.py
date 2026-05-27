@@ -21,16 +21,27 @@ defaults:
 class InitResult:
     target: Path
     files: dict[str, Literal["created", "skipped"]]
+    messages: list[str]
 
 
 def _stamp_feather_yaml(
-    target: Path, files: dict[str, Literal["created", "skipped"]]
+    target: Path,
+    files: dict[str, Literal["created", "skipped"]],
+    messages: list[str],
 ) -> None:
-    (target / "feather.yaml").write_text(FEATHER_YAML_TEMPLATE)
+    path = target / "feather.yaml"
+    if path.exists():
+        files["feather.yaml"] = "skipped"
+        messages.append(
+            "feather.yaml: present (delete this file and re-run to reset)"
+        )
+        return
+    path.write_text(FEATHER_YAML_TEMPLATE)
     files["feather.yaml"] = "created"
 
 
 def init_project(target: Path) -> InitResult:
     files: dict[str, Literal["created", "skipped"]] = {}
-    _stamp_feather_yaml(target, files)
-    return InitResult(target=target, files=files)
+    messages: list[str] = []
+    _stamp_feather_yaml(target, files, messages)
+    return InitResult(target=target, files=files, messages=messages)

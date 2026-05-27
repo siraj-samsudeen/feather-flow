@@ -13,4 +13,6 @@ def register(app: typer.Typer) -> None:
     @app.command(name="init")
     def init() -> None:
         """Stamp feather project files into the current directory."""
-        core.init_project(Path.cwd())
+        result = core.init_project(Path.cwd())
+        for m in result.messages:
+            typer.echo(m, err=True)
