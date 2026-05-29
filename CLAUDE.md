@@ -31,6 +31,9 @@ a later verb's `design.md` explicitly overrides.
 
 For any OpenSpec change work, invoke the `openspec-siraj-flow` skill.
 
+For how work is tracked, branched, and merged (issues vs. OpenSpec changes,
+branch-per-change, PR linkage), read `docs/workflow.md`.
+
 Dogfood feather inside this repo. Create example client projects under
 `examples/<client>/` (e.g. `examples/rama_dw/`) using the verbs you build.
 Do not pre-scaffold example contents — they emerge from running `feather init`
