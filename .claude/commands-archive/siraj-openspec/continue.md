@@ -7,7 +7,7 @@ tags: [workflow, artifacts, experimental]
 
 Continue working on a change by creating the next artifact.
 
-**Input**: Optionally specify a change name after `/openspec-siraj:continue` (e.g., `/openspec-siraj:continue add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
+**Input**: Optionally specify a change name after `/siraj-openspec:continue` (e.g., `/siraj-openspec:continue add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
 
 **Steps**
 
@@ -41,7 +41,7 @@ Continue working on a change by creating the next artifact.
    **If all artifacts are complete (`isComplete: true`)**:
    - Congratulate the user
    - Show final status including the schema used
-   - Suggest: "All artifacts created! You can now implement this change with `/openspec-siraj:apply` or archive it with `/openspec-siraj:archive`."
+   - Suggest: "All artifacts created! You can now implement this change with `/siraj-openspec:apply` or archive it with `/siraj-openspec:archive`."
    - STOP
 
    ---
@@ -85,7 +85,7 @@ After each invocation, show:
 - Schema workflow being used
 - Current progress (N/M complete)
 - What artifacts are now unlocked
-- Prompt: "Run `/openspec-siraj:continue` to create the next artifact"
+- Prompt: "Run `/siraj-openspec:continue` to create the next artifact"
 
 **Artifact Creation Guidelines**
 

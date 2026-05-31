@@ -12,11 +12,11 @@ I'll create a change with artifacts:
 - design.md (how)
 - tasks.md (implementation steps)
 
-When ready to implement, run /openspec-siraj:apply
+When ready to implement, run /siraj-openspec:apply
 
 ---
 
-**Input**: The argument after `/openspec-siraj:propose` is the change name (kebab-case), OR a description of what the user wants to build.
+**Input**: The argument after `/siraj-openspec:propose` is the change name (kebab-case), OR a description of what the user wants to build.
 
 **Steps**
 
@@ -86,7 +86,7 @@ After completing all artifacts, summarize:
 - Change name and location
 - List of artifacts created with brief descriptions
 - What's ready: "All artifacts created! Ready for implementation."
-- Prompt: "Run `/openspec-siraj:apply` to start implementing."
+- Prompt: "Run `/siraj-openspec:apply` to start implementing."
 
 **Artifact Creation Guidelines**
 

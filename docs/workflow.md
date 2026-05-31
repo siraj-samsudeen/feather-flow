@@ -2,7 +2,7 @@
 
 How work flows from idea to merged code in this repo.
 
-Companion to `docs/testing.md` (how we test) and the `openspec-siraj-flow`
+Companion to `docs/testing.md` (how we test) and the `siraj-openspec-flow`
 skill (how we spec). This doc covers the layer above both: where work is
 tracked, how it branches, and how it lands.
 
