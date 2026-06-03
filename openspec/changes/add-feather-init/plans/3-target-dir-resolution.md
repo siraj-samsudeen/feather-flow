@@ -168,9 +168,13 @@ ceiling. Add more only if a test demands it._
 ### Verb (CLI) — `commands/init/cli.py` — add the `dir` argument; resolve to a Path
 
 - **`dir` parameter on `init`.**
-  - Signature becomes `def init(dir: str | None = None) -> None`.
-  - Typer treats a positional `str | None` default-`None` parameter as an
-    optional argument — no explicit `typer.Argument` needed.
+  - Signature becomes
+    `def init(dir: str | None = typer.Argument(default=None)) -> None`.
+  - The explicit `typer.Argument(default=None)` is REQUIRED — a bare
+    `str | None = None` default makes Typer expose `dir` as a `--dir`
+    option, not an optional positional, so `feather init rama_dw` exits 2
+    with "Got unexpected extra argument(s)". (Verified empirically: both
+    parallel-impl agents hit this and fixed it identically.)
   - Name it `dir` to match design.md Decision 2's shown signature, even
     though it shadows the builtin (the locked convention wins).
 - **Resolution.**
@@ -219,4 +223,10 @@ _None._
 
 _Record any deviations to this plan, pre-commit with rationale._
 
-_None._
+- **`dir` declared as `typer.Argument(default=None)`, not a bare
+  `= None`.** §5's original hint claimed a bare `str | None = None`
+  default would be treated as an optional positional; it is not — Typer
+  exposes it as a `--dir` option and `feather init rama_dw` exits 2.
+  Both parallel-impl agents (Opus + Sonnet) hit and fixed this
+  identically. §5 has been corrected to match. Observable behavior is
+  exactly as the plan intended; only the wiring detail changed.
