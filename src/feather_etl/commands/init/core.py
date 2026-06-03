@@ -32,9 +32,7 @@ def _stamp_feather_yaml(
     path = target / "feather.yaml"
     if path.exists():
         files["feather.yaml"] = "skipped"
-        messages.append(
-            "feather.yaml: present (delete this file and re-run to reset)"
-        )
+        messages.append("feather.yaml: present (delete this file and re-run to reset)")
         return
     path.write_text(FEATHER_YAML_TEMPLATE)
     files["feather.yaml"] = "created"

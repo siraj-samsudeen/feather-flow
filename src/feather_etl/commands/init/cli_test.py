@@ -41,6 +41,5 @@ def test_feather_yaml_present_is_preserved(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0, result.output
     assert (tmp_path / "feather.yaml").read_text() == sentinel
     assert (
-        "feather.yaml: present (delete this file and re-run to reset)"
-        in result.stderr
+        "feather.yaml: present (delete this file and re-run to reset)" in result.stderr
     )
