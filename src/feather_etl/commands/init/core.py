@@ -39,6 +39,7 @@ def _stamp_feather_yaml(
 
 
 def init_project(target: Path) -> InitResult:
+    target.mkdir(parents=True, exist_ok=True)
     files: dict[str, Literal["created", "skipped"]] = {}
     messages: list[str] = []
     _stamp_feather_yaml(target, files, messages)

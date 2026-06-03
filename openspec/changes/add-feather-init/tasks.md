@@ -13,9 +13,9 @@
 
 ## 3. Target-dir resolution
 
-- [ ] 3.1 Write test for init.1b — Init with new dir name creates the dir and stamps files inside.
-- [ ] 3.2 Write test for init.1c — Init reuses an existing sub-directory, ignoring sibling files.
-- [ ] 3.3 Add `dir` positional arg to cli + target-dir resolution in `init_project` so 3.1 + 3.2 pass.
+- [x] 3.1 Write test for init.1b — Init with new dir name creates the dir and stamps files inside.
+- [x] 3.2 Write test for init.1c — Init reuses an existing sub-directory, ignoring sibling files.
+- [x] 3.3 Add `dir` positional arg to cli + target-dir resolution in `init_project` so 3.1 + 3.2 pass.
 
 ## 4. pyproject.toml — default mode
 
