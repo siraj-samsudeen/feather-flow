@@ -45,3 +45,4 @@ repomix-output.xml
 # Local DuckDB outputs from explore / tally runs
 *.duckdb
 *.duckdb.wal
+.playground/
