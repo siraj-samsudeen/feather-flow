@@ -15,3 +15,6 @@ def _callback() -> None:
 
 
 register_init(app)
+
+if __name__ == "__main__":
+    app()
