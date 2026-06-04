@@ -29,7 +29,7 @@ Build verbs in PRD §10 workflow order. The `add-feather-init` change is the
 template every later verb inherits — its design decisions carry forward unless
 a later verb's `design.md` explicitly overrides.
 
-For any OpenSpec change work, invoke the `openspec-siraj-flow` skill.
+For any OpenSpec change work, invoke the `siraj-openspec-flow` skill.
 
 For how work is tracked, branched, and merged (issues vs. OpenSpec changes,
 branch-per-change, PR linkage), read `docs/workflow.md`.

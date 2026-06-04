@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parallel comparison</title>
+<style>
+  :root {
+    --bg: #161618;
+    --panel: #1f1f23;
+    --panel-2: #26262c;
+    --border: #2e2e36;
+    --fg: #e6e6ea;
+    --fg-dim: #8a8a93;
+    --accent: #6ea3ff;
+    --accent-dim: #3d5680;
+    --add-bg: rgba(78, 192, 122, 0.12);
+    --add-fg: #4ec07a;
+    --del-bg: rgba(232, 92, 92, 0.12);
+    --del-fg: #e85c5c;
+    --warn: #f0b150;
+    --ok: #4ec07a;
+    --running: #f0b150;
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  header.top {
+    padding: 18px 24px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header.top h1 {
+    margin: 0 0 8px 0;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  header.top h1 .session {
+    color: var(--fg-dim);
+    font-weight: 400;
+    margin-left: 8px;
+  }
+  .agent-bar {
+    display: flex;
+    gap: 24px;
+    font-size: 13px;
+    color: var(--fg-dim);
+  }
+  .agent-bar .agent {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.running { background: var(--running); animation: pulse 1.4s ease-in-out infinite; }
+  .dot.done { background: var(--ok); }
+  .dot.pending { background: var(--fg-dim); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  .conn {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--fg-dim);
+  }
+  .conn.ok::before { content: "● "; color: var(--ok); }
+  .conn.stale::before { content: "● "; color: var(--warn); }
+
+  nav.file-tabs {
+    display: flex;
+    gap: 0;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    overflow-x: auto;
+  }
+  nav.file-tabs button {
+    background: transparent;
+    color: var(--fg-dim);
+    border: none;
+    padding: 12px 16px;
+    font: inherit;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  nav.file-tabs button::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--fg-dim);
+    flex-shrink: 0;
+  }
+  nav.file-tabs button.identical::before { background: var(--ok); }
+  nav.file-tabs button.differs::before { background: var(--warn); }
+  nav.file-tabs button.active {
+    color: var(--fg);
+    border-bottom-color: var(--accent);
+  }
+  nav.file-tabs button:hover:not(.active) {
+    color: var(--fg);
+  }
+  nav.file-tabs button .badge {
+    font-size: 11px;
+    padding: 2px 9px;
+    border-radius: 10px;
+    background: rgba(138, 138, 147, 0.14);
+    color: var(--fg-dim);
+    font-weight: 500;
+  }
+  nav.file-tabs button.identical .badge {
+    background: rgba(78, 192, 122, 0.18);
+    color: var(--ok);
+  }
+  nav.file-tabs button.differs .badge {
+    background: rgba(240, 177, 80, 0.18);
+    color: var(--warn);
+  }
+
+  main {
+    padding: 18px 24px;
+  }
+
+  .diff-strip {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 14px;
+    overflow: hidden;
+  }
+  .diff-strip summary {
+    padding: 8px 14px;
+    cursor: pointer;
+    list-style: none;
+    font-size: 13px;
+    color: var(--fg-dim);
+    user-select: none;
+  }
+  .diff-strip summary::-webkit-details-marker { display: none; }
+  .diff-strip summary::before {
+    content: "▶";
+    display: inline-block;
+    margin-right: 8px;
+    font-size: 10px;
+    color: var(--fg-dim);
+    transition: transform 0.15s;
+  }
+  .diff-strip[open] summary::before { transform: rotate(90deg); }
+  .diff-strip pre {
+    margin: 0;
+    padding: 12px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--fg);
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .diff-strip pre > span { display: block; }
+  .diff-strip .add { background: var(--add-bg); color: var(--add-fg); }
+  .diff-strip .del { background: var(--del-bg); color: var(--del-fg); }
+
+  .panels {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    min-height: 280px;
+  }
+  .panel header {
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel-2);
+    border-radius: 6px 6px 0 0;
+  }
+  .panel header .label { font-weight: 600; }
+  .panel header .meta { color: var(--fg-dim); font-size: 12px; }
+  .panel header .edited-tag {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--warn);
+    background: rgba(240, 177, 80, 0.12);
+    padding: 2px 8px;
+    border-radius: 3px;
+    display: none;
+  }
+  .panel.edited header .edited-tag { display: inline-block; }
+  .panel header .reset {
+    background: transparent;
+    color: var(--fg-dim);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 10px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    margin-left: 8px;
+  }
+  .panel header .reset:hover { color: var(--fg); border-color: var(--fg-dim); }
+  .panel header .reset[disabled] {
+    opacity: 0.4; cursor: default; pointer-events: none;
+  }
+
+  .panel .code-edit {
+    flex: 1;
+    background: var(--panel);
+    color: var(--fg);
+    border: none;
+    border-radius: 0 0 6px 6px;
+    padding: 12px 14px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    min-height: 240px;
+    outline: none;
+    tab-size: 4;
+    white-space: pre;
+    overflow: auto;
+    cursor: text;
+    caret-color: var(--accent);
+  }
+  .panel .code-edit:focus {
+    background: #1c1c20;
+  }
+  /* Edited indicator — faint amber wash on the editor body when content differs from agent's original */
+  .panel.edited .code-edit {
+    background: rgba(240, 177, 80, 0.06);
+    border-left: 3px solid var(--warn);
+    padding-left: 11px;  /* compensate for the 3px border so text doesn't shift */
+  }
+  .panel.edited .code-edit:focus {
+    background: rgba(240, 177, 80, 0.10);
+  }
+  /* Syntax highlighting — Material Night palette */
+  .tok-kw  { color: #c792ea; }                 /* keyword */
+  .tok-str { color: #c3e88d; }                 /* string */
+  .tok-com { color: #676e95; font-style: italic; } /* comment */
+  .tok-num { color: #f78c6c; }                 /* number */
+  .tok-cls { color: #ffcb6b; }                 /* class / capitalized */
+  .tok-dec { color: #f07178; }                 /* decorator */
+  .tok-bui { color: #80cbc4; }                 /* builtin / self / Path / Literal */
+  .tok-fn  { color: #82aaff; }                 /* function name in def */
+  .panel.placeholder {
+    align-items: center;
+    justify-content: center;
+    color: var(--fg-dim);
+    font-size: 13px;
+  }
+  .panel.placeholder .spinner {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border: 2px solid var(--fg-dim);
+    border-top-color: transparent;
+    border-radius: 50%;
+    margin-right: 8px;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .picker {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .picker .label { color: var(--fg-dim); font-size: 13px; margin-right: 4px; }
+  .picker label.radio {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .picker label.radio input { accent-color: var(--accent); }
+
+  footer.submit-footer {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  footer.submit-footer .hint {
+    font-size: 12px;
+    color: var(--fg-dim);
+    flex: 1;
+  }
+  button.submit {
+    background: var(--accent);
+    color: #0e1320;
+    border: none;
+    padding: 9px 22px;
+    font: inherit;
+    font-weight: 600;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  button.submit:hover { filter: brightness(1.1); }
+  button.submit[disabled] {
+    background: var(--accent-dim);
+    color: var(--fg-dim);
+    cursor: not-allowed;
+  }
+
+  .submitted-banner {
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    background: var(--ok);
+    color: #0d1f15;
+    padding: 14px 20px;
+    border-radius: 6px;
+    font-weight: 600;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+    z-index: 100;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .submitted-banner.shown { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1>Parallel comparison<span class="session" id="session-title">— loading…</span></h1>
+  <div class="agent-bar">
+    <div class="agent" id="agent-a">
+      <span class="dot pending"></span><span class="name">—</span>
+      <span class="meta"></span>
+    </div>
+    <div class="agent" id="agent-b">
+      <span class="dot pending"></span><span class="name">—</span>
+      <span class="meta"></span>
+    </div>
+    <div class="conn ok" id="conn">live</div>
+  </div>
+</header>
+
+<nav class="file-tabs" id="file-tabs"></nav>
+
+<main>
+  <details class="diff-strip" id="diff-strip">
+    <summary id="diff-summary">Unified diff — waiting for both agents…</summary>
+    <pre id="diff-body"></pre>
+  </details>
+
+  <div class="panels">
+    <div class="panel placeholder" id="panel-a">
+      <span><span class="spinner"></span>Agent A not done yet</span>
+    </div>
+    <div class="panel placeholder" id="panel-b">
+      <span><span class="spinner"></span>Agent B not done yet</span>
+    </div>
+  </div>
+
+  <div class="picker" id="picker">
+    <span class="label">Use this file's code from:</span>
+    <label class="radio"><input type="radio" name="pick" value="a" disabled> <span class="name-a">—</span> original</label>
+    <label class="radio"><input type="radio" name="pick" value="b" disabled> <span class="name-b">—</span> original</label>
+    <label class="radio"><input type="radio" name="pick" value="edited" disabled> Edited (auto-set when typing)</label>
+  </div>
+
+  <footer class="submit-footer">
+    <span class="hint" id="submit-hint">Both agents must finish before you can submit.</span>
+    <button class="submit" id="submit-btn" disabled>Submit decision →</button>
+  </footer>
+</main>
+
+<div class="submitted-banner" id="submitted-banner">Submitted ✓ — Claude is applying your decision.</div>
+
+<script>
+"use strict";
+
+const POLL_INTERVAL = 1500;
+const SUBMIT_URL = "/decision";
+
+let state = null;
+let lastStateText = "";
+let activeFile = null;
+const localEdits = {}; // { filename: { a: string|null, b: string|null } }
+const picks = {};      // { filename: "a" | "b" | "edited" }
+let submitted = false;
+
+async function poll() {
+  if (submitted) return;
+  try {
+    const r = await fetch("/state.json", { cache: "no-store" });
+    if (!r.ok) throw new Error("status " + r.status);
+    const text = await r.text();
+    document.getElementById("conn").className = "conn ok";
+    document.getElementById("conn").textContent = "live";
+    if (text === lastStateText) return;
+    lastStateText = text;
+    state = JSON.parse(text);
+    render();
+  } catch (e) {
+    document.getElementById("conn").className = "conn stale";
+    document.getElementById("conn").textContent = "reconnecting…";
+  }
+}
+
+function render() {
+  if (!state) return;
+  document.getElementById("session-title").textContent = state.title ? "— " + state.title : "";
+  renderAgent("a", state.agents?.a);
+  renderAgent("b", state.agents?.b);
+  renderTabs();
+  if (!activeFile && state.files) {
+    activeFile = Object.keys(state.files)[0] || null;
+  }
+  renderActiveFile();
+  renderSubmitGate();
+}
+
+function renderAgent(side, agent) {
+  if (!agent) return;
+  const el = document.getElementById("agent-" + side);
+  el.querySelector(".dot").className = "dot " + (agent.status || "pending");
+  el.querySelector(".name").textContent = agent.name || ("Agent " + side.toUpperCase());
+  const meta = el.querySelector(".meta");
+  if (agent.status === "done") {
+    const secs = agent.duration_ms ? Math.round(agent.duration_ms / 1000) : null;
+    meta.textContent = "✓" + (secs ? " " + secs + "s" : "") + (agent.tool_uses ? " · " + agent.tool_uses + " tool uses" : "");
+  } else if (agent.status === "running") {
+    meta.textContent = "running…";
+  } else {
+    meta.textContent = "";
+  }
+}
+
+function renderTabs() {
+  const nav = document.getElementById("file-tabs");
+  const files = Object.keys(state.files || {});
+  nav.innerHTML = "";
+  for (const fname of files) {
+    const f = state.files[fname];
+    const btn = document.createElement("button");
+    btn.textContent = fname;
+    if (fname === activeFile) btn.classList.add("active");
+    if (f.a != null && f.b != null) {
+      if (f.a === f.b) {
+        btn.classList.add("identical");
+        const b = document.createElement("span");
+        b.className = "badge"; b.textContent = "identical";
+        btn.appendChild(b);
+      } else {
+        btn.classList.add("differs");
+        const lines = countDiffLines(f.a, f.b);
+        const b = document.createElement("span");
+        b.className = "badge"; b.textContent = lines + " line" + (lines === 1 ? "" : "s") + " differ";
+        btn.appendChild(b);
+      }
+    }
+    btn.onclick = () => { activeFile = fname; render(); };
+    nav.appendChild(btn);
+  }
+}
+
+function renderActiveFile() {
+  if (!activeFile || !state.files || !state.files[activeFile]) return;
+  const file = state.files[activeFile];
+  renderPanel("a", file.a, file.b);
+  renderPanel("b", file.b, file.a);
+  renderDiffStrip(file.a, file.b);
+  renderPicker(file);
+}
+
+function renderPanel(side, ownContent, otherContent) {
+  const el = document.getElementById("panel-" + side);
+  const agentName = state.agents?.[side]?.name || ("Agent " + side.toUpperCase());
+  if (ownContent == null) {
+    el.className = "panel placeholder";
+    el.innerHTML = '<span><span class="spinner"></span>' + escapeHtml(agentName) + ' not done yet</span>';
+    return;
+  }
+  const edits = localEdits[activeFile] || {};
+  const current = edits[side] ?? ownContent;
+  const isEdited = edits[side] != null && edits[side] !== ownContent;
+
+  el.className = "panel" + (isEdited ? " edited" : "");
+  el.innerHTML =
+    '<header>' +
+      '<span class="label">' + escapeHtml(agentName) + '</span>' +
+      '<span class="meta">' + ownContent.split("\n").length + ' lines</span>' +
+      '<span class="edited-tag">edited</span>' +
+      '<button class="reset" ' + (isEdited ? '' : 'disabled') + '>↺ reset</button>' +
+    '</header>' +
+    '<div class="code-edit" contenteditable="true" spellcheck="false"></div>';
+
+  const editor = el.querySelector(".code-edit");
+  editor.innerHTML = highlight(current);
+
+  let rerenderTimer = null;
+  editor.addEventListener("input", () => {
+    const text = editor.textContent;
+    localEdits[activeFile] = localEdits[activeFile] || {};
+    localEdits[activeFile][side] = text;
+    const stillSame = text === ownContent;
+    if (stillSame) {
+      delete localEdits[activeFile][side];
+    } else if (picks[activeFile] !== "edited") {
+      picks[activeFile] = "edited";
+    }
+    el.classList.toggle("edited", !stillSame);
+    el.querySelector(".reset").disabled = stillSame;
+    renderPicker(state.files[activeFile]);
+    // Debounced re-highlight (preserves cursor across re-render).
+    if (rerenderTimer) clearTimeout(rerenderTimer);
+    rerenderTimer = setTimeout(() => {
+      const offset = getCursorOffset(editor);
+      editor.innerHTML = highlight(editor.textContent);
+      setCursorOffset(editor, offset);
+    }, 80);
+  });
+  editor.addEventListener("keydown", (e) => {
+    // Force Enter to insert a literal \n into the text node, bypassing
+    // contenteditable's default insertion of <div> or <br> structural breaks.
+    if (e.key === "Enter") {
+      e.preventDefault();
+      insertTextAtCursor("\n");
+    }
+  });
+  editor.addEventListener("paste", (e) => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData("text");
+    insertTextAtCursor(text);
+  });
+  el.querySelector(".reset").onclick = () => {
+    if (localEdits[activeFile]) delete localEdits[activeFile][side];
+    if (picks[activeFile] === "edited") {
+      const otherEdited = Object.values(localEdits[activeFile] || {}).some(v => v != null);
+      if (!otherEdited) delete picks[activeFile];
+    }
+    renderActiveFile();
+  };
+}
+
+function renderDiffStrip(a, b) {
+  const strip = document.getElementById("diff-strip");
+  const summary = document.getElementById("diff-summary");
+  const body = document.getElementById("diff-body");
+  if (a == null || b == null) {
+    summary.textContent = "Unified diff — waiting for both agents…";
+    body.innerHTML = "";
+    return;
+  }
+  if (a === b) {
+    summary.textContent = "Unified diff — files are identical";
+    body.innerHTML = "";
+    return;
+  }
+  const diff = lineDiff(a, b);
+  const nDiff = diff.filter(d => d.tag !== "eq").length;
+  summary.textContent = "Unified diff — " + nDiff + " line" + (nDiff === 1 ? "" : "s") + " differ (click to expand)";
+  body.innerHTML = diff.map(d => {
+    if (d.tag === "eq") return '<span>  ' + escapeHtml(d.line) + '</span>';
+    if (d.tag === "del") return '<span class="del">- ' + escapeHtml(d.line) + '</span>';
+    if (d.tag === "add") return '<span class="add">+ ' + escapeHtml(d.line) + '</span>';
+    return "";
+  }).join("\n");
+}
+
+function renderPicker(file) {
+  const picker = document.getElementById("picker");
+  // Update dynamic agent names in radio labels
+  const nameA = picker.querySelector(".name-a");
+  const nameB = picker.querySelector(".name-b");
+  if (nameA) nameA.textContent = state.agents?.a?.name || "Agent A";
+  if (nameB) nameB.textContent = state.agents?.b?.name || "Agent B";
+
+  const bothDone = file.a != null && file.b != null;
+  const current = picks[activeFile];
+  const inputs = picker.querySelectorAll('input[name="pick"]');
+  inputs.forEach(inp => {
+    inp.disabled = !bothDone;
+    inp.checked = inp.value === current;
+  });
+  if (bothDone && !current) {
+    // Auto-set default: edited if user has typed; else A (the baseline).
+    const edits = localEdits[activeFile] || {};
+    const hasEdit = Object.values(edits).some(v => v != null);
+    const def = hasEdit ? "edited" : "a";
+    picks[activeFile] = def;
+    inputs.forEach(inp => { inp.checked = inp.value === def; });
+  }
+  inputs.forEach(inp => {
+    inp.onchange = () => {
+      picks[activeFile] = inp.value;
+    };
+  });
+}
+
+function renderSubmitGate() {
+  const allDone = state.agents?.a?.status === "done" && state.agents?.b?.status === "done";
+  const btn = document.getElementById("submit-btn");
+  const hint = document.getElementById("submit-hint");
+  btn.disabled = !allDone || submitted;
+  if (submitted) {
+    hint.textContent = "Submitted. Claude is applying your decision; you can close this window.";
+  } else if (allDone) {
+    hint.textContent = "Review each file's tab. Edits in either panel auto-flip the pick to 'Edited'.";
+  } else {
+    hint.textContent = "Both agents must finish before you can submit.";
+  }
+}
+
+document.getElementById("submit-btn").addEventListener("click", () => {
+  if (!state) return;
+  const decision = { files: {}, submitted_at: new Date().toISOString() };
+  for (const fname of Object.keys(state.files || {})) {
+    const file = state.files[fname];
+    const pick = picks[fname] || "a";
+    if (pick === "edited") {
+      const edits = localEdits[fname] || {};
+      // Prefer A's edit if both edited; either is the user's authored final.
+      const content = edits.a ?? edits.b ?? file.a;
+      decision.files[fname] = { source: "edited", content };
+    } else {
+      const agentName = state.agents?.[pick]?.name || pick;
+      decision.files[fname] = { source: agentName.toLowerCase(), content: null };
+    }
+  }
+
+  fetch(SUBMIT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(decision),
+  })
+    .then(r => {
+      if (!r.ok) throw new Error("submit failed: " + r.status);
+      submitted = true;
+      const banner = document.getElementById("submitted-banner");
+      banner.classList.add("shown");
+      renderSubmitGate();
+    })
+    .catch(e => {
+      alert("Submit failed: " + e.message + "\nThe decision was NOT recorded. Try again.");
+    });
+});
+
+// --- python tokenizer + highlighter ---
+const PY_KEYWORDS = new Set([
+  "False","None","True","and","as","assert","async","await","break","class","continue",
+  "def","del","elif","else","except","finally","for","from","global","if","import",
+  "in","is","lambda","nonlocal","not","or","pass","raise","return","try","while",
+  "with","yield","match","case"
+]);
+const PY_BUILTINS = new Set([
+  "self","cls","print","str","int","float","bool","list","dict","set","tuple",
+  "len","range","isinstance","issubclass","type","object","super","abs","all",
+  "any","enumerate","filter","map","max","min","open","sorted","reversed","sum",
+  "zip","Path","Literal","Optional","Union","List","Dict","Tuple","Set","Any",
+  "Callable","Iterator","Iterable"
+]);
+
+function tokenizePython(code) {
+  const toks = [];
+  const n = code.length;
+  let i = 0;
+  while (i < n) {
+    const c = code[i];
+    // Comment
+    if (c === "#") {
+      let j = i + 1;
+      while (j < n && code[j] !== "\n") j++;
+      toks.push({ t: code.slice(i, j), k: "com" });
+      i = j; continue;
+    }
+    // Triple-quoted string
+    if ((c === '"' || c === "'") && code[i+1] === c && code[i+2] === c) {
+      let j = i + 3;
+      while (j + 2 < n && !(code[j] === c && code[j+1] === c && code[j+2] === c)) {
+        if (code[j] === "\\" && j + 1 < n) j++;
+        j++;
+      }
+      j = Math.min(n, j + 3);
+      toks.push({ t: code.slice(i, j), k: "str" });
+      i = j; continue;
+    }
+    // Single/double quoted string
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < n && code[j] !== c && code[j] !== "\n") {
+        if (code[j] === "\\" && j + 1 < n) j++;
+        j++;
+      }
+      j = Math.min(n, j + 1);
+      toks.push({ t: code.slice(i, j), k: "str" });
+      i = j; continue;
+    }
+    // Number
+    if (c >= "0" && c <= "9") {
+      let j = i;
+      while (j < n && /[0-9._eE+\-x]/.test(code[j])) j++;
+      toks.push({ t: code.slice(i, j), k: "num" });
+      i = j; continue;
+    }
+    // Decorator
+    if (c === "@") {
+      let j = i + 1;
+      while (j < n && /[A-Za-z0-9_.]/.test(code[j])) j++;
+      toks.push({ t: code.slice(i, j), k: "dec" });
+      i = j; continue;
+    }
+    // Identifier / keyword / builtin / class / fn-name
+    if (/[A-Za-z_]/.test(c)) {
+      let j = i;
+      while (j < n && /[A-Za-z0-9_]/.test(code[j])) j++;
+      const word = code.slice(i, j);
+      let kind = "plain";
+      if (PY_KEYWORDS.has(word)) kind = "kw";
+      else if (PY_BUILTINS.has(word)) kind = "bui";
+      else if (/^[A-Z]/.test(word)) kind = "cls";
+      else {
+        // function-name detection: preceded by "def " or "class "
+        let k = i - 1;
+        while (k >= 0 && code[k] === " ") k--;
+        if (k >= 2 && code.slice(k - 2, k + 1) === "def") kind = "fn";
+      }
+      toks.push({ t: word, k: kind });
+      i = j; continue;
+    }
+    // Anything else: passthrough (whitespace, operators, punctuation)
+    toks.push({ t: c, k: "plain" });
+    i++;
+  }
+  return toks;
+}
+
+function highlight(code) {
+  return tokenizePython(code).map(({ t, k }) => {
+    const safe = escapeHtml(t);
+    return k === "plain" ? safe : '<span class="tok-' + k + '">' + safe + '</span>';
+  }).join("");
+}
+
+// --- contenteditable: manual text insertion (Enter + paste handlers) ---
+// Bypasses the browser's default of inserting <br>/<div> structural breaks.
+// Inserts a literal text node at the cursor — keeps the DOM as text+spans only,
+// which is what the re-render expects.
+function insertTextAtCursor(text) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  range.deleteContents();
+  const node = document.createTextNode(text);
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  // Manually dispatch input so the re-render + edit-tracking fires (some
+  // browsers don't fire input for programmatic insertNode).
+  node.parentElement?.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+// --- cursor preservation for contenteditable ---
+function getCursorOffset(el) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.endContainer)) return null;
+  const pre = range.cloneRange();
+  pre.selectNodeContents(el);
+  pre.setEnd(range.endContainer, range.endOffset);
+  return pre.toString().length;
+}
+
+function setCursorOffset(el, offset) {
+  if (offset == null) return;
+  let charCount = 0;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    const len = node.textContent.length;
+    if (charCount + len >= offset) {
+      const range = document.createRange();
+      range.setStart(node, Math.max(0, offset - charCount));
+      range.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    charCount += len;
+  }
+  // Fallback: place at end.
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+// --- helpers ---
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function countDiffLines(a, b) {
+  return lineDiff(a, b).filter(d => d.tag !== "eq").length;
+}
+
+// LCS-based line diff. Returns array of { tag: "eq" | "del" | "add", line: string }.
+// "del" = present in A, missing from B. "add" = present in B, missing from A.
+function lineDiff(a, b) {
+  const al = a.split("\n");
+  const bl = b.split("\n");
+  const m = al.length, n = bl.length;
+  // Build LCS length table — fine for our small files (~30 lines).
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      if (al[i] === bl[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
+      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out = [];
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (al[i] === bl[j]) { out.push({ tag: "eq", line: al[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ tag: "del", line: al[i] }); i++; }
+    else { out.push({ tag: "add", line: bl[j] }); j++; }
+  }
+  while (i < m) { out.push({ tag: "del", line: al[i] }); i++; }
+  while (j < n) { out.push({ tag: "add", line: bl[j] }); j++; }
+  return out;
+}
+
+setInterval(poll, POLL_INTERVAL);
+poll();
+</script>
+</body>
+</html>

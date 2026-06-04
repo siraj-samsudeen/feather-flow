@@ -21,7 +21,7 @@ openspec --version 2>&1 || echo "CLI_NOT_INSTALLED"
 ```
 
 **If CLI not installed:**
-> OpenSpec CLI is not installed. Install it first, then come back to `/openspec-siraj:onboard`.
+> OpenSpec CLI is not installed. Install it first, then come back to `/siraj-openspec:onboard`.
 
 Stop here if not installed.
 
@@ -148,7 +148,7 @@ Spend 1-2 minutes investigating the relevant code:
 │   [Optional: ASCII diagram if helpful]  │
 └─────────────────────────────────────────┘
 
-Explore mode (`/openspec-siraj:explore`) is for this kind of thinking—investigating before implementing. You can use it anytime you need to think through a problem.
+Explore mode (`/siraj-openspec:explore`) is for this kind of thinking—investigating before implementing. You can use it anytime you need to think through a problem.
 
 Now let's create a change to hold our work.
 ```
@@ -466,25 +466,25 @@ This same rhythm works for any size change—a small fix or a major feature.
 
  | Command           | What it does                               |
  |-------------------|--------------------------------------------|
- | `/openspec-siraj:propose` | Create a change and generate all artifacts |
- | `/openspec-siraj:explore` | Think through problems before/during work  |
- | `/openspec-siraj:apply`   | Implement tasks from a change              |
- | `/openspec-siraj:archive` | Archive a completed change                 |
+ | `/siraj-openspec:propose` | Create a change and generate all artifacts |
+ | `/siraj-openspec:explore` | Think through problems before/during work  |
+ | `/siraj-openspec:apply`   | Implement tasks from a change              |
+ | `/siraj-openspec:archive` | Archive a completed change                 |
 
 **Additional commands:**
 
  | Command            | What it does                                             |
  |--------------------|----------------------------------------------------------|
- | `/openspec-siraj:new`      | Start a new change, step through artifacts one at a time |
- | `/openspec-siraj:continue` | Continue working on an existing change                   |
- | `/openspec-siraj:ff`       | Fast-forward: create all artifacts at once               |
- | `/openspec-siraj:verify`   | Verify implementation matches artifacts                  |
+ | `/siraj-openspec:new`      | Start a new change, step through artifacts one at a time |
+ | `/siraj-openspec:continue` | Continue working on an existing change                   |
+ | `/siraj-openspec:ff`       | Fast-forward: create all artifacts at once               |
+ | `/siraj-openspec:verify`   | Verify implementation matches artifacts                  |
 
 ---
 
 ## What's Next?
 
-Try `/openspec-siraj:propose` on something you actually want to build. You've got the rhythm now!
+Try `/siraj-openspec:propose` on something you actually want to build. You've got the rhythm now!
 ```
 
 ---
@@ -499,8 +499,8 @@ If the user says they need to stop, want to pause, or seem disengaged:
 No problem! Your change is saved at `openspec/changes/<name>/`.
 
 To pick up where we left off later:
-- `/openspec-siraj:continue <name>` - Resume artifact creation
-- `/openspec-siraj:apply <name>` - Jump to implementation (if tasks exist)
+- `/siraj-openspec:continue <name>` - Resume artifact creation
+- `/siraj-openspec:apply <name>` - Jump to implementation (if tasks exist)
 
 The work won't be lost. Come back whenever you're ready.
 ```
@@ -518,21 +518,21 @@ If the user says they just want to see the commands or skip the tutorial:
 
  | Command                  | What it does                               |
  |--------------------------|--------------------------------------------|
- | `/openspec-siraj:propose <name>` | Create a change and generate all artifacts |
- | `/openspec-siraj:explore`        | Think through problems (no code changes)   |
- | `/openspec-siraj:apply <name>`   | Implement tasks                            |
- | `/openspec-siraj:archive <name>` | Archive when done                          |
+ | `/siraj-openspec:propose <name>` | Create a change and generate all artifacts |
+ | `/siraj-openspec:explore`        | Think through problems (no code changes)   |
+ | `/siraj-openspec:apply <name>`   | Implement tasks                            |
+ | `/siraj-openspec:archive <name>` | Archive when done                          |
 
 **Additional commands:**
 
  | Command                   | What it does                        |
  |---------------------------|-------------------------------------|
- | `/openspec-siraj:new <name>`      | Start a new change, step by step    |
- | `/openspec-siraj:continue <name>` | Continue an existing change         |
- | `/openspec-siraj:ff <name>`       | Fast-forward: all artifacts at once |
- | `/openspec-siraj:verify <name>`   | Verify implementation               |
+ | `/siraj-openspec:new <name>`      | Start a new change, step by step    |
+ | `/siraj-openspec:continue <name>` | Continue an existing change         |
+ | `/siraj-openspec:ff <name>`       | Fast-forward: all artifacts at once |
+ | `/siraj-openspec:verify <name>`   | Verify implementation               |
 
-Try `/openspec-siraj:propose` to start your first change.
+Try `/siraj-openspec:propose` to start your first change.
 ```
 
 Exit gracefully.

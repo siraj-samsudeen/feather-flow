@@ -7,7 +7,7 @@ tags: [workflow, archive, experimental]
 
 Archive a completed change in the experimental workflow.
 
-**Input**: Optionally specify a change name after `/openspec-siraj:archive` (e.g., `/openspec-siraj:archive add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
+**Input**: Optionally specify a change name after `/siraj-openspec:archive` (e.g., `/siraj-openspec:archive add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
 
 **Steps**
 

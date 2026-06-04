@@ -7,7 +7,7 @@ tags: [workflow, verify, experimental]
 
 Verify that an implementation matches the change artifacts (specs, tasks, design).
 
-**Input**: Optionally specify a change name after `/openspec-siraj:verify` (e.g., `/openspec-siraj:verify add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
+**Input**: Optionally specify a change name after `/siraj-openspec:verify` (e.g., `/siraj-openspec:verify add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
 
 **Steps**
 
