@@ -15,6 +15,7 @@ SRC="control_plane/src/control_plane"
 # Railway services that vendor a copy (extend as each is migrated to the control plane).
 TARGETS=(
   "gofrugal_extract/src"
+  "zakya_extract/src"
 )
 
 for dest in "${TARGETS[@]}"; do

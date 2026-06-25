@@ -38,6 +38,26 @@ def test_event_upsert_idempotent(fresh_schema):
     assert rows == [(status.EV_SOURCE_ERROR, 500, 4)]
 
 
+def test_event_extra_jsonb_round_trip(fresh_schema):
+    """Source-specific metrics (Zakya's n_requests/gen_ms/rate_remaining) ride in control.event.extra
+    losslessly; a None extra stays SQL NULL (#222, D1)."""
+    dsn = fresh_schema
+    with psycopg.connect(dsn) as c:
+        with c.cursor() as cur:
+            store.apply(cur, {"kind": "event", "extractor": EXT, "run_id": "RX", "seq": 0,
+                              "ran_at": "2026-06-24T01:00:00+00:00", "entity": "export", "unit": "*",
+                              "business_date": "2026-06-24", "status": status.EV_OK, "rows": 12,
+                              "extra": {"n_requests": 3, "gen_ms": 9000, "rate_remaining": 24988}})
+            store.apply(cur, {"kind": "event", "extractor": EXT, "run_id": "RX", "seq": 1,
+                              "ran_at": "2026-06-24T01:00:01+00:00", "entity": "list", "unit": "*",
+                              "status": status.EV_OK, "rows": 1})   # no extra → NULL
+        c.commit()
+    rows = _q(dsn, "SELECT extra->>'gen_ms', extra->>'rate_remaining' FROM control.event "
+                   "WHERE run_id='RX' AND seq=0")
+    assert rows == [("9000", "24988")]
+    assert _q(dsn, "SELECT extra FROM control.event WHERE run_id='RX' AND seq=1") == [(None,)]
+
+
 def test_shipper_tails_and_resumes(fresh_schema, tmp_path):
     dsn = fresh_schema
     w = Wal(str(tmp_path / EXT / "R2.jsonl"))

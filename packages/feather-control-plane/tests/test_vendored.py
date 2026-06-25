@@ -15,6 +15,7 @@ CANONICAL = REPO / "control_plane/src/control_plane"
 # Railway services that vendor a copy (keep in sync with vendor-sync.sh TARGETS).
 VENDORED = [
     REPO / "gofrugal_extract/src/control_plane",
+    REPO / "zakya_extract/src/control_plane",
 ]
 
 

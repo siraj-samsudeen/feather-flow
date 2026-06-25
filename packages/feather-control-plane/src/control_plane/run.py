@@ -114,9 +114,11 @@ class RunContext:
               business_date=None, http_status: int | None = None, rows: int | None = None,
               source_attempts: int | None = None, sink_attempts: int | None = None,
               pull_ms: int | None = None, load_ms: int | None = None,
-              error_detail: str | None = None) -> None:
+              error_detail: str | None = None, extra: dict | None = None) -> None:
         """Record one unit/cell outcome (one row in control.event). `status` here is the
-        event-status string (status.EV_*), not the module."""
+        event-status string (status.EV_*), not the module. `extra` is a small JSONB bag for
+        source-specific metrics that don't warrant a shared column (e.g. Zakya's n_requests /
+        gen_ms / rate_remaining); leave it None when there's nothing source-specific to keep."""
         self._emit({
             "kind": "event", "extractor": self.cp.extractor, "run_id": self.run_id,
             "seq": self._seq, "ran_at": _now(), "entity": entity, "unit": unit,
@@ -124,6 +126,7 @@ class RunContext:
             "rows": rows, "source_attempts": source_attempts, "sink_attempts": sink_attempts,
             "pull_ms": pull_ms, "load_ms": load_ms,
             "error_detail": (error_detail[:ERROR_DETAIL_CAP] if error_detail else None),
+            "extra": extra,
         })
         self._seq += 1
 

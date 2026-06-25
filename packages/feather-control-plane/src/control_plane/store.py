@@ -16,6 +16,7 @@ word `limit`.
 from __future__ import annotations
 
 import psycopg
+from psycopg.types.json import Json
 
 SCHEMA_DDL = """
 CREATE SCHEMA IF NOT EXISTS control;
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS control.event (
     pull_ms         INTEGER,
     load_ms         INTEGER,
     error_detail    TEXT,
+    extra           JSONB,
     PRIMARY KEY (extractor, run_id, seq)
 );
 CREATE INDEX IF NOT EXISTS event_run ON control.event (run_id);
@@ -82,6 +84,9 @@ CREATE TABLE IF NOT EXISTS control.budget_usage (
 def ensure_schema(conn: psycopg.Connection) -> None:
     with conn.cursor() as cur:
         cur.execute(SCHEMA_DDL)
+        # Migration for control planes created before control.event.extra existed (e.g. the
+        # live GoFrugal table): CREATE TABLE IF NOT EXISTS above won't add a column to it.
+        cur.execute("ALTER TABLE control.event ADD COLUMN IF NOT EXISTS extra JSONB")
     conn.commit()
 
 
@@ -113,16 +118,18 @@ def apply(cur: psycopg.Cursor, rec: dict) -> None:
              rec.get("n_ok"), rec.get("n_err"), rec.get("n_skipped")),
         )
     elif kind == "event":
+        extra = rec.get("extra")
         cur.execute(
             "INSERT INTO control.event "
             "(extractor, run_id, seq, ran_at, entity, unit, business_date, status, "
-            " http_status, rows, source_attempts, sink_attempts, pull_ms, load_ms, error_detail) "
-            "VALUES (%s,%s,%s,%s::timestamptz,%s,%s,%s::date,%s,%s,%s,%s,%s,%s,%s,%s) "
+            " http_status, rows, source_attempts, sink_attempts, pull_ms, load_ms, error_detail, extra) "
+            "VALUES (%s,%s,%s,%s::timestamptz,%s,%s,%s::date,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (extractor, run_id, seq) DO NOTHING",
             (rec["extractor"], rec["run_id"], rec["seq"], rec["ran_at"], rec.get("entity"),
              rec.get("unit"), rec.get("business_date"), rec["status"], rec.get("http_status"),
              rec.get("rows"), rec.get("source_attempts"), rec.get("sink_attempts"),
-             rec.get("pull_ms"), rec.get("load_ms"), rec.get("error_detail")),
+             rec.get("pull_ms"), rec.get("load_ms"), rec.get("error_detail"),
+             Json(extra) if extra is not None else None),
         )
     elif kind == "budget":
         cur.execute(
