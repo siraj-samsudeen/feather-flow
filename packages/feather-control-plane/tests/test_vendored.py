@@ -12,10 +12,11 @@ import pathlib
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CANONICAL = REPO / "control_plane/src/control_plane"
 
-# Railway services that vendor a copy (keep in sync with vendor-sync.sh TARGETS).
+# Services that vendor a copy (keep in sync with vendor-sync.sh TARGETS).
 VENDORED = [
     REPO / "gofrugal_extract/src/control_plane",
     REPO / "zakya_extract/src/control_plane",
+    REPO / "sap_bronze/src/control_plane",
 ]
 
 
