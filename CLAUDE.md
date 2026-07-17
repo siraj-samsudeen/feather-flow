@@ -1,4 +1,4 @@
-# feather-etl — agent context
+# feather-flow — agent context
 
 Config-driven Python ETL for heterogeneous ERP sources → local DuckDB.
 

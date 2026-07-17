@@ -1,16 +1,18 @@
-# feather-etl
+# feather-flow
+
+> **Renamed** from `feather-etl` on 2026-07-17. The PyPI package and Python module are still published as `feather-etl` / `feather_etl`, so install commands below use the published name until the package itself is renamed.
 
 A config-driven Python ETL platform for deploying data pipelines across multiple clients with heterogeneous ERP source systems — SQL Server, SAP B1, SAP S4 HANA, and custom Indian ERPs.
 
-feather-etl is the entire data platform for clients who have none. For clients who already have a data warehouse, it is a lightweight extraction and local transform layer that feeds only clean, curated gold tables to the cloud.
+feather-flow is the entire data platform for clients who have none. For clients who already have a data warehouse, it is a lightweight extraction and local transform layer that feeds only clean, curated gold tables to the cloud.
 
-## Why feather-etl?
+## Why feather-flow?
 
 Enterprise ETL stacks (dlt + dbt/SQLMesh + Dagster) introduce a complexity tax — hundreds of transitive dependencies, proprietary abstractions, steep learning curves — that makes them unsuitable for Indian SMBs who need a working data pipeline, not a data engineering career.
 
-feather-etl replaces the full stack with a single Python package (~1,200 LOC, 7 dependencies), deployable by a small team, configurable in YAML, and understandable by anyone who can read SQL.
+feather-flow replaces the full stack with a single Python package (~1,200 LOC, 7 dependencies), deployable by a small team, configurable in YAML, and understandable by anyone who can read SQL.
 
-| Heavy Stack | feather-etl equivalent |
+| Heavy Stack | feather-flow equivalent |
 |------------|----------------------|
 | dlt (extraction) | `sources/` — Protocol-based connectors |
 | dbt / SQLMesh (transforms) | Plain `.sql` files executed in local DuckDB |
@@ -85,7 +87,7 @@ All three strategies are idempotent — safe to re-run after partial failures.
 
 ## This Repo vs Client Projects
 
-**feather-etl** (this repo) is a Python package only — no client config, no client data. See [Installation](#installation) for install options.
+**feather-flow** (this repo) is a Python package only — no client config, no client data. See [Installation](#installation) for install options.
 
 Each client lives in its own GitHub repository, scaffolded with `feather init`:
 
@@ -212,7 +214,7 @@ feather extract --refresh --table sales        # force re-pull of specific table
 
 #### Pre-flight banner
 
-Before extracting from any DB source (SQL Server, PostgreSQL, MySQL), feather-etl classifies each table by estimated row and column count, derives the extraction shape, and prints a banner:
+Before extracting from any DB source (SQL Server, PostgreSQL, MySQL), feather-flow classifies each table by estimated row and column count, derives the extraction shape, and prints a banner:
 
 ```
 [zakya_dbo_sales] pre-flight:
@@ -417,7 +419,7 @@ client-project/
     └── hr.yaml          # 4 HR tables
 ```
 
-feather-etl auto-discovers and merges all `.yaml` files in the `tables/` directory.
+feather-flow auto-discovers and merges all `.yaml` files in the `tables/` directory.
 
 ## Transform Dependencies
 

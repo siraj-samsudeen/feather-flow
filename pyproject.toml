@@ -35,9 +35,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/siraj-samsudeen/feather-etl"
-Repository = "https://github.com/siraj-samsudeen/feather-etl"
-Issues = "https://github.com/siraj-samsudeen/feather-etl/issues"
+Homepage = "https://github.com/siraj-samsudeen/feather-flow"
+Repository = "https://github.com/siraj-samsudeen/feather-flow"
+Issues = "https://github.com/siraj-samsudeen/feather-flow/issues"
 
 [project.optional-dependencies]
 connectorx = ["connectorx>=0.4"]
