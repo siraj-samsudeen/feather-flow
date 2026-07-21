@@ -1,11 +1,11 @@
-"""Integration: feather_etl.validate.run_validate — exercises validate + config
+"""Integration: feather_flow.validate.run_validate — exercises validate + config
 + sources connection probing.
 """
 
 from __future__ import annotations
 
-from feather_etl.config import load_config
-from feather_etl.validate import run_validate
+from feather_flow.config import load_config
+from feather_flow.validate import run_validate
 
 
 def _setup_sqlite_project(project, *, valid_path: bool = True):

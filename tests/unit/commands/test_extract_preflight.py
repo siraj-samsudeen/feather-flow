@@ -13,9 +13,9 @@ from unittest.mock import patch
 import yaml
 from typer.testing import CliRunner
 
-from feather_etl.cli import app
-from feather_etl.sources import StreamSchema
-from feather_etl.state import StateManager
+from feather_flow.cli import app
+from feather_flow.sources import StreamSchema
+from feather_flow.state import StateManager
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -186,7 +186,7 @@ def _fake_db_source(
             return window_range
 
         def detect_changes(self, table, last_state=None):
-            from feather_etl.sources import ChangeResult
+            from feather_flow.sources import ChangeResult
 
             return ChangeResult(changed=False, reason="unchanged")
 
@@ -208,10 +208,10 @@ def _fake_db_source(
 
 
 def _patch_resolve(fake_source):
-    """Context manager: patch feather_etl.extract.resolve_source and
-    feather_etl.curation.resolve_source to return *fake_source*."""
+    """Context manager: patch feather_flow.extract.resolve_source and
+    feather_flow.curation.resolve_source to return *fake_source*."""
     return patch(
-        "feather_etl.extract.resolve_source",
+        "feather_flow.extract.resolve_source",
         return_value=fake_source,
     )
 
@@ -229,7 +229,7 @@ def test_extract_command_db_source_runs_planner_and_prints_banner(tmp_path):
     with (
         _patch_resolve(fake),
         patch(
-            "feather_etl.commands._preflight.resolve_source",
+            "feather_flow.commands._preflight.resolve_source",
             return_value=fake,
         ),
     ):
@@ -246,12 +246,12 @@ def test_extract_command_db_source_runs_planner_and_prints_banner(tmp_path):
 
 def test_extract_command_file_source_skips_planner(tmp_path):
     """File-type sources skip the planner entirely."""
-    from feather_etl.sources.duckdb_file import DuckDBFileSource
+    from feather_flow.sources.duckdb_file import DuckDBFileSource
 
     config_file = _write_config(tmp_path, source_type="file")
 
     # File sources raise NotImplementedError from cheap_rowcount → skip planner.
-    with patch("feather_etl.extract.resolve_source") as mock_resolve:
+    with patch("feather_flow.extract.resolve_source") as mock_resolve:
         import duckdb
 
         src_db = tmp_path / "source.duckdb"
@@ -299,10 +299,10 @@ def test_extract_command_plan_only_exits_zero_without_extract(tmp_path):
     with (
         _patch_resolve(fake),
         patch(
-            "feather_etl.commands._preflight.resolve_source",
+            "feather_flow.commands._preflight.resolve_source",
             return_value=fake,
         ),
-        patch("feather_etl.commands.extract.run_extract", side_effect=fake_run_extract),
+        patch("feather_flow.commands.extract.run_extract", side_effect=fake_run_extract),
     ):
         result = runner.invoke(
             app,
@@ -324,7 +324,7 @@ def test_extract_command_blocker_unaccepted_exits_three(tmp_path):
     with (
         _patch_resolve(fake),
         patch(
-            "feather_etl.commands._preflight.resolve_source",
+            "feather_flow.commands._preflight.resolve_source",
             return_value=fake,
         ),
     ):
@@ -354,7 +354,7 @@ def test_extract_command_blocker_accepted_by_flag_proceeds(tmp_path):
 
     def fake_run_extract(*a, **kw):
         extract_called.append(True)
-        from feather_etl.extract import ExtractResult
+        from feather_flow.extract import ExtractResult
 
         return [
             ExtractResult(
@@ -365,10 +365,10 @@ def test_extract_command_blocker_accepted_by_flag_proceeds(tmp_path):
     with (
         _patch_resolve(fake),
         patch(
-            "feather_etl.commands._preflight.resolve_source",
+            "feather_flow.commands._preflight.resolve_source",
             return_value=fake,
         ),
-        patch("feather_etl.commands.extract.run_extract", side_effect=fake_run_extract),
+        patch("feather_flow.commands.extract.run_extract", side_effect=fake_run_extract),
     ):
         result = runner.invoke(
             app,
@@ -398,7 +398,7 @@ def test_extract_command_multiple_blockers_each_listed_separately(tmp_path):
     with (
         _patch_resolve(fake),
         patch(
-            "feather_etl.commands._preflight.resolve_source",
+            "feather_flow.commands._preflight.resolve_source",
             return_value=fake,
         ),
     ):
@@ -425,7 +425,7 @@ def test_extract_command_tty_prompts_y_n_after_banner(tmp_path):
 
     def fake_run_extract(*a, **kw):
         extract_called.append(True)
-        from feather_etl.extract import ExtractResult
+        from feather_flow.extract import ExtractResult
 
         return [
             ExtractResult(
@@ -436,12 +436,12 @@ def test_extract_command_tty_prompts_y_n_after_banner(tmp_path):
     with (
         _patch_resolve(fake),
         patch(
-            "feather_etl.commands._preflight.resolve_source",
+            "feather_flow.commands._preflight.resolve_source",
             return_value=fake,
         ),
-        patch("feather_etl.commands.extract.run_extract", side_effect=fake_run_extract),
-        patch("feather_etl.commands._preflight.sys") as mock_sys,
-        patch("feather_etl.commands._preflight.input", return_value="y", create=True),
+        patch("feather_flow.commands.extract.run_extract", side_effect=fake_run_extract),
+        patch("feather_flow.commands._preflight.sys") as mock_sys,
+        patch("feather_flow.commands._preflight.input", return_value="y", create=True),
     ):
         mock_sys.stdin.isatty.return_value = True
         result = runner.invoke(
@@ -464,7 +464,7 @@ def test_extract_command_non_tty_no_prompt(tmp_path):
 
     def fake_run_extract(*a, **kw):
         extract_called.append(True)
-        from feather_etl.extract import ExtractResult
+        from feather_flow.extract import ExtractResult
 
         return [
             ExtractResult(
@@ -481,12 +481,12 @@ def test_extract_command_non_tty_no_prompt(tmp_path):
     with (
         _patch_resolve(fake),
         patch(
-            "feather_etl.commands._preflight.resolve_source",
+            "feather_flow.commands._preflight.resolve_source",
             return_value=fake,
         ),
-        patch("feather_etl.commands.extract.run_extract", side_effect=fake_run_extract),
-        patch("feather_etl.commands._preflight.sys") as mock_sys,
-        patch("feather_etl.commands._preflight.input", fake_input, create=True),
+        patch("feather_flow.commands.extract.run_extract", side_effect=fake_run_extract),
+        patch("feather_flow.commands._preflight.sys") as mock_sys,
+        patch("feather_flow.commands._preflight.input", fake_input, create=True),
     ):
         mock_sys.stdin.isatty.return_value = False
         result = runner.invoke(
@@ -518,18 +518,18 @@ def test_extract_command_table_filter_restricts_planning_and_extract_to_one_tabl
 
     def tracking_pick_plan(table, *args, **kwargs):
         planned_tables.append(table.name)
-        from feather_etl.planner import pick_plan
+        from feather_flow.planner import pick_plan
 
         return pick_plan(table, *args, **kwargs)
 
     with (
         _patch_resolve(fake),
         patch(
-            "feather_etl.commands._preflight.resolve_source",
+            "feather_flow.commands._preflight.resolve_source",
             return_value=fake,
         ),
         patch(
-            "feather_etl.commands._preflight.pick_plan",
+            "feather_flow.commands._preflight.pick_plan",
             side_effect=tracking_pick_plan,
         ),
     ):

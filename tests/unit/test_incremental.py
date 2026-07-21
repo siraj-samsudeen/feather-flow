@@ -6,9 +6,9 @@ from pathlib import Path
 import duckdb
 import pyarrow as pa
 
-from feather_etl.destinations.duckdb import DuckDBDestination
-from feather_etl.sources.file_source import FileSource
-from feather_etl.state import StateManager
+from feather_flow.destinations.duckdb import DuckDBDestination
+from feather_flow.sources.file_source import FileSource
+from feather_flow.state import StateManager
 
 
 class TestBuildWhereClause:

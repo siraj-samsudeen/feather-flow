@@ -63,7 +63,7 @@ def test_writes_json_with_tables(project, cli, monkeypatch):
 def test_invokes_shared_viewer_runtime_after_writing_json(
     project, cli, tmp_path, monkeypatch
 ):
-    from feather_etl.commands import discover as discover_cmd
+    from feather_flow.commands import discover as discover_cmd
 
     config_dir = tmp_path / "config"
     work_dir = tmp_path / "work"
@@ -109,7 +109,7 @@ def test_invokes_shared_viewer_runtime_after_writing_json(
 
 
 def test_runtime_emitted_output_line_is_surfaced(project, cli, monkeypatch):
-    from feather_etl.commands import discover as discover_cmd
+    from feather_flow.commands import discover as discover_cmd
 
     client_db = project.root / "client.duckdb"
     shutil.copy2(FIXTURES_DIR / "client.duckdb", client_db)
@@ -354,7 +354,7 @@ def test_prune_does_not_emit_discovering_header(project, cli, monkeypatch):
     block. The Task 7 extraction accidentally moved the header above the
     short-circuit. Lock the contract here.
     """
-    from feather_etl.discover_state import DiscoverState
+    from feather_flow.discover_state import DiscoverState
 
     shutil.copy2(FIXTURES_DIR / "sample_erp.sqlite", project.root / "source.sqlite")
     project.write_config(
@@ -405,7 +405,7 @@ def test_prune_does_not_emit_discovering_header(project, cli, monkeypatch):
 def test_empty_enumeration_records_failed_with_hint(project, cli, monkeypatch):
     """If list_databases() returns [], record FAILED with remediation hint (E1)."""
     from unittest.mock import MagicMock
-    from feather_etl.sources.sqlserver import SqlServerSource
+    from feather_flow.sources.sqlserver import SqlServerSource
 
     # Patch list_databases to return [].
     monkeypatch.setattr(SqlServerSource, "list_databases", lambda self: [])
@@ -443,7 +443,7 @@ tables: []
 
 @pytest.mark.usefixtures("stub_viewer_serve")
 def test_ambiguous_fingerprint_match_errors(project, cli, monkeypatch):
-    from feather_etl.discover_state import DiscoverState
+    from feather_flow.discover_state import DiscoverState
 
     shutil.copy2(FIXTURES_DIR / "sample_erp.sqlite", project.root / "source.sqlite")
     project.write_config(

@@ -2,7 +2,7 @@
 
 Config-driven Python ETL for heterogeneous ERP sources → local DuckDB.
 
-**Full project context:** `.claude/rules/feather-etl-project.md`
+**Full project context:** `.claude/rules/feather-flow-project.md`
 **Requirements:** `docs/prd.md`
 **Architecture (codebase):** `README.md`
 **Architecture (warehouse model):** `docs/architecture/warehouse-layers.md` — four-layer Bronze/Silver/Gold/Departmental-Data-Marts model. Read before writing any transform SQL.

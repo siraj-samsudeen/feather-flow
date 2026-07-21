@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from feather_etl.transform_deps import (
+from feather_flow.transform_deps import (
     TransformDepParseError,
     extract_bronze_dependencies,
     extract_dependencies,

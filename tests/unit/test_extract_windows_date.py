@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from datetime import datetime
 
-from feather_etl.extract_windows import plan_windows
+from feather_flow.extract_windows import plan_windows
 
 
 # ---------------------------------------------------------------------------

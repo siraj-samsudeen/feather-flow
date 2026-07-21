@@ -160,7 +160,7 @@ def test_stub_viewer_serve_prevents_browser_open(project, cli, monkeypatch):
 
     This smoke test doesn't apply the fixture but shows the target attribute
     exists and is overridable."""
-    import feather_etl.commands.discover as discover_cmd
+    import feather_flow.commands.discover as discover_cmd
 
     assert hasattr(discover_cmd, "serve_and_open"), (
         "discover command still exposes serve_and_open — stub_viewer_serve fixture relies on this"

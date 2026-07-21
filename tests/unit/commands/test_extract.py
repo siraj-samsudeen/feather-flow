@@ -1,4 +1,4 @@
-"""Unit tests for feather_etl.commands.extract private helpers."""
+"""Unit tests for feather_flow.commands.extract private helpers."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class TestLookupSourceName:
     ``resolve_source`` raises ValueError (commands/extract.py)."""
 
     def test_returns_match_when_resolvable(self):
-        from feather_etl.commands.extract import _lookup_source_name
+        from feather_flow.commands.extract import _lookup_source_name
 
         cfg = _FakeCfg(sources=[_FakeSource(name="erp", database="erp")])
         assert _lookup_source_name(cfg, "erp") == "erp"
@@ -32,7 +32,7 @@ class TestLookupSourceName:
     def test_falls_back_to_raw_source_db_on_mismatch(self):
         """When source_db points at nothing configured, the helper returns
         the input string so the CLI has something to print."""
-        from feather_etl.commands.extract import _lookup_source_name
+        from feather_flow.commands.extract import _lookup_source_name
 
         cfg = _FakeCfg(sources=[_FakeSource(name="erp", database="erp")])
         assert _lookup_source_name(cfg, "nonexistent_db") == "nonexistent_db"
@@ -44,8 +44,8 @@ class TestLookupSourceName:
         wrote in YAML, not the internal disambiguator."""
         from pathlib import Path
 
-        from feather_etl.commands.extract import _lookup_source_name
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.commands.extract import _lookup_source_name
+        from feather_flow.sources.mysql import MySQLSource
 
         parent = MySQLSource.from_yaml(
             {
@@ -75,7 +75,7 @@ class TestNoCacheAlias:
         signal from Typer/Click. This is the load-bearing assertion: it catches
         an accidentally-restored alias the moment one is introduced.
         """
-        from feather_etl.cli import app
+        from feather_flow.cli import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["cache", "--help"])
@@ -94,7 +94,7 @@ class TestNoCacheAlias:
     def test_feather_extract_is_registered(self):
         """Companion assertion: `feather extract --help` succeeds, so the
         no-cache failure above is meaningful (the verb really did move)."""
-        from feather_etl.cli import app
+        from feather_flow.cli import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["extract", "--help"])
@@ -103,7 +103,7 @@ class TestNoCacheAlias:
 
     def test_top_level_help_lists_extract_not_cache(self):
         """`feather --help` must list `extract` and NOT list `cache`."""
-        from feather_etl.cli import app
+        from feather_flow.cli import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["--help"])

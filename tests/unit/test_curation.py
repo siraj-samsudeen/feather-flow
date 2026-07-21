@@ -31,7 +31,7 @@ def _make_include_entry(
 
 class TestLoadCuration:
     def test_filters_to_include_only(self, tmp_path: Path):
-        from feather_etl.curation import load_curation_tables
+        from feather_flow.curation import load_curation_tables
 
         tables = [
             _make_include_entry(alias="sales"),
@@ -44,7 +44,7 @@ class TestLoadCuration:
         assert result[0].name == "test_db_sales"
 
     def test_derives_bronze_name_from_source_db_and_alias(self, tmp_path: Path):
-        from feather_etl.curation import load_curation_tables
+        from feather_flow.curation import load_curation_tables
 
         entry = _make_include_entry(source_db="Gofrugal", alias="sales")
         write_curation(tmp_path, [entry])
@@ -53,7 +53,7 @@ class TestLoadCuration:
         assert result[0].target_table == ""  # mode-derived at runtime
 
     def test_maps_strategy(self, tmp_path: Path):
-        from feather_etl.curation import load_curation_tables
+        from feather_flow.curation import load_curation_tables
 
         entry = _make_include_entry(
             strategy="incremental",
@@ -65,7 +65,7 @@ class TestLoadCuration:
         assert result[0].timestamp_column == "SyncDate"
 
     def test_maps_primary_key(self, tmp_path: Path):
-        from feather_etl.curation import load_curation_tables
+        from feather_flow.curation import load_curation_tables
 
         entry = _make_include_entry(primary_key=["record_no", "line_no"])
         write_curation(tmp_path, [entry])
@@ -73,7 +73,7 @@ class TestLoadCuration:
         assert result[0].primary_key == ["record_no", "line_no"]
 
     def test_sets_source_name_and_database(self, tmp_path: Path):
-        from feather_etl.curation import load_curation_tables
+        from feather_flow.curation import load_curation_tables
 
         entry = _make_include_entry(source_db="SAP")
         write_curation(tmp_path, [entry])
@@ -82,13 +82,13 @@ class TestLoadCuration:
         assert result[0].source_name == "SAP"
 
     def test_missing_curation_raises(self, tmp_path: Path):
-        from feather_etl.curation import load_curation_tables
+        from feather_flow.curation import load_curation_tables
 
         with pytest.raises(FileNotFoundError, match="discovery/curation.json"):
             load_curation_tables(tmp_path)
 
     def test_no_include_entries_raises(self, tmp_path: Path):
-        from feather_etl.curation import load_curation_tables
+        from feather_flow.curation import load_curation_tables
 
         entry = {**_make_include_entry(), "decision": "exclude"}
         write_curation(tmp_path, [entry])
@@ -96,7 +96,7 @@ class TestLoadCuration:
             load_curation_tables(tmp_path)
 
     def test_sanitizes_bronze_name(self, tmp_path: Path):
-        from feather_etl.curation import load_curation_tables
+        from feather_flow.curation import load_curation_tables
 
         entry = _make_include_entry(source_db="My-Source", alias="Sales Data!")
         write_curation(tmp_path, [entry])
@@ -106,7 +106,7 @@ class TestLoadCuration:
 
     def test_bronze_name_collision_case_difference_raises(self, tmp_path: Path):
         """Two aliases that differ only in case must collide after normalization."""
-        from feather_etl.curation import load_curation_tables
+        from feather_flow.curation import load_curation_tables
 
         tables = [
             _make_include_entry(source_db="SAP", alias="Sales"),
@@ -118,7 +118,7 @@ class TestLoadCuration:
 
     def test_bronze_name_collision_punctuation_difference_raises(self, tmp_path: Path):
         """Two aliases that differ only in punctuation must collide after normalization."""
-        from feather_etl.curation import load_curation_tables
+        from feather_flow.curation import load_curation_tables
 
         tables = [
             _make_include_entry(source_db="SAP", alias="sales_b"),
@@ -138,8 +138,8 @@ class TestResolveSource:
         selected" state (issue #51)."""
         from pathlib import Path
 
-        from feather_etl.curation import resolve_source
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.curation import resolve_source
+        from feather_flow.sources.mysql import MySQLSource
 
         parent = MySQLSource.from_yaml(
             {
@@ -168,7 +168,7 @@ class TestResolveSource:
         assert result.user == "u"
 
     def test_resolves_source_by_single_database(self):
-        from feather_etl.curation import resolve_source
+        from feather_flow.curation import resolve_source
 
         mock_src = MagicMock()
         mock_src.name = "erp"
@@ -179,7 +179,7 @@ class TestResolveSource:
         assert result == mock_src
 
     def test_resolves_file_source_by_name(self):
-        from feather_etl.curation import resolve_source
+        from feather_flow.curation import resolve_source
 
         mock_src = MagicMock()
         mock_src.name = "csv_data"
@@ -194,7 +194,7 @@ class TestResolveSource:
         assert result == mock_src
 
     def test_no_match_raises(self):
-        from feather_etl.curation import resolve_source
+        from feather_flow.curation import resolve_source
 
         mock_src = MagicMock()
         mock_src.name = "Rama"
@@ -205,7 +205,7 @@ class TestResolveSource:
             resolve_source("NonExistent", [mock_src])
 
     def test_ambiguous_match_raises(self):
-        from feather_etl.curation import resolve_source
+        from feather_flow.curation import resolve_source
 
         src_a = MagicMock()
         src_a.name = "ServerA"
@@ -226,8 +226,8 @@ class TestResolveSource:
         which DB an operation was bound to."""
         from pathlib import Path
 
-        from feather_etl.curation import resolve_source
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.curation import resolve_source
+        from feather_flow.sources.mysql import MySQLSource
 
         parent = MySQLSource.from_yaml(
             {
@@ -249,8 +249,8 @@ class TestResolveSource:
         only triggers on the multi-DB branch."""
         from pathlib import Path
 
-        from feather_etl.curation import resolve_source
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.curation import resolve_source
+        from feather_flow.sources.mysql import MySQLSource
 
         parent = MySQLSource.from_yaml(
             {

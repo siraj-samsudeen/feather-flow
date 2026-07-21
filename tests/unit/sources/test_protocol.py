@@ -38,7 +38,7 @@ class _MinimalSource:
         return pa.table({})
 
     def detect_changes(self, table, last_state=None):
-        from feather_etl.sources import ChangeResult
+        from feather_flow.sources import ChangeResult
 
         return ChangeResult(changed=False, reason="unchanged")
 
@@ -48,33 +48,33 @@ class _MinimalSource:
 
 class TestSourceProtocol:
     def test_base_source_cheap_rowcount_raises_notimplemented(self):
-        from feather_etl.sources import Source
+        from feather_flow.sources import Source
 
         src = _MinimalSource()
         with pytest.raises(NotImplementedError):
             Source.cheap_rowcount(src, "some_table")
 
     def test_base_source_get_window_range_raises_notimplemented(self):
-        from feather_etl.sources import Source
+        from feather_flow.sources import Source
 
         src = _MinimalSource()
         with pytest.raises(NotImplementedError):
             Source.get_window_range(src, "some_table", "created_at")
 
     def test_protocol_has_from_yaml_and_validate_source_table(self):
-        from feather_etl.sources import Source
+        from feather_flow.sources import Source
 
         assert hasattr(Source, "from_yaml")
         assert hasattr(Source, "validate_source_table")
 
     def test_each_source_class_declares_type_attr(self):
-        from feather_etl.sources.csv import CsvSource
-        from feather_etl.sources.duckdb_file import DuckDBFileSource
-        from feather_etl.sources.excel import ExcelSource
-        from feather_etl.sources.json_source import JsonSource
-        from feather_etl.sources.postgres import PostgresSource
-        from feather_etl.sources.sqlite import SqliteSource
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.sources.csv import CsvSource
+        from feather_flow.sources.duckdb_file import DuckDBFileSource
+        from feather_flow.sources.excel import ExcelSource
+        from feather_flow.sources.json_source import JsonSource
+        from feather_flow.sources.postgres import PostgresSource
+        from feather_flow.sources.sqlite import SqliteSource
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         assert CsvSource.type == "csv"
         assert DuckDBFileSource.type == "duckdb"

@@ -6,7 +6,7 @@ directory-scaffolding primitives (``copy_fixture``, ``write_config``,
 ``write_curation``, ``query``) that e2e tests use.
 
 Integration tests must NOT use the ``cli`` fixture (Rule I1): they call
-``feather_etl.*`` Python APIs directly. Local per-file fixtures belong
+``feather_flow.*`` Python APIs directly. Local per-file fixtures belong
 inline in the test file, not here (Rule I7).
 """
 

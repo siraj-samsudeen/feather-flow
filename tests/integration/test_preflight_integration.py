@@ -31,9 +31,9 @@ from unittest.mock import patch
 import yaml
 from typer.testing import CliRunner
 
-from feather_etl.cli import app
-from feather_etl.sources import StreamSchema
-from feather_etl.state import StateManager
+from feather_flow.cli import app
+from feather_flow.sources import StreamSchema
+from feather_flow.state import StateManager
 
 # ---------------------------------------------------------------------------
 # Shared runner
@@ -78,7 +78,7 @@ class StubbedSqlServerSource:
 
     Registered as ``"stubbed_sqlserver"`` in the source registry for the
     duration of each test that uses it.  The ``from_yaml`` classmethod makes
-    it compatible with feather_etl.sources.registry.get_source_class() and the
+    it compatible with feather_flow.sources.registry.get_source_class() and the
     YAML config ``type: stubbed_sqlserver`` pattern.
     """
 
@@ -142,7 +142,7 @@ class StubbedSqlServerSource:
         return (_WINDOW_START, _WINDOW_END)
 
     def detect_changes(self, table: str, last_state=None):
-        from feather_etl.sources import ChangeResult
+        from feather_flow.sources import ChangeResult
 
         return ChangeResult(changed=False, reason="unchanged")
 
@@ -227,7 +227,7 @@ def _write_project(tmp_path: Path, tables: list[dict]) -> Path:
 
 def _register_stub_source():
     """Context manager: add StubbedSqlServerSource to SOURCE_CLASSES for the test."""
-    from feather_etl.sources import registry as source_registry
+    from feather_flow.sources import registry as source_registry
 
     return patch.dict(
         source_registry.SOURCE_CLASSES,
@@ -241,11 +241,11 @@ def _patch_resolve_stub(stub: StubbedSqlServerSource):
     """Patch both resolve_source call sites to return the stub."""
     return (
         patch(
-            "feather_etl.commands._preflight.resolve_source",
+            "feather_flow.commands._preflight.resolve_source",
             return_value=stub,
         ),
         patch(
-            "feather_etl.extract.resolve_source",
+            "feather_flow.extract.resolve_source",
             return_value=stub,
         ),
     )
@@ -311,12 +311,12 @@ def test_large_table_connectorx_available_banner(tmp_path: Path) -> None:
     preflight_patch, extract_patch = _patch_resolve_stub(stub)
 
     # Ensure connectorx IS in the registered transports for this scenario.
-    from feather_etl.transports import registry as transport_registry
+    from feather_flow.transports import registry as transport_registry
 
     transports_with_connectorx = dict(transport_registry.TRANSPORT_CLASSES)
     if "connectorx" not in transports_with_connectorx:
         transports_with_connectorx["connectorx"] = (
-            "feather_etl.transports.connectorx_transport.ConnectorxTransport"
+            "feather_flow.transports.connectorx_transport.ConnectorxTransport"
         )
 
     with (
@@ -363,7 +363,7 @@ def test_large_table_no_connectorx_exits_three(tmp_path: Path) -> None:
 
     preflight_patch, extract_patch = _patch_resolve_stub(stub)
 
-    from feather_etl.transports import registry as transport_registry
+    from feather_flow.transports import registry as transport_registry
 
     # Exclude connectorx so slow_transport blocker fires.
     transports_without_connectorx = {
@@ -374,7 +374,7 @@ def test_large_table_no_connectorx_exits_three(tmp_path: Path) -> None:
     if not transports_without_connectorx:
         # Guarantee at least one transport so the planner has a default.
         transports_without_connectorx = {
-            "arrow-odbc": "feather_etl.transports.arrow_odbc_transport.ArrowOdbcTransport"
+            "arrow-odbc": "feather_flow.transports.arrow_odbc_transport.ArrowOdbcTransport"
         }
 
     with (

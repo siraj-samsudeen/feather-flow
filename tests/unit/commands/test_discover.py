@@ -1,4 +1,4 @@
-"""Unit tests for feather_etl.commands.discover private helpers."""
+"""Unit tests for feather_flow.commands.discover private helpers."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ class TestResolveRenameDecisionTtyConfirm:
     def test_tty_confirm_accepts_proposals(self, capsys):
         """When stdin is a TTY and the user confirms, all proposals are
         accepted and echoed back (commands/discover.py:48-50)."""
-        from feather_etl.commands import discover as discover_cmd
+        from feather_flow.commands import discover as discover_cmd
 
         proposals = [("old_a", "new_a"), ("old_b", "new_b")]
         with (
@@ -29,7 +29,7 @@ class TestResolveRenameDecisionTtyConfirm:
     def test_tty_confirm_rejects_and_lists_orphans(self, capsys):
         """When the user declines, every proposal becomes orphaned and
         ``treating … as new`` is printed per pair (commands/discover.py:51-52)."""
-        from feather_etl.commands import discover as discover_cmd
+        from feather_flow.commands import discover as discover_cmd
 
         proposals = [("old_a", "new_a"), ("old_b", "new_b")]
         with (

@@ -18,8 +18,8 @@ GLOB_FIXTURES = FIXTURES_DIR / "csv_glob"
 
 def test_glob_extracts_all_matching_files(tmp_path: Path):
     """source_table: 'sales_*.csv' extracts all matching files as one table."""
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_table
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_table
 
     data_dir = tmp_path / "data"
     shutil.copytree(GLOB_FIXTURES, data_dir)
@@ -41,8 +41,8 @@ def test_glob_extracts_all_matching_files(tmp_path: Path):
 
 def test_glob_no_match_fails(tmp_path: Path):
     """Glob that matches no files should fail gracefully."""
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_table
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_table
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -64,8 +64,8 @@ def test_glob_no_match_fails(tmp_path: Path):
 
 def test_no_change_skips(tmp_path: Path):
     """Second run with no file changes should skip extraction."""
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_table
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_table
 
     data_dir = tmp_path / "data"
     shutil.copytree(GLOB_FIXTURES, data_dir)
@@ -87,8 +87,8 @@ def test_no_change_skips(tmp_path: Path):
 
 def test_new_file_triggers_reextract(tmp_path: Path):
     """Adding a new matching file should trigger re-extraction."""
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_table
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_table
 
     data_dir = tmp_path / "data"
     shutil.copytree(GLOB_FIXTURES, data_dir)
@@ -117,8 +117,8 @@ def test_new_file_triggers_reextract(tmp_path: Path):
 def test_modified_file_triggers_reextract(tmp_path: Path):
     """Modifying a matching file should trigger re-extraction."""
     import time
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_table
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_table
 
     data_dir = tmp_path / "data"
     shutil.copytree(GLOB_FIXTURES, data_dir)

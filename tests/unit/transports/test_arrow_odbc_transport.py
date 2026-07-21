@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 
-from feather_etl.transports.arrow_odbc_transport import ArrowOdbcTransport
+from feather_flow.transports.arrow_odbc_transport import ArrowOdbcTransport
 
 
 def test_name_and_does_not_support_partition_on() -> None:
@@ -20,7 +20,7 @@ def test_name_and_does_not_support_partition_on() -> None:
     assert t.supports_partition_on() is False
 
 
-@patch("feather_etl.transports.arrow_odbc_transport.read_arrow_batches_from_odbc")
+@patch("feather_flow.transports.arrow_odbc_transport.read_arrow_batches_from_odbc")
 def test_stream_batches_passes_through_arrow_batches(mock_reader: MagicMock) -> None:
     canned = [
         pa.RecordBatch.from_pylist([{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]),
@@ -49,7 +49,7 @@ def test_stream_batches_passes_through_arrow_batches(mock_reader: MagicMock) -> 
     assert kwargs["fetch_concurrently"] is False
 
 
-@patch("feather_etl.transports.arrow_odbc_transport.read_arrow_batches_from_odbc")
+@patch("feather_flow.transports.arrow_odbc_transport.read_arrow_batches_from_odbc")
 def test_empty_result_yields_one_schema_only_batch(mock_reader: MagicMock) -> None:
     """Match PyodbcTransport's contract: even an empty result set yields
     one zero-row batch carrying the schema, so destinations can CREATE

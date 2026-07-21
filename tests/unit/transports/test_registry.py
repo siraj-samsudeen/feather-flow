@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from feather_etl.transports.registry import get_transport_class, TRANSPORT_CLASSES
+from feather_flow.transports.registry import get_transport_class, TRANSPORT_CLASSES
 
 
 def test_known_names_resolve() -> None:

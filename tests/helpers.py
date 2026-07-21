@@ -9,7 +9,7 @@ from typing import ClassVar
 
 import yaml
 
-from feather_etl.sources import ChangeResult, StreamSchema
+from feather_flow.sources import ChangeResult, StreamSchema
 
 
 def write_config(tmp_path: Path, config: dict, directory: Path | None = None) -> Path:
@@ -127,7 +127,7 @@ def register_raising_source() -> None:
 
     Idempotent — safe to call from multiple tests.
     """
-    from feather_etl.sources.registry import SOURCE_CLASSES
+    from feather_flow.sources.registry import SOURCE_CLASSES
 
     SOURCE_CLASSES["raising"] = "tests.helpers.RaisingSource"
 

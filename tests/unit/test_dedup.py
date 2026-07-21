@@ -12,7 +12,7 @@ from tests.helpers import make_curation_entry, write_curation
 class TestDedupConfig:
     def test_dedup_and_dedup_columns_mutually_exclusive(self, tmp_path: Path):
         """Validation rejects both dedup and dedup_columns set."""
-        from feather_etl.config import load_config, _validate
+        from feather_flow.config import load_config, _validate
 
         (tmp_path / "orders.csv").write_text("order_id,name\n1,A\n")
 

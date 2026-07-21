@@ -142,7 +142,7 @@ def format_banner(results: dict[str, tuple[bool, str | None]]) -> str | None:
     if not failed:
         return None
 
-    lines = ["", "=" * 72, "feather-etl test suite: local DB unavailable"]
+    lines = ["", "=" * 72, "feather-flow test suite: local DB unavailable"]
     for flavor, reason in failed:
         lines.append(f"  {flavor}: {reason}")
         lines.append(f"    fix:  {_BREW_COMMANDS[flavor]}")

@@ -79,7 +79,7 @@ def test_history_shows_error_row_and_truncates_long_messages(cli, project):
     under its row with a ``Error: ...`` line truncated to 77 chars + ``...``."""
     from datetime import datetime, timezone
 
-    from feather_etl.state import StateManager
+    from feather_flow.state import StateManager
 
     # Minimal project config + state DB; no need to actually extract.
     project.copy_fixture("client.duckdb")

@@ -58,7 +58,7 @@ def test_init_prompts_for_project_name_when_omitted(project, monkeypatch):
     for it via typer.prompt (which reads stdin)."""
     from typer.testing import CliRunner
 
-    from feather_etl.cli import app
+    from feather_flow.cli import app
 
     monkeypatch.chdir(project.root)
     runner = CliRunner()
@@ -87,7 +87,7 @@ def test_init_json_emits_project_and_files_created(cli, project):
 
 
 def test_scaffolded_yaml_uses_sources_list(tmp_path: Path):
-    from feather_etl.init_wizard import scaffold_project
+    from feather_flow.init_wizard import scaffold_project
 
     scaffold_project(tmp_path / "proj")
     content = (tmp_path / "proj" / "feather.yaml").read_text()
@@ -96,8 +96,8 @@ def test_scaffolded_yaml_uses_sources_list(tmp_path: Path):
 
 
 def test_scaffolded_yaml_loads_clean(tmp_path: Path):
-    from feather_etl.config import load_config
-    from feather_etl.init_wizard import scaffold_project
+    from feather_flow.config import load_config
+    from feather_flow.init_wizard import scaffold_project
 
     proj = tmp_path / "proj"
     scaffold_project(proj)

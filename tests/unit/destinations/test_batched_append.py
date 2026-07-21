@@ -19,9 +19,9 @@ import duckdb
 import pyarrow as pa
 import pytest
 
-from feather_etl.destinations.duckdb import DuckDBDestination
-from feather_etl.extract_windows import WindowSpec
-from feather_etl.state import StateManager
+from feather_flow.destinations.duckdb import DuckDBDestination
+from feather_flow.extract_windows import WindowSpec
+from feather_flow.state import StateManager
 
 
 def _batches(*tables: pa.Table):

@@ -19,7 +19,7 @@ def _forbid_sync(*args, **kwargs):
 def test_uses_current_directory_by_default(
     cli, project, monkeypatch: pytest.MonkeyPatch
 ):
-    from feather_etl import viewer_server
+    from feather_flow import viewer_server
 
     seen: dict[str, object] = {}
 
@@ -41,7 +41,7 @@ def test_uses_current_directory_by_default(
 
 
 def test_uses_path_and_port_options(cli, project, monkeypatch: pytest.MonkeyPatch):
-    from feather_etl import viewer_server
+    from feather_flow import viewer_server
 
     target_dir = project.root / "viewer"
     target_dir.mkdir()

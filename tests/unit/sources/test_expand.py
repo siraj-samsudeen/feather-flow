@@ -1,4 +1,4 @@
-"""Unit: feather_etl.sources.expand — expand_db_sources.
+"""Unit: feather_flow.sources.expand — expand_db_sources.
 
 Merged from tests/test_discover_expansion.py (4 tests) and
 tests/test_expand_db_sources.py (3 tests). Both exercised the same
@@ -12,8 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from feather_etl.sources.expand import expand_db_sources as _expand_db_sources
-from feather_etl.sources.postgres import PostgresSource
+from feather_flow.sources.expand import expand_db_sources as _expand_db_sources
+from feather_flow.sources.postgres import PostgresSource
 
 
 def _make_postgres_source(
@@ -96,7 +96,7 @@ def test_file_sources_pass_through() -> None:
 
 def test_db_source_with_single_database_passes_through() -> None:
     """DB source with database set is returned unchanged."""
-    from feather_etl.sources.database_source import DatabaseSource
+    from feather_flow.sources.database_source import DatabaseSource
 
     mock_src = MagicMock(spec=DatabaseSource)
     mock_src.database = "mydb"
@@ -110,7 +110,7 @@ def test_db_source_list_databases_raises_records_last_error_and_passes_through()
 ):
     """When ``list_databases()`` raises, the source is kept in the list with
     an informative ``_last_error`` so downstream discover can report it."""
-    from feather_etl.sources.database_source import DatabaseSource
+    from feather_flow.sources.database_source import DatabaseSource
 
     mock_src = MagicMock(spec=DatabaseSource)
     mock_src.database = None
@@ -132,7 +132,7 @@ def test_db_source_list_databases_returns_empty_records_last_error_and_passes_th
 ):
     """When ``list_databases()`` returns an empty list, the source is kept
     with a friendly _last_error pointing at the likely permission issue."""
-    from feather_etl.sources.database_source import DatabaseSource
+    from feather_flow.sources.database_source import DatabaseSource
 
     mock_src = MagicMock(spec=DatabaseSource)
     mock_src.database = None
@@ -149,7 +149,7 @@ def test_db_source_list_databases_returns_empty_records_last_error_and_passes_th
 
 def test_db_source_with_databases_list_expands() -> None:
     """DB source with databases: [a, b] produces one child per db."""
-    from feather_etl.sources.database_source import DatabaseSource
+    from feather_flow.sources.database_source import DatabaseSource
 
     mock_src = MagicMock(spec=DatabaseSource)
     mock_src.database = None

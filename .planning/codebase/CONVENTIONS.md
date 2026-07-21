@@ -197,7 +197,7 @@ Tests use a mix:
 ## Documentation
 
 ### Docstrings
-- Module-level docstrings on every file: `"""Configuration parsing and validation for feather-etl."""`
+- Module-level docstrings on every file: `"""Configuration parsing and validation for feather-flow."""`
 - Class docstrings describe purpose and list provided methods — e.g., `FileSource` docstring lists `__init__`, `check()`, `detect_changes()`
 - Method docstrings describe behavior and return value — e.g., `"""Derive effective target from mode unless explicitly set."""`
 - Triple-double-quote style, imperative mood

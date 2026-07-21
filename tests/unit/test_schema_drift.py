@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from feather_etl.schema_drift import detect_drift
+from feather_flow.schema_drift import detect_drift
 
 
 class TestDetectDrift:
@@ -102,7 +102,7 @@ class TestToJsonDict:
 
 class TestStateSnapshot:
     def test_save_and_read_snapshot(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -113,14 +113,14 @@ class TestStateSnapshot:
         assert stored == [("id", "INTEGER"), ("name", "VARCHAR")]
 
     def test_no_snapshot_returns_none(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
         assert sm.get_schema_snapshot("nonexistent") is None
 
     def test_upsert_overwrites(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()

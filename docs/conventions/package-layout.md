@@ -1,6 +1,6 @@
 # Package Layout Convention
 
-This document defines **where files live** in the feather-etl repo —
+This document defines **where files live** in the feather-flow repo —
 what package owns what, how tests colocate with code, and what lands
 in `core/` versus a feature package.
 
@@ -17,7 +17,7 @@ creating a new command or source type.
 
 ## The three axes
 
-feather-etl organizes around three vertical axes plus a small
+feather-flow organizes around three vertical axes plus a small
 horizontal `core`:
 
 | Axis | Examples | Extends by |
@@ -33,7 +33,7 @@ axes. Be strict about what lands here — see Rule 6.
 **`tests/invariants/`** holds repo-wide invariant tests that don't
 belong to any single feature.
 
-**`src/feather_etl/testing/`** holds importable test utilities (helpers,
+**`src/feather_flow/testing/`** holds importable test utilities (helpers,
 fixture harnesses, DB bootstrap).
 
 ---
@@ -41,7 +41,7 @@ fixture harnesses, DB bootstrap).
 ## Target tree
 
 ```
-src/feather_etl/
+src/feather_flow/
   cli.py                         # Typer entrypoint only
   core/
     config.py                    # YAML config loader + validation
@@ -99,7 +99,7 @@ src/feather_etl/
 
 tests/
   conftest.py                    # repo-wide fixtures (pytest wrappers
-                                 # re-exporting from feather_etl.testing)
+                                 # re-exporting from feather_flow.testing)
   fixtures/                      # sample DBs, CSVs — data, unchanged
   invariants/                    # repo-wide invariant tests
     test_cli_surface.py
@@ -122,7 +122,7 @@ docs/
 Apply in order — earlier rules win.
 
 ### 1. Entry-point rule
-The Typer app entrypoint stays at `src/feather_etl/cli.py`.
+The Typer app entrypoint stays at `src/feather_flow/cli.py`.
 
 ### 2. Sources axis
 A file specific to one source type → `sources/<type>/`.
@@ -179,13 +179,13 @@ If a test targets a single feature, it goes in that feature's
 
 ### 9. Importable test utilities
 Shared test helpers, fixture classes, and bootstrap utilities live in
-`src/feather_etl/testing/` (an importable sub-package). They are
+`src/feather_flow/testing/` (an importable sub-package). They are
 **not** packaged for release (see pyproject excludes) but are
-importable in-repo as `from feather_etl.testing.helpers import ...`.
+importable in-repo as `from feather_flow.testing.helpers import ...`.
 
 ### 10. Static assets
 Non-Python packaged assets (HTML, templates, schemas) live in
-`src/feather_etl/resources/`. The `scripts/` directory is `.py` and
+`src/feather_flow/resources/`. The `scripts/` directory is `.py` and
 `.sh` only.
 
 ### 11. Misfit fallback
@@ -228,14 +228,14 @@ forces awkward plumbing. What `core.py` excludes is **Typer**, not
 
 ### 15. ProjectFixture / test-fixture split
 - **Fixture implementations** (classes, factory functions) live in
-  `src/feather_etl/testing/` as importable modules. Example:
-  `feather_etl/testing/project_fixture.py` exports
+  `src/feather_flow/testing/` as importable modules. Example:
+  `feather_flow/testing/project_fixture.py` exports
   `class ProjectFixture`.
 - **pytest `@pytest.fixture` wrappers** live in `tests/conftest.py`
   (for repo-wide) or feature `scenarios/conftest.py` (for
-  feature-scoped) and re-export from `feather_etl.testing`.
+  feature-scoped) and re-export from `feather_flow.testing`.
 
-Rationale: scenarios tests inside `src/feather_etl/commands/<cmd>/scenarios/`
+Rationale: scenarios tests inside `src/feather_flow/commands/<cmd>/scenarios/`
 need to access fixtures, but cannot reach into `tests/conftest.py`
 cleanly. Splitting implementation (importable) from pytest glue
 (discoverable) makes fixtures work from both sides.
@@ -270,7 +270,7 @@ Applies within the placement rules above.
   hold across the whole system (e.g., every command is registered,
   import boundaries are respected, read-only commands never mutate,
   `--json` behaves uniformly) → `tests/invariants/`.
-- Tests of `src/feather_etl/testing/` (the test-utility sub-package) →
+- Tests of `src/feather_flow/testing/` (the test-utility sub-package) →
   `tests/invariants/` (they validate shared test infrastructure).
 
 ---
@@ -290,11 +290,11 @@ python_functions = ["test_*"]
 addopts = "--import-mode=importlib"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/feather_etl"]
+packages = ["src/feather_flow"]
 exclude = [
-  "src/feather_etl/**/*_test.py",
-  "src/feather_etl/**/scenarios/**",
-  "src/feather_etl/testing/**",
+  "src/feather_flow/**/*_test.py",
+  "src/feather_flow/**/scenarios/**",
+  "src/feather_flow/testing/**",
 ]
 ```
 
@@ -305,7 +305,7 @@ exclude = [
 - `--import-mode=importlib` prevents `sys.path` surprises when tests
   live next to package code.
 - The wheel excludes keep test code out of released artifacts.
-  `src/feather_etl/testing/` is excluded by default; if it ever
+  `src/feather_flow/testing/` is excluded by default; if it ever
   becomes a public test harness (for downstream consumers), move it
   out of the exclude list and document the supported API.
 
@@ -332,7 +332,7 @@ re-litigate if not written down:
   `db_base.py`**. Rename only; no code merge.
 - **`viewer_server.py` → `commands/view/server.py`** (not `core.py`).
   It's an HTTP server, not pure orchestration.
-- **`schema_viewer.html` → `src/feather_etl/resources/`**. HTML
+- **`schema_viewer.html` → `src/feather_flow/resources/`**. HTML
   belongs in `resources/`, not `scripts/`.
 - **Test pyramid (`unit/ integration/ e2e/`) is replaced.** Tests
   colocate with code or live in `tests/invariants/`. The tiering was

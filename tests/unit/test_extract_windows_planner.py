@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from feather_etl.config import TableConfig
-from feather_etl.extract import _iter_source_batches
-from feather_etl.extract_windows import WindowSpec, plan_windows
+from feather_flow.config import TableConfig
+from feather_flow.extract import _iter_source_batches
+from feather_flow.extract_windows import WindowSpec, plan_windows
 
 
 def _make_table(name: str = "sales") -> TableConfig:

@@ -1,4 +1,4 @@
-"""Tests for feather_etl.sources.registry (resolution + lazy loading)."""
+"""Tests for feather_flow.sources.registry (resolution + lazy loading)."""
 
 from __future__ import annotations
 
@@ -9,32 +9,32 @@ import pytest
 
 class TestSourceRegistry:
     def test_registry_resolves_duckdb(self):
-        from feather_etl.sources.duckdb_file import DuckDBFileSource
-        from feather_etl.sources.registry import get_source_class
+        from feather_flow.sources.duckdb_file import DuckDBFileSource
+        from feather_flow.sources.registry import get_source_class
 
         assert get_source_class("duckdb") is DuckDBFileSource
 
     def test_registry_resolves_csv(self):
-        from feather_etl.sources.csv import CsvSource
-        from feather_etl.sources.registry import get_source_class
+        from feather_flow.sources.csv import CsvSource
+        from feather_flow.sources.registry import get_source_class
 
         assert get_source_class("csv") is CsvSource
 
     def test_registry_resolves_sqlite(self):
-        from feather_etl.sources.registry import get_source_class
-        from feather_etl.sources.sqlite import SqliteSource
+        from feather_flow.sources.registry import get_source_class
+        from feather_flow.sources.sqlite import SqliteSource
 
         assert get_source_class("sqlite") is SqliteSource
 
     def test_get_source_class_and_instantiate(self, client_db: Path):
-        from feather_etl.sources.registry import get_source_class
+        from feather_flow.sources.registry import get_source_class
 
         cls = get_source_class("duckdb")
         source = cls(path=client_db)
         assert source.check() is True
 
     def test_get_source_class_unknown_type(self):
-        from feather_etl.sources.registry import get_source_class
+        from feather_flow.sources.registry import get_source_class
 
         with pytest.raises(ValueError, match="not implemented"):
             get_source_class("cassandra")
@@ -42,13 +42,13 @@ class TestSourceRegistry:
 
 class TestLazyRegistry:
     def test_get_source_class_returns_class_by_name(self):
-        from feather_etl.sources.csv import CsvSource
-        from feather_etl.sources.registry import get_source_class
+        from feather_flow.sources.csv import CsvSource
+        from feather_flow.sources.registry import get_source_class
 
         assert get_source_class("csv") is CsvSource
 
     def test_get_source_class_unknown_raises(self):
-        from feather_etl.sources.registry import get_source_class
+        from feather_flow.sources.registry import get_source_class
 
         with pytest.raises(ValueError, match="not implemented"):
             get_source_class("oracle")
@@ -70,14 +70,14 @@ class TestLazyRegistry:
 
         try:
             for mod_name in list(sys.modules):
-                if mod_name.startswith("feather_etl.sources"):
+                if mod_name.startswith("feather_flow.sources"):
                     del sys.modules[mod_name]
 
-            importlib.import_module("feather_etl.sources.registry")
-            loaded = {m for m in sys.modules if m.startswith("feather_etl.sources")}
+            importlib.import_module("feather_flow.sources.registry")
+            loaded = {m for m in sys.modules if m.startswith("feather_flow.sources")}
 
-            assert "feather_etl.sources.sqlserver" not in loaded
-            assert "feather_etl.sources.postgres" not in loaded
-            assert "feather_etl.sources.csv" not in loaded
+            assert "feather_flow.sources.sqlserver" not in loaded
+            assert "feather_flow.sources.postgres" not in loaded
+            assert "feather_flow.sources.csv" not in loaded
         finally:
             sys.modules.update(snapshot)

@@ -7,7 +7,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from feather_etl.transforms import TransformMeta, check_bronze_dependencies
+from feather_flow.transforms import TransformMeta, check_bronze_dependencies
 
 
 @pytest.fixture

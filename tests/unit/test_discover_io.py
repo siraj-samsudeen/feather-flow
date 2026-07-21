@@ -1,29 +1,29 @@
-"""Unit tests for discover I/O helpers in feather_etl.config."""
+"""Unit tests for discover I/O helpers in feather_flow.config."""
 
 
 class TestSanitize:
     def test_keeps_safe_chars(self):
-        from feather_etl.config import _sanitize
+        from feather_flow.config import _sanitize
 
         assert _sanitize("prod-erp.db_01") == "prod-erp.db_01"
 
     def test_replaces_unsafe_chars(self):
-        from feather_etl.config import _sanitize
+        from feather_flow.config import _sanitize
 
         assert _sanitize("prod/erp") == "prod_erp"
         assert _sanitize("192.168.2.62:1433") == "192.168.2.62_1433"
         assert _sanitize("a b c") == "a_b_c"
 
     def test_preserves_dots_and_hyphens(self):
-        from feather_etl.config import _sanitize
+        from feather_flow.config import _sanitize
 
         assert _sanitize("db.internal-prod") == "db.internal-prod"
 
 
 class TestResolvedSourceName:
     def test_user_name_wins_over_auto(self):
-        from feather_etl.config import resolved_source_name
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.config import resolved_source_name
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource(
             connection_string="x", name="prod-erp", host="db.internal"
@@ -31,8 +31,8 @@ class TestResolvedSourceName:
         assert resolved_source_name(src) == "prod-erp"
 
     def test_user_name_is_sanitized(self):
-        from feather_etl.config import resolved_source_name
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.config import resolved_source_name
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource(
             connection_string="x", name="prod/erp", host="db.internal"
@@ -40,29 +40,29 @@ class TestResolvedSourceName:
         assert resolved_source_name(src) == "prod_erp"
 
     def test_sqlserver_auto_uses_type_and_host(self):
-        from feather_etl.config import resolved_source_name
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.config import resolved_source_name
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource(connection_string="x", host="192.168.2.62")
         assert resolved_source_name(src) == "sqlserver-192.168.2.62"
 
     def test_sqlserver_auto_sanitizes_host(self):
-        from feather_etl.config import resolved_source_name
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.config import resolved_source_name
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource(connection_string="x", host="192.168.2.62:1433")
         assert resolved_source_name(src) == "sqlserver-192.168.2.62_1433"
 
     def test_postgres_auto_uses_type_and_host(self):
-        from feather_etl.config import resolved_source_name
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.config import resolved_source_name
+        from feather_flow.sources.postgres import PostgresSource
 
         src = PostgresSource(connection_string="x", host="db.internal")
         assert resolved_source_name(src) == "postgres-db.internal"
 
     def test_csv_auto_uses_directory_basename(self, tmp_path):
-        from feather_etl.config import resolved_source_name
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.config import resolved_source_name
+        from feather_flow.sources.csv import CsvSource
 
         csv_dir = tmp_path / "csv_data"
         csv_dir.mkdir()
@@ -70,8 +70,8 @@ class TestResolvedSourceName:
         assert resolved_source_name(src) == "csv-csv_data"
 
     def test_sqlite_auto_uses_file_basename_without_ext(self, tmp_path):
-        from feather_etl.config import resolved_source_name
-        from feather_etl.sources.sqlite import SqliteSource
+        from feather_flow.config import resolved_source_name
+        from feather_flow.sources.sqlite import SqliteSource
 
         sqlite_file = tmp_path / "source.sqlite"
         sqlite_file.touch()
@@ -79,8 +79,8 @@ class TestResolvedSourceName:
         assert resolved_source_name(src) == "sqlite-source"
 
     def test_duckdb_auto_uses_file_basename_without_ext(self, tmp_path):
-        from feather_etl.config import resolved_source_name
-        from feather_etl.sources.duckdb_file import DuckDBFileSource
+        from feather_flow.config import resolved_source_name
+        from feather_flow.sources.duckdb_file import DuckDBFileSource
 
         duck_file = tmp_path / "my_data.duckdb"
         duck_file.touch()
@@ -88,8 +88,8 @@ class TestResolvedSourceName:
         assert resolved_source_name(src) == "duckdb-my_data"
 
     def test_excel_auto_uses_file_basename_without_ext(self, tmp_path):
-        from feather_etl.config import resolved_source_name
-        from feather_etl.sources.excel import ExcelSource
+        from feather_flow.config import resolved_source_name
+        from feather_flow.sources.excel import ExcelSource
 
         xl = tmp_path / "sheet.xlsx"
         xl.touch()
@@ -97,8 +97,8 @@ class TestResolvedSourceName:
         assert resolved_source_name(src) == "excel-sheet"
 
     def test_json_auto_uses_file_basename_without_ext(self, tmp_path):
-        from feather_etl.config import resolved_source_name
-        from feather_etl.sources.json_source import JsonSource
+        from feather_flow.config import resolved_source_name
+        from feather_flow.sources.json_source import JsonSource
 
         js = tmp_path / "events.json"
         js.touch()
@@ -106,15 +106,15 @@ class TestResolvedSourceName:
         assert resolved_source_name(src) == "json-events"
 
     def test_db_source_without_host_falls_back_to_unknown(self):
-        from feather_etl.config import resolved_source_name
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.config import resolved_source_name
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource(connection_string="x", host=None)
         assert resolved_source_name(src) == "sqlserver-unknown"
 
     def test_file_source_without_path_falls_back_to_unknown(self):
-        from feather_etl.config import resolved_source_name
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.config import resolved_source_name
+        from feather_flow.sources.csv import CsvSource
 
         src = CsvSource(path=None)
         assert resolved_source_name(src) == "csv-unknown"
@@ -124,8 +124,8 @@ class TestSchemaOutputPath:
     def test_explicit_file_source_gets_type_prefix(self, tmp_path):
         from pathlib import Path
 
-        from feather_etl.config import schema_output_path
-        from feather_etl.sources.sqlite import SqliteSource
+        from feather_flow.config import schema_output_path
+        from feather_flow.sources.sqlite import SqliteSource
 
         sqlite_file = tmp_path / "source.sqlite"
         sqlite_file.touch()
@@ -136,8 +136,8 @@ class TestSchemaOutputPath:
     def test_explicit_db_source_gets_type_prefix(self):
         from pathlib import Path
 
-        from feather_etl.config import schema_output_path
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.config import schema_output_path
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource(
             connection_string="x", name="prod-erp", host="db.internal", database="ZAKYA"
@@ -148,8 +148,8 @@ class TestSchemaOutputPath:
     def test_auto_derived_names_remain_unchanged(self):
         from pathlib import Path
 
-        from feather_etl.config import schema_output_path
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.config import schema_output_path
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource(
             connection_string="x", host="192.168.2.62", database="ZAKYA"
@@ -159,8 +159,8 @@ class TestSchemaOutputPath:
     def test_expanded_child_name_with_explicit_true_gets_prefixed(self):
         from pathlib import Path
 
-        from feather_etl.config import schema_output_path
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.config import schema_output_path
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource(
             connection_string="x", name="erp__db1", host="db.internal"
@@ -171,8 +171,8 @@ class TestSchemaOutputPath:
     def test_expanded_child_name_with_explicit_false_has_no_extra_prefix(self):
         from pathlib import Path
 
-        from feather_etl.config import schema_output_path
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.config import schema_output_path
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource(
             connection_string="x", name="erp__db1", host="db.internal"

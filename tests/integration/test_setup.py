@@ -1,11 +1,11 @@
-"""Integration: feather_etl.setup.run_setup — orchestrates state init +
+"""Integration: feather_flow.setup.run_setup — orchestrates state init +
 destination creation + transform execution.
 """
 
 from __future__ import annotations
 
-from feather_etl.config import load_config
-from feather_etl.setup import run_setup
+from feather_flow.config import load_config
+from feather_flow.setup import run_setup
 
 
 def _setup_project(project):

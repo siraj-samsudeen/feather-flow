@@ -6,7 +6,7 @@ import duckdb
 from datetime import datetime, timezone
 from pathlib import Path
 
-from feather_etl.state import StateManager
+from feather_flow.state import StateManager
 
 
 def _make_state(tmp_path: Path) -> StateManager:

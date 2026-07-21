@@ -1,6 +1,6 @@
 ---
 name: feather-curation
-description: Use when populating or updating a `curation.json` file from feather-etl schema JSON outputs. Merges newly discovered tables into existing curation without overwriting prior decisions. Triggers on requests like "populate curation", "update curation from discover", "add new tables to curation", or after running `feather discover`.
+description: Use when populating or updating a `curation.json` file from feather-flow schema JSON outputs. Merges newly discovered tables into existing curation without overwriting prior decisions. Triggers on requests like "populate curation", "update curation from discover", "add new tables to curation", or after running `feather discover`.
 ---
 
 # feather-curation

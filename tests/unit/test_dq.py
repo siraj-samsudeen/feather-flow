@@ -7,7 +7,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from feather_etl.dq import run_dq_checks
+from feather_flow.dq import run_dq_checks
 
 
 @pytest.fixture

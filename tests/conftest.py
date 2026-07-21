@@ -1,4 +1,4 @@
-"""Shared test fixtures for feather-etl."""
+"""Shared test fixtures for feather-flow."""
 
 import shutil
 import sys

@@ -32,7 +32,7 @@ def _minimal_curation(tmp_path: Path) -> None:
 
 class TestConfigParsing:
     def test_valid_config_parses(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -43,7 +43,7 @@ class TestConfigParsing:
         assert result.tables[0].name == "src_test_table"
 
     def test_env_var_substitution(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         os.environ["FEATHER_TEST_PATH"] = str(tmp_path / "source.duckdb")
         try:
@@ -58,7 +58,7 @@ class TestConfigParsing:
             del os.environ["FEATHER_TEST_PATH"]
 
     def test_path_resolution_relative_to_config(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         subdir = tmp_path / "project"
         subdir.mkdir()
@@ -76,7 +76,7 @@ class TestConfigParsing:
 
     def test_no_primary_key_does_not_error(self, tmp_path: Path):
         """primary_key validation deferred to Slice 3."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -88,7 +88,7 @@ class TestConfigParsing:
 
 class TestConfigValidation:
     def test_bad_source_type(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         cfg["sources"][0]["type"] = "mongodb"
@@ -99,7 +99,7 @@ class TestConfigValidation:
 
     def test_missing_source_path_for_file_source(self, tmp_path: Path):
         """Load succeeds but source.check() reports the path is unreachable."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         cfg["sources"][0]["path"] = str(tmp_path / "nonexistent.duckdb")
@@ -109,7 +109,7 @@ class TestConfigValidation:
         assert cfg_result.sources[0].check() is False
 
     def test_bad_strategy(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -123,7 +123,7 @@ class TestConfigValidation:
     def test_bad_target_schema_prefix(self, tmp_path: Path):
         """Curation always produces bronze.* targets, so this test validates
         directly via _validate with a manually-constructed table."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -131,7 +131,7 @@ class TestConfigValidation:
         result = load_config(config_file, validate=False)
         # Manually override to test validation
         result.tables[0].target_table = "staging.test_table"
-        from feather_etl.config import _validate
+        from feather_flow.config import _validate
 
         errors = _validate(result)
         assert any("schema" in e for e in errors)
@@ -139,7 +139,7 @@ class TestConfigValidation:
 
 class TestValidationJson:
     def test_writes_on_success(self, tmp_path: Path):
-        from feather_etl.config import load_config, write_validation_json
+        from feather_flow.config import load_config, write_validation_json
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -152,7 +152,7 @@ class TestValidationJson:
         assert vj["tables_count"] == 1
 
     def test_writes_on_failure(self, tmp_path: Path):
-        from feather_etl.config import write_validation_json
+        from feather_flow.config import write_validation_json
 
         write_validation_json(
             tmp_path / "feather.yaml", None, errors=["bad source type"]
@@ -165,7 +165,7 @@ class TestValidationJson:
 class TestEnvVarEdgeCases:
     def test_numeric_values_pass_through(self, tmp_path: Path):
         """config.py line 73: non-string values returned as-is."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         cfg["defaults"] = {"overlap_window_minutes": 5, "batch_size": 50000}
@@ -176,8 +176,8 @@ class TestEnvVarEdgeCases:
         assert result.defaults.batch_size == 50000
 
     def test_dotenv_auto_loaded_from_config_dir(self, tmp_path: Path, monkeypatch):
-        """Regression for siraj-samsudeen/feather-etl#1."""
-        from feather_etl.config import load_config
+        """Regression for siraj-samsudeen/feather-flow#1."""
+        from feather_flow.config import load_config
 
         monkeypatch.delenv("FEATHER_TEST_DOTENV_VAR", raising=False)
         assert "FEATHER_TEST_DOTENV_VAR" not in os.environ
@@ -193,7 +193,7 @@ class TestEnvVarEdgeCases:
 
     def test_dotenv_does_not_override_existing_env(self, tmp_path: Path, monkeypatch):
         """Existing shell/CI env vars must win over .env (override=False)."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         monkeypatch.setenv("FEATHER_TEST_OVERRIDE_VAR", "gold")
         (tmp_path / ".env").write_text("FEATHER_TEST_OVERRIDE_VAR=bronze\n")
@@ -206,7 +206,7 @@ class TestEnvVarEdgeCases:
 
     def test_unresolved_env_var_gives_clear_error(self, tmp_path: Path):
         """UX-4: Unset env vars should show which variable is missing."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         cfg["destination"]["path"] = "${MISSING_DEST_PATH}"
@@ -219,7 +219,7 @@ class TestEnvVarEdgeCases:
 class TestConfigValidationExtended:
     def test_unregistered_source_type_rejected(self, tmp_path: Path):
         """Source types not in SOURCE_REGISTRY should be rejected at validate."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = {
             "sources": [{"type": "ftp", "connection_string": "ftp://example.com"}],
@@ -232,7 +232,7 @@ class TestConfigValidationExtended:
 
     def test_missing_source_section_gives_friendly_error(self, tmp_path: Path):
         """Missing 'source' section should raise ValueError, not KeyError."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = {
             "destination": {"path": str(tmp_path / "data.duckdb")},
@@ -243,7 +243,7 @@ class TestConfigValidationExtended:
 
     def test_destination_parent_must_exist(self, tmp_path: Path):
         """BUG-6: Non-existent destination parent should fail at validate."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         db = tmp_path / "source.duckdb"
         db.touch()
@@ -260,7 +260,7 @@ class TestConfigValidationExtended:
 
     def test_incremental_requires_timestamp_column(self, tmp_path: Path):
         """UX-8: incremental strategy without timestamp_column should be rejected."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -277,7 +277,7 @@ class TestConfigValidationExtended:
 
     def test_incremental_with_timestamp_column_passes(self, tmp_path: Path):
         """incremental + timestamp_column should be accepted."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -298,7 +298,7 @@ class TestConfigValidationExtended:
 
     def test_negative_overlap_window_rejected(self, tmp_path: Path):
         """H-2: negative overlap_window_minutes must be rejected."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         cfg["defaults"] = {"overlap_window_minutes": -5}
@@ -309,7 +309,7 @@ class TestConfigValidationExtended:
 
     def test_zero_overlap_window_accepted(self, tmp_path: Path):
         """H-2: overlap_window_minutes = 0 is valid."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         cfg["defaults"] = {"overlap_window_minutes": 0}
@@ -320,7 +320,7 @@ class TestConfigValidationExtended:
 
     def test_source_table_with_semicolon_rejected(self, tmp_path: Path):
         """M-1: source_table containing semicolons must be rejected."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -333,7 +333,7 @@ class TestConfigValidationExtended:
 
     def test_source_table_with_comment_rejected(self, tmp_path: Path):
         """M-1: source_table containing SQL comments must be rejected."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -346,7 +346,7 @@ class TestConfigValidationExtended:
 
     def test_valid_source_table_formats_accepted(self, tmp_path: Path):
         """M-1: legitimate source_table formats should pass validation."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -359,7 +359,7 @@ class TestConfigValidationExtended:
 
     def test_csv_source_table_filename_accepted(self, tmp_path: Path):
         """M-1: CSV source_table (filename) should pass validation."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         csv_dir = tmp_path / "csv_data"
         csv_dir.mkdir()
@@ -375,7 +375,7 @@ class TestConfigValidationExtended:
 
     def test_duckdb_source_table_without_schema_rejected(self, tmp_path: Path):
         """R-1: DuckDB source_table must be schema.table format."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -388,7 +388,7 @@ class TestConfigValidationExtended:
 
     def test_duckdb_source_table_with_spaces_rejected(self, tmp_path: Path):
         """R-1: DuckDB source_table with spaces in identifiers must be rejected."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -401,7 +401,7 @@ class TestConfigValidationExtended:
 
     def test_duckdb_source_table_with_parens_rejected(self, tmp_path: Path):
         """R-1: DuckDB source_table with parentheses must be rejected."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -415,7 +415,7 @@ class TestConfigValidationExtended:
 
 class TestAlertsConfig:
     def test_no_alerts_section_sets_none(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         config_file = write_config(tmp_path, cfg)
@@ -424,7 +424,7 @@ class TestAlertsConfig:
         assert result.alerts is None
 
     def test_valid_alerts_section_parses(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         cfg["alerts"] = {
@@ -444,7 +444,7 @@ class TestAlertsConfig:
         assert result.alerts.alert_to == "ops@example.com"
 
     def test_alert_from_defaults_to_smtp_user(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         cfg["alerts"] = {
@@ -460,7 +460,7 @@ class TestAlertsConfig:
         assert result.alerts.alert_from == "user@example.com"
 
     def test_explicit_alert_from(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         cfg["alerts"] = {
@@ -477,7 +477,7 @@ class TestAlertsConfig:
         assert result.alerts.alert_from == "noreply@example.com"
 
     def test_missing_required_alert_field_raises(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         cfg["alerts"] = {
@@ -489,7 +489,7 @@ class TestAlertsConfig:
             load_config(config_file, validate=False)
 
     def test_alerts_env_var_resolved(self, tmp_path: Path, monkeypatch):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         monkeypatch.setenv("TEST_SMTP_PASS", "env_secret")
         cfg = _minimal_config(tmp_path)
@@ -509,7 +509,7 @@ class TestAlertsConfig:
 class TestSourceName:
     def test_source_name_is_optional(self, tmp_path: Path):
         """When 'name:' is omitted, auto-derivation fills it with '<type>-<basename>'."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg_dict = _minimal_config(tmp_path)
         del cfg_dict["sources"][0]["name"]
@@ -519,7 +519,7 @@ class TestSourceName:
         assert result.sources[0].name == "duckdb-source"
 
     def test_source_name_is_accepted(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg_dict = _minimal_config(tmp_path)
         cfg_dict["sources"][0]["name"] = "prod-erp"
@@ -531,7 +531,7 @@ class TestSourceName:
 
 class TestSourcesList:
     def test_sources_list_with_single_entry(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg_dict = {
             "sources": [{"type": "duckdb", "path": str(tmp_path / "s.duckdb")}],
@@ -545,7 +545,7 @@ class TestSourcesList:
         assert cfg.sources[0].type == "duckdb"
 
     def test_sources_list_multi_entry_requires_names(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg_dict = {
             "sources": [
@@ -562,7 +562,7 @@ class TestSourcesList:
             load_config(config_file, validate=False)
 
     def test_sources_list_multi_entry_with_names_ok(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg_dict = {
             "sources": [
@@ -579,7 +579,7 @@ class TestSourcesList:
         assert [s.name for s in cfg.sources] == ["a", "b"]
 
     def test_sources_list_duplicate_name_raises(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg_dict = {
             "sources": [
@@ -596,7 +596,7 @@ class TestSourcesList:
             load_config(config_file, validate=False)
 
     def test_sources_empty_list_raises(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg_dict = {
             "sources": [],
@@ -608,7 +608,7 @@ class TestSourcesList:
             load_config(config_file, validate=False)
 
     def test_sources_entry_must_be_mapping(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg_dict = {
             "sources": [None],
@@ -622,7 +622,7 @@ class TestSourcesList:
     def test_sources_entry_missing_type_raises(self, tmp_path: Path):
         """Each sources[N] entry must declare 'type' — we fail fast with the
         index in the error."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg_dict = {
             "sources": [{"name": "orphan", "path": str(tmp_path / "x.duckdb")}],
@@ -642,7 +642,7 @@ class TestValidateUnknownDatabase:
         source, validation falls back to sources[0] for source_table checks
         (the mismatch itself is reported elsewhere). The fallback must still
         surface any source_table validation errors."""
-        from feather_etl.config import _validate, load_config
+        from feather_flow.config import _validate, load_config
 
         # Single DuckDB source + a curation entry whose source_db names a
         # non-existent source. The source_table is an invalid identifier
@@ -673,7 +673,7 @@ class TestValidateUnknownDatabase:
 
 class TestSingularSourceMigrationError:
     def test_singular_source_raises_with_guidance(self, tmp_path: Path):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg_dict = {
             "source": {"type": "duckdb", "path": str(tmp_path / "s.duckdb")},
@@ -694,7 +694,7 @@ class TestExtractDefaultsThresholds:
 
     def test_extract_defaults_threshold_defaults(self):
         """Dataclass defaults match the documented bucket boundaries."""
-        from feather_etl.config import ExtractDefaultsConfig
+        from feather_flow.config import ExtractDefaultsConfig
 
         cfg = ExtractDefaultsConfig()
         assert cfg.t_small_rows == 100_000
@@ -704,7 +704,7 @@ class TestExtractDefaultsThresholds:
 
     def test_extract_defaults_threshold_yaml_override(self, tmp_path: Path):
         """All four threshold fields can be overridden via YAML."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         cfg["defaults"] = {
@@ -728,7 +728,7 @@ class TestExtractDefaultsThresholds:
         self, tmp_path: Path
     ):
         """Overriding one threshold leaves the others at their defaults."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         cfg = _minimal_config(tmp_path)
         cfg["defaults"] = {"extract": {"t_small_rows": 10_000}}

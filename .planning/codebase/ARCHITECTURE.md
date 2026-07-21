@@ -2,9 +2,9 @@
 
 ## Overview
 
-feather-etl is a **config-driven ETL pipeline** that extracts data from heterogeneous ERP sources (SQL Server, PostgreSQL, DuckDB files, CSV, SQLite, Excel, JSON) into a local DuckDB data warehouse with bronze/silver/gold layered transforms. It replaces the typical dlt + dbt + Dagster stack with a single ~1,200 LOC Python package.
+feather-flow is a **config-driven ETL pipeline** that extracts data from heterogeneous ERP sources (SQL Server, PostgreSQL, DuckDB files, CSV, SQLite, Excel, JSON) into a local DuckDB data warehouse with bronze/silver/gold layered transforms. It replaces the typical dlt + dbt + Dagster stack with a single ~1,200 LOC Python package.
 
-**Architecture pattern:** Single-process, sequential ETL pipeline with YAML-driven configuration. One package deployed across many clients — each client gets their own config repo, same `feather-etl` dependency.
+**Architecture pattern:** Single-process, sequential ETL pipeline with YAML-driven configuration. One package deployed across many clients — each client gets their own config repo, same `feather-flow` dependency.
 
 **Key architectural property:** The entire pipeline is local-first — all processing happens in DuckDB on the client machine. Only gold-layer tables optionally sync to MotherDuck (cloud).
 

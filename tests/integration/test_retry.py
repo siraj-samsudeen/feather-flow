@@ -49,9 +49,9 @@ def _make_good_config(tmp_path: Path) -> Path:
 
 
 def test_failure_increments_retry_count(tmp_path: Path):
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_table
-    from feather_etl.state import StateManager
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_table
+    from feather_flow.state import StateManager
 
     config_path = _make_broken_config(tmp_path)
     cfg = load_config(config_path)
@@ -67,8 +67,8 @@ def test_failure_increments_retry_count(tmp_path: Path):
 
 
 def test_table_in_backoff_is_skipped(tmp_path: Path):
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_table
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_table
 
     config_path = _make_broken_config(tmp_path)
     cfg = load_config(config_path)
@@ -81,9 +81,9 @@ def test_table_in_backoff_is_skipped(tmp_path: Path):
 
 
 def test_success_resets_retry_count(tmp_path: Path):
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_table
-    from feather_etl.state import StateManager
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_table
+    from feather_flow.state import StateManager
 
     config_path = _make_good_config(tmp_path)
     cfg = load_config(config_path)
@@ -119,8 +119,8 @@ def test_success_resets_retry_count(tmp_path: Path):
 
 def test_other_tables_continue_when_one_fails(tmp_path: Path):
     """FR13.5: per-table isolation."""
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_all
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_all
 
     client_db = tmp_path / "client.duckdb"
     shutil.copy2(FIXTURES_DIR / "client.duckdb", client_db)

@@ -9,8 +9,8 @@ from pathlib import Path
 import duckdb
 import yaml
 
-from feather_etl.config import load_config
-from feather_etl.pipeline import run_all
+from feather_flow.config import load_config
+from feather_flow.pipeline import run_all
 from tests.helpers import make_curation_entry, write_curation
 
 
@@ -203,14 +203,14 @@ def test_run_all_transform_rebuild_failure_is_caught_and_logged(
 
     # Force discover_transforms to raise inside the post-extraction rebuild
     # block. pipeline.run_all imports it locally, so patch at its origin.
-    from feather_etl import transforms as transforms_mod
+    from feather_flow import transforms as transforms_mod
 
     def _boom(_config_dir):
         raise RuntimeError("synthetic transform-discover failure")
 
     monkeypatch.setattr(transforms_mod, "discover_transforms", _boom)
 
-    with caplog.at_level(logging.ERROR, logger="feather_etl.pipeline"):
+    with caplog.at_level(logging.ERROR, logger="feather_flow.pipeline"):
         results = run_all(cfg)
 
     # Extract results are returned despite the failed transforms block.

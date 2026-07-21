@@ -23,13 +23,13 @@ class TestDatabaseSourceFormatWatermark:
     """The base class default passes values through unchanged."""
 
     def test_default_passthrough(self):
-        from feather_etl.sources.database_source import DatabaseSource
+        from feather_flow.sources.database_source import DatabaseSource
 
         ds = DatabaseSource("dummy")
         assert ds._format_watermark("2026-01-01T10:00:00") == "2026-01-01T10:00:00"
 
     def test_sqlserver_override_replaces_T(self):
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource("dummy")
         result = src._format_watermark("2026-01-01T10:00:00.123456")
@@ -37,7 +37,7 @@ class TestDatabaseSourceFormatWatermark:
         assert result == "2026-01-01 10:00:00.123"
 
     def test_sqlserver_override_no_fractional(self):
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource("dummy")
         result = src._format_watermark("2026-01-01T10:00:00")
@@ -45,7 +45,7 @@ class TestDatabaseSourceFormatWatermark:
 
     def test_build_where_uses_format_watermark(self):
         """_build_where_clause delegates to _format_watermark."""
-        from feather_etl.sources.database_source import DatabaseSource
+        from feather_flow.sources.database_source import DatabaseSource
 
         ds = DatabaseSource("dummy")
         result = ds._build_where_clause(
@@ -63,27 +63,27 @@ class TestDatabaseSourceFormatWatermark:
 
 class TestPostgresSourceUnit:
     def test_source_in_registry(self):
-        from feather_etl.sources.postgres import PostgresSource
-        from feather_etl.sources.registry import get_source_class
+        from feather_flow.sources.postgres import PostgresSource
+        from feather_flow.sources.registry import get_source_class
 
         assert get_source_class("postgres") is PostgresSource
 
     def test_watermark_passthrough(self):
         """PostgresSource uses the default _format_watermark (ISO unchanged)."""
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         src = PostgresSource(CONN_STR)
         assert src._format_watermark("2026-01-01T10:00:00") == "2026-01-01T10:00:00"
 
     def test_build_where_filter_only(self):
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         src = PostgresSource(CONN_STR)
         result = src._build_where_clause(filter="active = true")
         assert result == " WHERE (active = true)"
 
     def test_build_where_watermark_only(self):
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         src = PostgresSource(CONN_STR)
         result = src._build_where_clause(
@@ -92,7 +92,7 @@ class TestPostgresSourceUnit:
         assert result == " WHERE modified_at > '2026-01-01'"
 
     def test_build_where_both(self):
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         src = PostgresSource(CONN_STR)
         result = src._build_where_clause(
@@ -112,8 +112,8 @@ class TestPostgresCheckLastError:
     """check() must capture the real exception on failure so the CLI can print it."""
 
     def test_check_failure_populates_last_error(self, monkeypatch):
-        from feather_etl.sources import postgres as pg_mod
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources import postgres as pg_mod
+        from feather_flow.sources.postgres import PostgresSource
 
         def boom(*args, **kwargs):
             raise pg_mod.psycopg2.Error("FATAL: password authentication failed")
@@ -126,8 +126,8 @@ class TestPostgresCheckLastError:
         assert "password authentication failed" in src._last_error
 
     def test_check_success_clears_last_error(self, monkeypatch):
-        from feather_etl.sources import postgres as pg_mod
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources import postgres as pg_mod
+        from feather_flow.sources.postgres import PostgresSource
 
         src = PostgresSource("dbname=x host=y")
         src._last_error = "stale error from a prior call"
@@ -150,7 +150,7 @@ class TestPostgresCheckLastError:
 class TestPostgresSourceIntegration:
     @pytest.fixture
     def source(self):
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         return PostgresSource(CONN_STR)
 
@@ -158,7 +158,7 @@ class TestPostgresSourceIntegration:
         assert source.check() is True
 
     def test_check_bad_conn_returns_false(self):
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         bad = PostgresSource("dbname=nonexistent host=localhost")
         assert bad.check() is False
@@ -268,7 +268,7 @@ class TestPostgresFromYaml:
     def test_minimal_entry_builds_conn_string(self):
         from pathlib import Path
 
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         entry = {
             "name": "wh",
@@ -290,7 +290,7 @@ class TestPostgresFromYaml:
     def test_explicit_port(self):
         from pathlib import Path
 
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         entry = {
             "name": "wh",
@@ -308,7 +308,7 @@ class TestPostgresFromYaml:
     def test_databases_list_and_xor_rules(self):
         from pathlib import Path
 
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         ok = {
             "name": "wh",
@@ -330,7 +330,7 @@ class TestPostgresFromYaml:
     def test_explicit_connection_string_overrides(self):
         from pathlib import Path
 
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         entry = {
             "name": "wh",
@@ -343,7 +343,7 @@ class TestPostgresFromYaml:
     def test_empty_user_password_not_emitted_in_dsn(self):
         from pathlib import Path
 
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         entry = {
             "name": "wh",
@@ -362,7 +362,7 @@ class TestPostgresFromYaml:
     def test_missing_database_defaults_to_postgres_catalog(self):
         from pathlib import Path
 
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         entry = {
             "name": "wh",
@@ -384,13 +384,13 @@ class TestPostgresFromYaml:
 
 class TestPostgresValidateSourceTable:
     def test_schema_dot_table_ok(self):
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         src = PostgresSource(connection_string="dummy", name="x")
         assert src.validate_source_table("public.orders") == []
 
     def test_plain_table_ok(self):
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         src = PostgresSource(connection_string="dummy", name="x")
         assert src.validate_source_table("orders") == []
@@ -403,7 +403,7 @@ class TestPostgresValidateSourceTable:
 
 class TestPostgresListDatabases:
     def test_query_filters_template_dbs(self, monkeypatch):
-        from feather_etl.sources import postgres as pg
+        from feather_flow.sources import postgres as pg
 
         captured_sql: list[str] = []
 
@@ -438,7 +438,7 @@ class TestPostgresListDatabases:
         assert "postgres" in sql  # 'postgres' default DB filtered out
 
     def test_propagates_psycopg2_error(self, monkeypatch):
-        from feather_etl.sources import postgres as pg
+        from feather_flow.sources import postgres as pg
 
         def raise_(*a, **k):
             raise pg.psycopg2.Error("connection refused")
@@ -458,7 +458,7 @@ class TestPostgresFromYamlErrors:
     def test_missing_host_and_connection_string_raises(self):
         from pathlib import Path
 
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         entry = {"type": "postgres", "name": "x"}
         with pytest.raises(
@@ -473,7 +473,7 @@ class TestPostgresFromYamlErrors:
 
 
 def _make_pg_source():
-    from feather_etl.sources.postgres import PostgresSource
+    from feather_flow.sources.postgres import PostgresSource
 
     return PostgresSource(connection_string="dummy", name="x")
 
@@ -482,7 +482,7 @@ class TestPostgresExtractMocked:
     """All tests monkeypatch psycopg2.connect — no live DB required."""
 
     def _install_cursor(self, monkeypatch, cursor):
-        from feather_etl.sources import postgres as pg
+        from feather_flow.sources import postgres as pg
 
         class FakeConn:
             def cursor(self):
@@ -582,7 +582,7 @@ class TestPostgresExtractMocked:
 
 class TestPostgresChangeDetectionMocked:
     def _install_conn(self, monkeypatch, cursor_factory):
-        from feather_etl.sources import postgres as pg
+        from feather_flow.sources import postgres as pg
 
         class FakeConn:
             def cursor(self):
@@ -596,7 +596,7 @@ class TestPostgresChangeDetectionMocked:
     def test_discover_pk_columns_returns_empty_list_on_error(self, monkeypatch):
         """If querying pg_index fails, _discover_pk_columns swallows the
         psycopg2.Error and returns [] — callers fall back to ORDER BY 1."""
-        from feather_etl.sources import postgres as pg
+        from feather_flow.sources import postgres as pg
 
         class FakeCursor:
             def execute(self, *_):
@@ -614,7 +614,7 @@ class TestPostgresChangeDetectionMocked:
     def test_detect_changes_returns_checksum_error_when_psycopg2_raises(
         self, monkeypatch
     ):
-        from feather_etl.sources import postgres as pg
+        from feather_flow.sources import postgres as pg
 
         def raise_(*a, **k):
             raise pg.psycopg2.Error("connection dropped")
@@ -683,7 +683,7 @@ class TestPostgresChangeDetectionMocked:
 
 class TestPostgresColumnQuoting:
     def test_columns_are_double_quoted(self, monkeypatch):
-        from feather_etl.sources import postgres as pg
+        from feather_flow.sources import postgres as pg
 
         captured_sql: list[str] = []
 
@@ -714,14 +714,14 @@ class TestPostgresColumnQuoting:
         assert any('"Invoice Date", "Quantity"' in sql for sql in captured_sql)
 
     def test_columns_with_double_quote_rejected(self):
-        from feather_etl.sources.postgres import PostgresSource
+        from feather_flow.sources.postgres import PostgresSource
 
         src = PostgresSource(connection_string="dummy", name="x")
         with pytest.raises(ValueError, match="cannot be double-quoted"):
             src.extract("erp.sales", columns=['col"name'])
 
     def test_columns_none_uses_star(self, monkeypatch):
-        from feather_etl.sources import postgres as pg
+        from feather_flow.sources import postgres as pg
 
         captured_sql: list[str] = []
 
@@ -757,10 +757,10 @@ class TestPostgresColumnQuoting:
 # ---------------------------------------------------------------------------
 
 
-@patch("feather_etl.sources.postgres.psycopg2")
+@patch("feather_flow.sources.postgres.psycopg2")
 def test_postgres_discover_populates_pk(mock_psycopg2: MagicMock) -> None:
     """discover() sets primary_key=[col] when one PK column is returned."""
-    from feather_etl.sources.postgres import PostgresSource
+    from feather_flow.sources.postgres import PostgresSource
 
     mock_cursor = MagicMock()
     # fetchall call sequence:
@@ -788,10 +788,10 @@ def test_postgres_discover_populates_pk(mock_psycopg2: MagicMock) -> None:
 # ---------------------------------------------------------------------------
 
 
-@patch("feather_etl.sources.postgres.psycopg2")
+@patch("feather_flow.sources.postgres.psycopg2")
 def test_postgres_cheap_rowcount_returns_estimate(mock_psycopg2: MagicMock) -> None:
     """cheap_rowcount() queries pg_class.reltuples and returns an int."""
-    from feather_etl.sources.postgres import PostgresSource
+    from feather_flow.sources.postgres import PostgresSource
 
     mock_cursor = MagicMock()
     mock_cursor.fetchone.return_value = (55000,)
@@ -813,12 +813,12 @@ def test_postgres_cheap_rowcount_returns_estimate(mock_psycopg2: MagicMock) -> N
 # ---------------------------------------------------------------------------
 
 
-@patch("feather_etl.sources.postgres.psycopg2")
+@patch("feather_flow.sources.postgres.psycopg2")
 def test_postgres_get_window_range_returns_min_max(mock_psycopg2: MagicMock) -> None:
     """get_window_range() returns (min, max) tuple for the given column."""
     import datetime
 
-    from feather_etl.sources.postgres import PostgresSource
+    from feather_flow.sources.postgres import PostgresSource
 
     mock_cursor = MagicMock()
     mock_cursor.fetchone.return_value = (

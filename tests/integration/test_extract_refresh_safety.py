@@ -13,9 +13,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from feather_etl.config import load_config
-from feather_etl.extract import run_extract
-from feather_etl.state import StateManager
+from feather_flow.config import load_config
+from feather_flow.extract import run_extract
+from feather_flow.state import StateManager
 from tests.helpers import make_curation_entry, write_curation
 
 

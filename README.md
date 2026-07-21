@@ -1,6 +1,6 @@
 # feather-flow
 
-> **Renamed** from `feather-etl` on 2026-07-17. The PyPI package and Python module are still published as `feather-etl` / `feather_etl`, so install commands below use the published name until the package itself is renamed.
+> **Renamed** from `feather-etl` on 2026-07-17 — repo, PyPI package (now `feather-flow`), and Python module (now `feather_flow`). Old GitHub URLs redirect. The `feather-etl` PyPI package is frozen at 0.1.3; existing installs upgrade with `uv tool uninstall feather-etl && uv tool install feather-flow`, and imports change from `feather_etl` to `feather_flow`.
 
 A config-driven Python ETL platform for deploying data pipelines across multiple clients with heterogeneous ERP source systems — SQL Server, SAP B1, SAP S4 HANA, and custom Indian ERPs.
 
@@ -99,30 +99,30 @@ feather init client-abc
 
 ## Installation
 
-> The PyPI package is named `feather-etl`; the installed command is `feather`.
+> The PyPI package is named `feather-flow`; the installed command is `feather`.
 
 ### Recommended — global CLI tool
 
-For most users (scaffolding clients, running pipelines locally), install feather-etl as a global `uv` tool:
+For most users (scaffolding clients, running pipelines locally), install feather-flow as a global `uv` tool:
 
 ```bash
-uv tool install feather-etl
+uv tool install feather-flow
 feather --help
 ```
 
 Upgrade or pin to a specific version:
 
 ```bash
-uv tool upgrade feather-etl
-uv tool install feather-etl@X.Y.Z
+uv tool upgrade feather-flow
+uv tool install feather-flow@X.Y.Z
 ```
 
 ### Alternative — project dependency
 
-For teams that need per-project version pinning or reproducibility, add feather-etl to a client project's `pyproject.toml`:
+For teams that need per-project version pinning or reproducibility, add feather-flow to a client project's `pyproject.toml`:
 
 ```bash
-uv add feather-etl
+uv add feather-flow
 uv run feather --help
 ```
 
@@ -133,12 +133,12 @@ Every command then runs via `uv run feather …`.
 Run any feather command without installing, using `uvx`:
 
 ```bash
-uvx feather-etl init client-abc     # scaffold a new client
-uvx feather-etl validate            # validate a config
-uvx feather-etl run                 # run the pipeline
+uvx feather-flow init client-abc     # scaffold a new client
+uvx feather-flow validate            # validate a config
+uvx feather-flow run                 # run the pipeline
 ```
 
-`uvx` downloads feather-etl into a throwaway environment for each invocation, so nothing is left on your PATH and there's no `feather` command afterwards — every call must be prefixed with `uvx feather-etl …`. Good for CI, quick trials, and scaffolding the very first client. For day-to-day use, prefer the global install above.
+`uvx` downloads feather-flow into a throwaway environment for each invocation, so nothing is left on your PATH and there's no `feather` command afterwards — every call must be prefixed with `uvx feather-flow …`. Good for CI, quick trials, and scaffolding the very first client. For day-to-day use, prefer the global install above.
 
 ## CLI
 
@@ -315,7 +315,7 @@ feather view ./schemas --port 8010
 ```
 client-abc/                         # separate GitHub repo per client
 ├── .gitignore                      # excludes *.duckdb, .env
-├── pyproject.toml                  # depends on feather-etl
+├── pyproject.toml                  # depends on feather-flow
 ├── .env.example                    # credential placeholders
 ├── feather.yaml                    # source, destination, sync, schedules, alerts
 ├── tables/                         # optional — split by domain

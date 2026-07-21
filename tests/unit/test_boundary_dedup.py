@@ -16,7 +16,7 @@ def _pk_hash(*values) -> str:
 
 class TestBoundaryHashStateManager:
     def test_write_and_read_boundary_hashes(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -29,7 +29,7 @@ class TestBoundaryHashStateManager:
         assert result == hashes
 
     def test_read_returns_empty_when_no_hashes(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -39,7 +39,7 @@ class TestBoundaryHashStateManager:
         assert result == []
 
     def test_read_returns_empty_for_nonexistent_table(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -48,7 +48,7 @@ class TestBoundaryHashStateManager:
         assert result == []
 
     def test_overwrite_replaces_previous(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -63,7 +63,7 @@ class TestBoundaryHashStateManager:
 
 class TestBoundaryHashComputation:
     def test_compute_pk_hashes(self):
-        from feather_etl.pipeline import _compute_pk_hashes
+        from feather_flow.pipeline import _compute_pk_hashes
 
         data = pa.table(
             {
@@ -78,7 +78,7 @@ class TestBoundaryHashComputation:
         assert _pk_hash(2) in hashes
 
     def test_multi_column_pk(self):
-        from feather_etl.pipeline import _compute_pk_hashes
+        from feather_flow.pipeline import _compute_pk_hashes
 
         data = pa.table(
             {
@@ -93,7 +93,7 @@ class TestBoundaryHashComputation:
         assert _pk_hash(1, "b") in hashes
 
     def test_no_rows_at_boundary(self):
-        from feather_etl.pipeline import _compute_pk_hashes
+        from feather_flow.pipeline import _compute_pk_hashes
 
         data = pa.table(
             {
@@ -107,7 +107,7 @@ class TestBoundaryHashComputation:
 
 class TestBoundaryFiltering:
     def test_filter_boundary_rows(self):
-        from feather_etl.pipeline import _filter_boundary_rows
+        from feather_flow.pipeline import _filter_boundary_rows
 
         data = pa.table(
             {
@@ -128,7 +128,7 @@ class TestBoundaryFiltering:
         assert filtered.column("id").to_pylist() == [2, 3, 4]
 
     def test_no_filtering_when_no_prev_hashes(self):
-        from feather_etl.pipeline import _filter_boundary_rows
+        from feather_flow.pipeline import _filter_boundary_rows
 
         data = pa.table(
             {
@@ -141,7 +141,7 @@ class TestBoundaryFiltering:
         assert skipped == 0
 
     def test_no_filtering_when_no_pk(self):
-        from feather_etl.pipeline import _filter_boundary_rows
+        from feather_flow.pipeline import _filter_boundary_rows
 
         data = pa.table(
             {

@@ -9,14 +9,14 @@ from types import SimpleNamespace
 
 class TestDiscoverStateRoundTrip:
     def test_load_returns_empty_when_file_missing(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState
+        from feather_flow.discover_state import DiscoverState
 
         s = DiscoverState.load(tmp_path)
         assert s.sources == {}
         assert s.auto_enumeration == {}
 
     def test_save_then_load(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState
+        from feather_flow.discover_state import DiscoverState
 
         s = DiscoverState.load(tmp_path)
         s.record_ok(
@@ -35,7 +35,7 @@ class TestDiscoverStateRoundTrip:
         assert reloaded.sources["a"]["fingerprint"] == "duckdb:/tmp/x.duckdb"
 
     def test_record_failed_stores_error_and_increments_attempt(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState
+        from feather_flow.discover_state import DiscoverState
 
         s = DiscoverState.load(tmp_path)
         s.record_failed(
@@ -53,7 +53,7 @@ class TestDiscoverStateRoundTrip:
         assert s.sources["a"]["attempt_count"] == 2
 
     def test_schema_version_in_payload(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState
+        from feather_flow.discover_state import DiscoverState
 
         s = DiscoverState.load(tmp_path)
         s.record_ok(
@@ -70,7 +70,7 @@ class TestDiscoverStateRoundTrip:
 
 class TestClassify:
     def test_new_source_classified_new(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, classify
+        from feather_flow.discover_state import DiscoverState, classify
 
         s = DiscoverState.load(tmp_path)
         decisions = classify(state=s, current_names=["a", "b"], flag=None)
@@ -78,7 +78,7 @@ class TestClassify:
         assert decisions["b"] == "new"
 
     def test_cached_source_classified_cached(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, classify
+        from feather_flow.discover_state import DiscoverState, classify
 
         s = DiscoverState.load(tmp_path)
         s.record_ok(
@@ -92,7 +92,7 @@ class TestClassify:
         assert decisions["a"] == "cached"
 
     def test_failed_classified_retry_default(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, classify
+        from feather_flow.discover_state import DiscoverState, classify
 
         s = DiscoverState.load(tmp_path)
         s.record_failed(name="a", type_="csv", fingerprint="csv:/x", error="oops")
@@ -100,7 +100,7 @@ class TestClassify:
         assert decisions["a"] == "retry"
 
     def test_refresh_forces_rerun(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, classify
+        from feather_flow.discover_state import DiscoverState, classify
 
         s = DiscoverState.load(tmp_path)
         s.record_ok(
@@ -114,7 +114,7 @@ class TestClassify:
         assert decisions["a"] == "rerun"
 
     def test_retry_failed_skips_cached(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, classify
+        from feather_flow.discover_state import DiscoverState, classify
 
         s = DiscoverState.load(tmp_path)
         s.record_ok(
@@ -130,7 +130,7 @@ class TestClassify:
         assert decisions["b"] == "retry"
 
     def test_removed_when_state_has_name_not_in_current(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, classify
+        from feather_flow.discover_state import DiscoverState, classify
 
         s = DiscoverState.load(tmp_path)
         s.record_ok(
@@ -144,7 +144,7 @@ class TestClassify:
         assert decisions["a"] == "removed"
 
     def test_prune_skips_current_and_marks_removed(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, classify
+        from feather_flow.discover_state import DiscoverState, classify
 
         s = DiscoverState.load(tmp_path)
         s.record_ok(
@@ -168,7 +168,7 @@ class TestClassify:
 
 class TestRecordMutations:
     def test_record_removed_sets_status(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState
+        from feather_flow.discover_state import DiscoverState
 
         s = DiscoverState.load(tmp_path)
         s.record_ok(
@@ -183,14 +183,14 @@ class TestRecordMutations:
         assert "removed_detected_at" in s.sources["a"]
 
     def test_record_removed_ignores_unknown_name(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState
+        from feather_flow.discover_state import DiscoverState
 
         s = DiscoverState.load(tmp_path)
         s.record_removed("nonexistent")  # should not raise
         assert "nonexistent" not in s.sources
 
     def test_record_orphaned_sets_status_and_note(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState
+        from feather_flow.discover_state import DiscoverState
 
         s = DiscoverState.load(tmp_path)
         s.record_ok(
@@ -207,7 +207,7 @@ class TestRecordMutations:
 
 class TestRenameInference:
     def test_unambiguous_match_proposes_rename(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, detect_renames
+        from feather_flow.discover_state import DiscoverState, detect_renames
 
         state = DiscoverState.load(tmp_path)
         state.sources["erp"] = {
@@ -225,7 +225,7 @@ class TestRenameInference:
         assert ambiguous == []
 
     def test_no_match_no_proposal(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, detect_renames
+        from feather_flow.discover_state import DiscoverState, detect_renames
 
         state = DiscoverState.load(tmp_path)
         state.sources["erp"] = {
@@ -243,7 +243,7 @@ class TestRenameInference:
         assert ambiguous == []
 
     def test_ambiguous_two_state_entries_one_fingerprint(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, detect_renames
+        from feather_flow.discover_state import DiscoverState, detect_renames
 
         state = DiscoverState.load(tmp_path)
         state.sources["a"] = {
@@ -266,7 +266,7 @@ class TestRenameInference:
         assert ambiguous == [("c", ["a", "b"])]
 
     def test_duplicate_current_fingerprint_collision_is_ambiguous(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, detect_renames
+        from feather_flow.discover_state import DiscoverState, detect_renames
 
         state = DiscoverState.load(tmp_path)
         state.sources["erp"] = {
@@ -284,7 +284,7 @@ class TestRenameInference:
         assert ambiguous == [("erp_copy", ["erp"])]
 
     def test_apply_renames_moves_state_entries(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, apply_renames
+        from feather_flow.discover_state import DiscoverState, apply_renames
 
         state = DiscoverState.load(tmp_path)
         state.sources["erp"] = {
@@ -338,7 +338,7 @@ class TestRenameInference:
         assert (tmp_path / "schema_postgres_erp_main__db1.json").is_file()
 
     def test_apply_renames_keeps_unrelated_files(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState, apply_renames
+        from feather_flow.discover_state import DiscoverState, apply_renames
 
         state = DiscoverState.load(tmp_path)
         state.sources["erp"] = {
@@ -363,7 +363,7 @@ class TestRenameInference:
 
     def test_apply_renames_ignores_renames_missing_from_state(self, tmp_path: Path):
         """If an ``old`` name isn't in state.sources, the rename is silently skipped."""
-        from feather_etl.discover_state import DiscoverState, apply_renames
+        from feather_flow.discover_state import DiscoverState, apply_renames
 
         state = DiscoverState.load(tmp_path)
         # state is empty — no "erp" entry
@@ -382,7 +382,7 @@ class TestRenameInference:
 
     def test_apply_renames_skips_when_output_path_is_none(self, tmp_path: Path):
         """Parent/child without an output_path is renamed in state but no file move."""
-        from feather_etl.discover_state import DiscoverState, apply_renames
+        from feather_flow.discover_state import DiscoverState, apply_renames
 
         state = DiscoverState.load(tmp_path)
         state.sources["erp"] = {
@@ -408,7 +408,7 @@ class TestRenameInference:
     ):
         """If the rename target isn't in ``sources`` the output_path is preserved
         unchanged (``new_source is None`` branch in _rename_schema_file)."""
-        from feather_etl.discover_state import DiscoverState, apply_renames
+        from feather_flow.discover_state import DiscoverState, apply_renames
 
         state = DiscoverState.load(tmp_path)
         state.sources["erp"] = {
@@ -436,8 +436,8 @@ class TestRenameSchemaFileNoop:
     def test_new_path_equal_to_current_returns_as_is(self, tmp_path: Path):
         """When the new source's schema filename matches the existing path,
         ``_rename_schema_file`` short-circuits and returns the original path."""
-        from feather_etl.discover_state import _rename_schema_file
-        from feather_etl.config import schema_output_path
+        from feather_flow.discover_state import _rename_schema_file
+        from feather_flow.config import schema_output_path
 
         class _Src:
             type = "sqlite"
@@ -457,7 +457,7 @@ class TestRenameSchemaFileNoop:
 class TestClassifyOrphanedComesBack:
     def test_orphaned_source_back_in_current_classified_rerun(self, tmp_path: Path):
         """An orphaned source reappearing in current is classified as 'rerun'."""
-        from feather_etl.discover_state import DiscoverState, classify
+        from feather_flow.discover_state import DiscoverState, classify
 
         s = DiscoverState.load(tmp_path)
         s.sources["a"] = {
@@ -471,7 +471,7 @@ class TestClassifyOrphanedComesBack:
 
 class TestRecordAutoEnum:
     def test_record_auto_enum_stores_parent_entry(self, tmp_path: Path):
-        from feather_etl.discover_state import DiscoverState
+        from feather_flow.discover_state import DiscoverState
 
         s = DiscoverState.load(tmp_path)
         s.record_auto_enum(

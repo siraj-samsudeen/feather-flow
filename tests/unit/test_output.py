@@ -7,7 +7,7 @@ import json
 
 class TestOutputHelper:
     def test_emit_single_dict_json_mode(self, capsys):
-        from feather_etl.output import emit_line
+        from feather_flow.output import emit_line
 
         emit_line({"table": "orders", "status": "success"}, json_mode=True)
         out = capsys.readouterr().out
@@ -15,13 +15,13 @@ class TestOutputHelper:
         assert parsed["table"] == "orders"
 
     def test_emit_single_dict_noop_in_normal_mode(self, capsys):
-        from feather_etl.output import emit_line
+        from feather_flow.output import emit_line
 
         emit_line({"table": "orders"}, json_mode=False)
         assert capsys.readouterr().out == ""
 
     def test_emit_list_outputs_ndjson(self, capsys):
-        from feather_etl.output import emit
+        from feather_flow.output import emit
 
         data = [
             {"table": "orders", "status": "success"},
@@ -35,7 +35,7 @@ class TestOutputHelper:
 
     def test_emit_list_noop_in_normal_mode(self, capsys):
         """emit(..., json_mode=False) is a no-op — nothing goes to stdout."""
-        from feather_etl.output import emit
+        from feather_flow.output import emit
 
         emit([{"table": "orders"}, {"table": "items"}], json_mode=False)
         assert capsys.readouterr().out == ""
@@ -43,7 +43,7 @@ class TestOutputHelper:
     def test_emit_datetime_serialized(self, capsys):
         from datetime import datetime, timezone
 
-        from feather_etl.output import emit_line
+        from feather_flow.output import emit_line
 
         dt = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
         emit_line({"ts": dt}, json_mode=True)

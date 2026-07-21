@@ -10,7 +10,7 @@ import pytest
 
 class TestIncrementRetry:
     def test_first_failure_sets_retry_count_1(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -21,7 +21,7 @@ class TestIncrementRetry:
         assert wm["retry_count"] == 1
 
     def test_first_failure_sets_retry_after_15_min(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -38,7 +38,7 @@ class TestIncrementRetry:
         assert expected_min <= retry_after <= expected_max
 
     def test_two_failures_30_min_backoff(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -56,7 +56,7 @@ class TestIncrementRetry:
         assert expected_min <= retry_after <= expected_max
 
     def test_ten_failures_capped_at_120_min(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -76,7 +76,7 @@ class TestIncrementRetry:
         assert expected_min <= retry_after <= expected_max
 
     def test_increment_creates_watermark_if_missing(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -89,7 +89,7 @@ class TestIncrementRetry:
 
 class TestResetRetry:
     def test_reset_clears_retry_state(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -104,7 +104,7 @@ class TestResetRetry:
         assert wm["retry_after"] is None
 
     def test_reset_noop_on_clean_table(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -117,7 +117,7 @@ class TestResetRetry:
 
 class TestShouldSkipRetry:
     def test_no_backoff_returns_false(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -128,7 +128,7 @@ class TestShouldSkipRetry:
         assert error is None
 
     def test_in_backoff_returns_true_with_error(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -152,7 +152,7 @@ class TestShouldSkipRetry:
     def test_past_backoff_returns_false(self, tmp_path: Path):
         import duckdb
 
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -171,7 +171,7 @@ class TestShouldSkipRetry:
         assert skip is False
 
     def test_nonexistent_table_returns_false(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -183,7 +183,7 @@ class TestShouldSkipRetry:
 
 class TestGetLastFailureMessage:
     def test_returns_error_from_last_failure(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -210,7 +210,7 @@ class TestGetLastFailureMessage:
         assert msg == "Second error"
 
     def test_returns_none_when_no_failures(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -223,7 +223,7 @@ class TestConnectionCleanupRetry:
     def test_increment_retry_closes_on_error(self, tmp_path: Path):
         from unittest.mock import MagicMock
 
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -240,7 +240,7 @@ class TestConnectionCleanupRetry:
     def test_should_skip_retry_closes_on_error(self, tmp_path: Path):
         from unittest.mock import MagicMock
 
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()

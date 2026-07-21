@@ -12,7 +12,7 @@ from __future__ import annotations
 import duckdb
 import pytest
 
-from feather_etl.config import load_config
+from feather_flow.config import load_config
 from tests.helpers import make_curation_entry, write_curation
 
 

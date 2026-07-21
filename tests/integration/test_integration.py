@@ -83,7 +83,7 @@ class TestSampleErpFixture:
     """Tests using the synthetic sample_erp fixture.
 
     These are meta-assertions about fixture data integrity — they don't
-    import feather_etl but they guard every other test in this file.
+    import feather_flow but they guard every other test in this file.
     """
 
     @pytest.fixture
@@ -139,8 +139,8 @@ class TestSampleErpFullPipeline:
         )
 
     def test_run_all_succeeds(self, config):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         results = run_all(cfg)
@@ -152,8 +152,8 @@ class TestSampleErpFullPipeline:
         }
 
     def test_row_counts_in_bronze(self, config):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         run_all(cfg)
@@ -170,8 +170,8 @@ class TestSampleErpFullPipeline:
 
     def test_null_passthrough(self, config):
         """NULL in source (products.stock_qty) must survive the Arrow round-trip."""
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         run_all(cfg)
@@ -185,8 +185,8 @@ class TestSampleErpFullPipeline:
         assert row[0] is None, f"Expected NULL stock_qty, got {row[0]!r}"
 
     def test_etl_metadata_columns_added(self, config):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         run_all(cfg)
@@ -205,8 +205,8 @@ class TestSampleErpFullPipeline:
 
     def test_source_columns_preserved(self, config):
         """All source columns (minus added ETL ones) must appear in bronze."""
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         run_all(cfg)
@@ -232,8 +232,8 @@ class TestSampleErpFullPipeline:
 
     def test_idempotency(self, config):
         """Running twice must give same row counts (full swap replaces, not appends)."""
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         run_all(cfg)
@@ -244,8 +244,8 @@ class TestSampleErpFullPipeline:
         con.close()
 
     def test_state_records_runs(self, config):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         run_all(cfg)
@@ -277,8 +277,8 @@ class TestClientFixtureEdgeCases:
         self, project: ProjectFixture, client_db_copy: Path
     ):
         """SALESINVOICEMASTER has a column called 'Round Off' (space in name)."""
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         config = _write_duckdb_config(
             project,
@@ -302,8 +302,8 @@ class TestClientFixtureEdgeCases:
 
     def test_invitem_blob_columns(self, project: ProjectFixture, client_db_copy: Path):
         """INVITEM has BLOB columns (IMAGE, DivImage).  Should load without error."""
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         config = _write_duckdb_config(
             project,
@@ -317,8 +317,8 @@ class TestClientFixtureEdgeCases:
 
     def test_all_six_icube_tables(self, project: ProjectFixture, client_db_copy: Path):
         """All six Icube tables load in a single run."""
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         config = _write_duckdb_config(
             project,
@@ -350,7 +350,7 @@ class TestClientFixtureEdgeCases:
 
     def test_discover_icube_source(self, client_db_copy: Path):
         """discover() returns all 6 Icube tables with column metadata."""
-        from feather_etl.sources.duckdb_file import DuckDBFileSource
+        from feather_flow.sources.duckdb_file import DuckDBFileSource
 
         src = DuckDBFileSource(client_db_copy)
         schemas = src.discover()
@@ -375,8 +375,8 @@ class TestErrorIsolation:
     def test_good_table_succeeds_despite_bad_table(
         self, project: ProjectFixture, sample_erp: Path
     ):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         config = _write_duckdb_config(
             project,
@@ -398,8 +398,8 @@ class TestErrorIsolation:
     def test_failure_error_message_stored_in_state(
         self, project: ProjectFixture, sample_erp: Path
     ):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         config = _write_duckdb_config(
             project,
@@ -424,8 +424,8 @@ class TestErrorIsolation:
     def test_partial_failure_still_writes_good_table_to_bronze(
         self, project: ProjectFixture, sample_erp: Path
     ):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         config = _write_duckdb_config(
             project,
@@ -461,7 +461,7 @@ class TestValidationGuards:
 
     def test_csv_source_validates_with_valid_directory(self, project: ProjectFixture):
         """CSV source type with a valid directory passes validation."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         csv_dir = project.root / "csv_data"
         csv_dir.mkdir()
@@ -479,7 +479,7 @@ class TestValidationGuards:
 
     def test_csv_source_rejects_file_path(self, project: ProjectFixture):
         """CSV source path must be a directory, not a file."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         csv_file = project.root / "source.csv"
         csv_file.write_text("id,name\n1,foo\n")
@@ -496,7 +496,7 @@ class TestValidationGuards:
 
     def test_csv_source_rejects_nonexistent_path(self, project: ProjectFixture):
         """CSV source path that doesn't exist at all fails validation."""
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         project.write_config(
             sources=[
@@ -516,7 +516,7 @@ class TestValidationGuards:
             load_config(project.config_path)
 
     def test_missing_source_section_raises_valueerror(self, project: ProjectFixture):
-        from feather_etl.config import load_config
+        from feather_flow.config import load_config
 
         # Bypass ``write_config``'s tolerant behaviour and write raw YAML with
         # no sources section so load_config can raise.
@@ -528,7 +528,7 @@ class TestValidationGuards:
 
     def test_target_table_requires_schema_prefix(self, project: ProjectFixture):
         """target_table without schema prefix is rejected (tested via _validate)."""
-        from feather_etl.config import _validate, load_config
+        from feather_flow.config import _validate, load_config
 
         sample_erp = project.copy_fixture("sample_erp.duckdb")
         config = _write_duckdb_config(
@@ -543,7 +543,7 @@ class TestValidationGuards:
 
     def test_hyphenated_target_table_rejected(self, project: ProjectFixture):
         """Hyphens in target_table are caught at validate time (tested via _validate)."""
-        from feather_etl.config import _validate, load_config
+        from feather_flow.config import _validate, load_config
 
         sample_erp = project.copy_fixture("sample_erp.duckdb")
         config = _write_duckdb_config(
@@ -564,8 +564,8 @@ class TestValidationGuards:
 
 class TestPipelineReturnsOnFailure:
     def test_run_all_returns_results_on_total_failure(self, project: ProjectFixture):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         sample_erp = project.copy_fixture("sample_erp.duckdb")
         config = _write_duckdb_config(
@@ -589,8 +589,8 @@ class TestKnownBugs:
         self, project: ProjectFixture
     ):
         """M-6: strategy='incremental' silently does a full load."""
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         sample_erp = project.copy_fixture("sample_erp.duckdb")
         config = _write_duckdb_config(
@@ -636,8 +636,8 @@ class TestCsvFullPipeline:
         return _write_csv_config(project, csv_dir, self.CSV_CURATION)
 
     def test_run_all_succeeds(self, config):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         results = run_all(cfg)
@@ -649,8 +649,8 @@ class TestCsvFullPipeline:
         }
 
     def test_row_counts_in_bronze(self, config):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         run_all(cfg)
@@ -666,8 +666,8 @@ class TestCsvFullPipeline:
         con.close()
 
     def test_null_passthrough(self, config):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         run_all(cfg)
@@ -681,8 +681,8 @@ class TestCsvFullPipeline:
         assert row[0] is None
 
     def test_etl_metadata_columns(self, config):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         run_all(cfg)
@@ -720,8 +720,8 @@ class TestSqliteFullPipeline:
         return _write_sqlite_config(project, sqlite_db, self.SQLITE_CURATION)
 
     def test_run_all_succeeds(self, config):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         results = run_all(cfg)
@@ -733,8 +733,8 @@ class TestSqliteFullPipeline:
         }
 
     def test_row_counts_in_bronze(self, config):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         run_all(cfg)
@@ -755,8 +755,8 @@ class TestSqliteFullPipeline:
         con.close()
 
     def test_null_passthrough(self, config):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         run_all(cfg)
@@ -770,8 +770,8 @@ class TestSqliteFullPipeline:
         assert row[0] is None
 
     def test_etl_metadata_columns(self, config):
-        from feather_etl.config import load_config
-        from feather_etl.pipeline import run_all
+        from feather_flow.config import load_config
+        from feather_flow.pipeline import run_all
 
         cfg = load_config(config)
         run_all(cfg)

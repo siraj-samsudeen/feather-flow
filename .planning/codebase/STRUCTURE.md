@@ -3,7 +3,7 @@
 ## Directory Layout
 
 ```
-feather-etl/
+feather-flow/
 ├── CLAUDE.md                          # Agent context — points to key docs
 ├── README.md                          # Full architecture doc with layer model, config examples
 ├── pyproject.toml                     # Package config (hatchling), deps, CLI entry point
@@ -94,7 +94,7 @@ feather-etl/
 │   ├── research.md                    # Design research synthesis
 │   ├── CONTRIBUTING.md                # Work conventions
 │   ├── TESTING-PHILOSOPHY.md          # Testing approach
-│   ├── testing-feather-etl.md         # Testing guide
+│   ├── testing-feather-flow.md         # Testing guide
 │   ├── plans/                         # Implementation plan history (per-slice)
 │   └── reviews/                       # Code review records
 │
@@ -121,7 +121,7 @@ feather-etl/
 | Test fixtures | `tests/fixtures/` |
 | Fixture generators | `scripts/create_*.py` |
 | Requirements doc | `docs/prd.md` |
-| Agent context | `CLAUDE.md` + `.claude/rules/feather-etl-project.md` |
+| Agent context | `CLAUDE.md` + `.claude/rules/feather-flow-project.md` |
 
 ## Module Map
 

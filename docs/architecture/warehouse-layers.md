@@ -13,9 +13,9 @@
 
 ## Purpose
 
-feather-etl's warehouse model is the Medallion architecture (Bronze → Silver → Gold) extended with a fourth Kimball-style layer for Departmental Data Marts. Every transform written in a feather-etl deployment lives in exactly one of these four layers. This document pins what belongs in each — and, equally important, what does not.
+feather-flow's warehouse model is the Medallion architecture (Bronze → Silver → Gold) extended with a fourth Kimball-style layer for Departmental Data Marts. Every transform written in a feather-flow deployment lives in exactly one of these four layers. This document pins what belongs in each — and, equally important, what does not.
 
-Agents and humans working on feather-etl should read this doc **before** writing any transform SQL, before deciding where to port a source view's logic, and before answering an Analyst's question about where a number lives. When in doubt during implementation, ask: *"Which layer does this belong in, and what is the evidence?"*
+Agents and humans working on feather-flow should read this doc **before** writing any transform SQL, before deciding where to port a source view's logic, and before answering an Analyst's question about where a number lives. When in doubt during implementation, ask: *"Which layer does this belong in, and what is the evidence?"*
 
 The binding rule: **every layer serves at least one of the primary personas (`personas.md`) or artifact consumers.** Features that would add a transform to no layer, or that blur the boundary between layers, require explicit justification before landing.
 
@@ -30,7 +30,7 @@ The binding rule: **every layer serves at least one of the primary personas (`pe
 **What goes in.**
 
 - One schema per source, tables named by their source-native names (`bronze.ORDR`, `bronze.SalesHeader`, `bronze.SI_MAST`).
-- All rows that survive the YAML `filter:` clause — the `filter:` is feather-etl's one concession to SMB resource constraints (soft-deleted POS records, cancelled invoices, test data).
+- All rows that survive the YAML `filter:` clause — the `filter:` is feather-flow's one concession to SMB resource constraints (soft-deleted POS records, cancelled invoices, test data).
 - Type coercion and encoding fixes (fixing Windows-1252 → UTF-8, normalizing numeric types).
 - Audit metadata columns: `_etl_loaded_at`, `_etl_run_id`. For regulated clients: retain all rows across runs (append-only). For SMB clients: replace on each run.
 - Optional per table — some tables skip bronze entirely and land directly in Silver via YAML `column_map` (see PRD FR2).
@@ -42,7 +42,7 @@ The binding rule: **every layer serves at least one of the primary personas (`pe
 - Joins. Aggregations. Derived columns.
 - Source-system-agnostic shaping (that is Silver's job).
 
-**Owned by.** The extractor (feather-etl itself). No human writes bronze SQL; feather produces it from the source connector.
+**Owned by.** The extractor (feather-flow itself). No human writes bronze SQL; feather produces it from the source connector.
 
 **Default materialization.** Tables. Append-only for regulated; replace for SMB.
 
@@ -50,7 +50,7 @@ The binding rule: **every layer serves at least one of the primary personas (`pe
 
 ### 2. Silver — canonical cleaned rows
 
-**Purpose.** The source-agnostic shape of the business. A SAP B1 table `ORDR` and a custom Indian ERP table `SalesHeader` both become `silver.sales_order` with the same 10–15 columns in the same shape. Silver is what the Analyst querying ad-hoc and the LLM agent working against the warehouse both read. It is the layer that gives feather-etl cross-client transferability — the planned connector library (PRD v2) will ship reusable Silver mappings per source system.
+**Purpose.** The source-agnostic shape of the business. A SAP B1 table `ORDR` and a custom Indian ERP table `SalesHeader` both become `silver.sales_order` with the same 10–15 columns in the same shape. Silver is what the Analyst querying ad-hoc and the LLM agent working against the warehouse both read. It is the layer that gives feather-flow cross-client transferability — the planned connector library (PRD v2) will ship reusable Silver mappings per source system.
 
 **What goes in.**
 
@@ -97,7 +97,7 @@ The binding rule: **every layer serves at least one of the primary personas (`pe
 
 **Default materialization.** Views by default (PRD FR5, R-0636). Fact tables with large joins opt into materialization via the `-- materialized: true` annotation — rebuilt after each extraction run.
 
-**Dependency edges are inferred from SQL.** feather-etl parses each
+**Dependency edges are inferred from SQL.** feather-flow parses each
 transform's `FROM`/`JOIN` clauses with `sqlglot` and builds the DAG from the
 `silver.*` / `gold.*` references it finds. The SQL body is the only source
 of truth for DAG edges — there is no `-- depends_on:` header. CTE names,
@@ -151,7 +151,7 @@ The common failure mode: transforms that do "a bit of dimensional modeling and a
 - **Schemas.** `bronze.<source_table>`, `silver.<canonical_name>`, `gold.<fact_or_dim>`. Mart schema naming is currently **open — to be decided as concrete marts land.** Two candidate patterns:
   - `<dept>_mart.<table>` — e.g., `finance_mart.monthly_close`. Per-department schemas; permissions and cleanup scoped by department.
   - `gold_<dept>.<table>` — e.g., `gold_finance.monthly_close`. Keeps mart content visually adjacent to Gold when browsing; signals "this depends on Gold" in the name.
-  The first concrete mart built in a feather-etl deployment sets the precedent for the rest. Document the chosen convention in the deployment's client repo `README.md` so the pattern is consistent across marts.
+  The first concrete mart built in a feather-flow deployment sets the precedent for the rest. Document the chosen convention in the deployment's client repo `README.md` so the pattern is consistent across marts.
 - **Gold fact tables.** Prefixed `fact_`. Grain documented as an SQL comment at the top of each transform: `-- grain: one row per <business-event>`.
 - **Gold dimension tables.** Prefixed `dim_`. Surrogate keys named `<dim>_sk`. Natural keys preserved alongside with their source-system name.
 - **Mart tables.** No prefix — the mart schema name already signals the role. Tables named by what the consumer calls them (`monthly_close`, not `mart_monthly_close`).

@@ -43,8 +43,8 @@ def _make_config(
 
 
 def test_pipeline_dispatches_to_load_append(tmp_path: Path):
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_table
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_table
 
     source_db = tmp_path / "sample_erp.duckdb"
     shutil.copy2(FIXTURES_DIR / "sample_erp.duckdb", source_db)
@@ -63,8 +63,8 @@ def test_pipeline_dispatches_to_load_append(tmp_path: Path):
 
 
 def test_append_second_run_appends_on_change(tmp_path: Path):
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_all
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_all
 
     source_db = tmp_path / "sample_erp.duckdb"
     shutil.copy2(FIXTURES_DIR / "sample_erp.duckdb", source_db)
@@ -93,8 +93,8 @@ def test_append_second_run_appends_on_change(tmp_path: Path):
 
 
 def test_append_unchanged_source_skips(tmp_path: Path):
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_all
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_all
 
     source_db = tmp_path / "sample_erp.duckdb"
     shutil.copy2(FIXTURES_DIR / "sample_erp.duckdb", source_db)

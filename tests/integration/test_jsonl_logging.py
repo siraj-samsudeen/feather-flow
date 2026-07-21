@@ -16,8 +16,8 @@ from tests.helpers import make_curation_entry, write_curation
 
 def test_feather_log_jsonl_created(tmp_path: Path):
     """feather_log.jsonl is created alongside state DB after feather run."""
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_all
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_all
 
     client_db = tmp_path / "client.duckdb"
     shutil.copy2(FIXTURES_DIR / "client.duckdb", client_db)
@@ -40,8 +40,8 @@ def test_feather_log_jsonl_created(tmp_path: Path):
 
 
 def test_each_line_is_valid_json(tmp_path: Path):
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_all
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_all
 
     client_db = tmp_path / "client.duckdb"
     shutil.copy2(FIXTURES_DIR / "client.duckdb", client_db)
@@ -70,8 +70,8 @@ def test_each_line_is_valid_json(tmp_path: Path):
 
 
 def test_log_is_append_only(tmp_path: Path):
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_all
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_all
 
     client_db = tmp_path / "client.duckdb"
     shutil.copy2(FIXTURES_DIR / "client.duckdb", client_db)

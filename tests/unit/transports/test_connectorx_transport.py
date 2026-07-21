@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pyarrow as pa
 import pytest
 
-from feather_etl.transports.connectorx_transport import (
+from feather_flow.transports.connectorx_transport import (
     ConnectorxTransport,
     _odbc_to_connectorx_uri,
 )
@@ -23,7 +23,7 @@ def test_name_and_supports_partition_on() -> None:
     assert t.supports_partition_on() is True
 
 
-@patch("feather_etl.transports.connectorx_transport.cx")
+@patch("feather_flow.transports.connectorx_transport.cx")
 def test_stream_batches_forwards_partition_args(mock_cx: MagicMock) -> None:
     canned = pa.Table.from_pylist([{"id": 1, "name": "a"}, {"id": 2, "name": "b"}])
     mock_cx.read_sql.return_value = canned
@@ -48,7 +48,7 @@ def test_stream_batches_forwards_partition_args(mock_cx: MagicMock) -> None:
     assert kwargs["return_type"] == "arrow"
 
 
-@patch("feather_etl.transports.connectorx_transport.cx")
+@patch("feather_flow.transports.connectorx_transport.cx")
 def test_stream_batches_without_partition_on(mock_cx: MagicMock) -> None:
     """Non-parallel single-connection mode still works — partition_on is optional."""
     canned = pa.Table.from_pylist([{"id": 1}])
@@ -67,7 +67,7 @@ def test_stream_batches_without_partition_on(mock_cx: MagicMock) -> None:
     assert "partition_on" not in kwargs or kwargs["partition_on"] is None
 
 
-@patch("feather_etl.transports.connectorx_transport.cx")
+@patch("feather_flow.transports.connectorx_transport.cx")
 def test_empty_result_yields_one_schema_only_batch(mock_cx: MagicMock) -> None:
     """Match PyodbcTransport / ArrowOdbcTransport: even an empty result set
     yields one zero-row batch carrying the schema, so destinations can
@@ -119,16 +119,16 @@ def test_missing_connectorx_dep_raises_clear_message(monkeypatch) -> None:
     'NoneType' confusion."""
     import sys
     import importlib
-    import feather_etl.transports.connectorx_transport as mod
+    import feather_flow.transports.connectorx_transport as mod
 
     # Snapshot the real, working module before reload so later tests don't
     # inherit a half-initialised module object cached in sys.modules.
-    real_mod = sys.modules["feather_etl.transports.connectorx_transport"]
+    real_mod = sys.modules["feather_flow.transports.connectorx_transport"]
     monkeypatch.setitem(sys.modules, "connectorx", None)
 
     with pytest.raises(ImportError) as exc:
         importlib.reload(mod)
-    assert "feather-etl[connectorx]" in str(exc.value)
+    assert "feather-flow[connectorx]" in str(exc.value)
 
     # Restore the working module so other tests don't inherit our wreckage.
-    sys.modules["feather_etl.transports.connectorx_transport"] = real_mod
+    sys.modules["feather_flow.transports.connectorx_transport"] = real_mod

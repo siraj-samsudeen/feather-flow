@@ -15,9 +15,9 @@ from pathlib import Path
 import duckdb
 import yaml
 
-from feather_etl.config import load_config
-from feather_etl.pipeline import run_all
-from feather_etl.transforms import run_transforms
+from feather_flow.config import load_config
+from feather_flow.pipeline import run_all
+from feather_flow.transforms import run_transforms
 from tests.conftest import FIXTURES_DIR
 from tests.helpers import make_curation_entry, write_curation
 

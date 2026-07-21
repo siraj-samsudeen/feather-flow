@@ -1,4 +1,4 @@
-"""Tests for feather_etl.viewer_server sync and launch behavior."""
+"""Tests for feather_flow.viewer_server sync and launch behavior."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def _source_viewer_bytes() -> bytes:
 
 class TestSyncViewerHtml:
     def test_creates_viewer_when_missing(self, tmp_path: Path):
-        from feather_etl.viewer_server import VIEWER_FILENAME, sync_viewer_html
+        from feather_flow.viewer_server import VIEWER_FILENAME, sync_viewer_html
 
         target = tmp_path
         viewer_path = target / VIEWER_FILENAME
@@ -28,7 +28,7 @@ class TestSyncViewerHtml:
         assert viewer_path.read_bytes() == _source_viewer_bytes()
 
     def test_does_not_rewrite_unchanged_file(self, tmp_path: Path):
-        from feather_etl.viewer_server import VIEWER_FILENAME, sync_viewer_html
+        from feather_flow.viewer_server import VIEWER_FILENAME, sync_viewer_html
 
         viewer_path = tmp_path / VIEWER_FILENAME
         viewer_path.write_bytes(_source_viewer_bytes())
@@ -44,7 +44,7 @@ class TestSyncViewerHtml:
         assert viewer_path.read_bytes() == _source_viewer_bytes()
 
     def test_updates_different_file(self, tmp_path: Path):
-        from feather_etl.viewer_server import VIEWER_FILENAME, sync_viewer_html
+        from feather_flow.viewer_server import VIEWER_FILENAME, sync_viewer_html
 
         viewer_path = tmp_path / VIEWER_FILENAME
         viewer_path.write_text("stale viewer", encoding="utf-8")
@@ -70,7 +70,7 @@ class TestSyncStatusMessage:
         ],
     )
     def test_messages(self, status: str, expected: str | None):
-        from feather_etl.viewer_server import sync_status_message
+        from feather_flow.viewer_server import sync_status_message
 
         message = sync_status_message(status)
 
@@ -83,7 +83,7 @@ class TestSyncStatusMessage:
 class TestCanBind:
     def test_free_port_is_bindable(self):
         """Binding to an ephemeral port succeeds."""
-        from feather_etl import viewer_server
+        from feather_flow import viewer_server
 
         # Port 0 → kernel assigns a free port for the probe.
         free_port = viewer_server._free_port(viewer_server.DEFAULT_HOST)
@@ -93,7 +93,7 @@ class TestCanBind:
         """When another process holds the port, _can_bind returns False."""
         import socket
 
-        from feather_etl import viewer_server
+        from feather_flow import viewer_server
 
         # Hold a port open for the duration of the probe.
         holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -110,7 +110,7 @@ class TestCanBind:
 
 class TestFreePort:
     def test_returns_nonzero_port(self):
-        from feather_etl import viewer_server
+        from feather_flow import viewer_server
 
         port = viewer_server._free_port(viewer_server.DEFAULT_HOST)
         assert isinstance(port, int)
@@ -121,7 +121,7 @@ class TestSyncStatusMessageFallback:
     def test_unknown_status_returns_none(self):
         """Defensive branch: an unexpected status string falls through all
         the explicit ``if`` branches and returns None."""
-        from feather_etl.viewer_server import sync_status_message
+        from feather_flow.viewer_server import sync_status_message
 
         # Intentionally outside the Literal type — exercises the final return
         assert sync_status_message("weird") is None  # type: ignore[arg-type]
@@ -129,7 +129,7 @@ class TestSyncStatusMessageFallback:
 
 class TestChoosePort:
     def test_returns_preferred_when_available(self, monkeypatch: pytest.MonkeyPatch):
-        from feather_etl import viewer_server
+        from feather_flow import viewer_server
 
         monkeypatch.setattr(viewer_server, "_can_bind", lambda host, port: port == 8123)
         monkeypatch.setattr(viewer_server, "_free_port", lambda host: 9999)
@@ -139,7 +139,7 @@ class TestChoosePort:
         assert port == 8123
 
     def test_falls_back_when_preferred_is_busy(self, monkeypatch: pytest.MonkeyPatch):
-        from feather_etl import viewer_server
+        from feather_flow import viewer_server
 
         monkeypatch.setattr(viewer_server, "_can_bind", lambda host, port: False)
         monkeypatch.setattr(viewer_server, "_free_port", lambda host: 8765)
@@ -156,7 +156,7 @@ class TestServeAndOpen:
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ):
-        from feather_etl import viewer_server
+        from feather_flow import viewer_server
 
         server = SimpleNamespace(
             server_address=(viewer_server.DEFAULT_HOST, 8123),
@@ -200,7 +200,7 @@ class TestServeAndOpen:
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ):
-        from feather_etl import viewer_server
+        from feather_flow import viewer_server
 
         server = SimpleNamespace(
             server_address=(viewer_server.DEFAULT_HOST, 8123),
@@ -248,7 +248,7 @@ class TestServeAndOpen:
     ):
         """If sync_viewer_html returns a non-'unchanged' status,
         serve_and_open prints the friendly message before serving."""
-        from feather_etl import viewer_server
+        from feather_flow import viewer_server
 
         server = SimpleNamespace(
             server_address=(viewer_server.DEFAULT_HOST, 8123),
@@ -286,7 +286,7 @@ class TestServeAndOpen:
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ):
-        from feather_etl import viewer_server
+        from feather_flow import viewer_server
 
         fallback_server = SimpleNamespace(
             server_address=(viewer_server.DEFAULT_HOST, 9234),

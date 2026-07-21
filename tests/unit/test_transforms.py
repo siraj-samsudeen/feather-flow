@@ -8,7 +8,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from feather_etl.transforms import (
+from feather_flow.transforms import (
     TransformMeta,
     build_execution_order,
     discover_transforms,
@@ -211,7 +211,7 @@ class TestParseTransformFile:
         assert "silver.boom" not in meta.depends_on
 
     def test_parse_raises_on_unparseable_sql(self, tmp_path: Path):
-        from feather_etl.transform_deps import TransformDepParseError
+        from feather_flow.transform_deps import TransformDepParseError
 
         p = _write_sql(tmp_path, "silver", "bad", "SELECT FROM WHERE")
         with pytest.raises(TransformDepParseError, match="bad.sql"):
@@ -220,7 +220,7 @@ class TestParseTransformFile:
     def test_parse_raises_on_empty_sql_body(self, tmp_path: Path):
         # A file with only headers and no SELECT body must fail loudly at
         # discover-time, not silently install an empty view at execute-time.
-        from feather_etl.transform_deps import TransformDepParseError
+        from feather_flow.transform_deps import TransformDepParseError
 
         content = "-- materialized: true\n"  # no SELECT body at all
         p = _write_sql(tmp_path, "gold", "empty", content)
@@ -344,7 +344,7 @@ class TestBuildExecutionOrder:
     def test_auto_inferred_dep_orders_correctly_via_parse(self, tmp_path: Path):
         # Full pipeline: parse a transform with no header, then topo-sort
         # it against its (no-dep) predecessor.
-        from feather_etl.transforms import discover_transforms
+        from feather_flow.transforms import discover_transforms
 
         _write_sql(tmp_path, "silver", "foo", "SELECT 1 AS id")
         _write_sql(
@@ -364,7 +364,7 @@ class TestBuildExecutionOrder:
         # Acceptance criterion (issue #54): "A transform that references a
         # non-existent silver.bar raises the same missing-dependency error
         # as today."
-        from feather_etl.transforms import discover_transforms
+        from feather_flow.transforms import discover_transforms
 
         _write_sql(
             tmp_path,
@@ -581,7 +581,7 @@ class TestRebuildMaterializedGold:
             fact_table="silver.emp_fact",
         )
 
-        with caplog.at_level(logging.WARNING, logger="feather_etl.transforms"):
+        with caplog.at_level(logging.WARNING, logger="feather_flow.transforms"):
             results = rebuild_materialized_gold(con, [mat])
 
         assert len(results) == 1
@@ -597,7 +597,7 @@ class TestParseTransformFileInvalidSchema:
         """Files placed outside ``transforms/silver`` or ``transforms/gold``
         are rejected — the parser refuses to build a TransformMeta for a
         bronze or unknown schema. (transforms.py:81)"""
-        from feather_etl.transforms import parse_transform_file
+        from feather_flow.transforms import parse_transform_file
 
         bad_dir = tmp_path / "transforms" / "bronze"
         bad_dir.mkdir(parents=True)
@@ -610,7 +610,7 @@ class TestParseTransformFileInvalidSchema:
     def test_fact_table_comment_is_recorded(self, tmp_path: Path):
         """``-- fact_table: <name>`` header is parsed into ``fact_table``
         while being stripped from the SQL body. (transforms.py:70)"""
-        from feather_etl.transforms import parse_transform_file
+        from feather_flow.transforms import parse_transform_file
 
         sql_dir = tmp_path / "transforms" / "gold"
         sql_dir.mkdir(parents=True)
@@ -633,7 +633,7 @@ class TestParseTransformFileInvalidSchema:
 class TestCheckJoinHealth:
     def test_returns_none_when_fact_table_not_declared(self, tmp_path: Path):
         """No ``-- fact_table:`` header → check_join_health is a no-op."""
-        from feather_etl.transforms import check_join_health
+        from feather_flow.transforms import check_join_health
 
         con = duckdb.connect(str(tmp_path / "h.duckdb"))
         t = TransformMeta(name="x", schema="gold", sql="SELECT 1")
@@ -642,7 +642,7 @@ class TestCheckJoinHealth:
 
     def test_detects_join_inflation(self, tmp_path: Path):
         """Gold has MORE rows than its declared fact table → JOIN INFLATION."""
-        from feather_etl.transforms import check_join_health
+        from feather_flow.transforms import check_join_health
 
         con = duckdb.connect(str(tmp_path / "h.duckdb"))
         _make_bronze_tables(con)
@@ -668,7 +668,7 @@ class TestCheckJoinHealth:
 
     def test_detects_join_loss(self, tmp_path: Path):
         """Gold has FEWER rows than its declared fact table → JOIN LOSS."""
-        from feather_etl.transforms import check_join_health
+        from feather_flow.transforms import check_join_health
 
         con = duckdb.connect(str(tmp_path / "h.duckdb"))
         _make_bronze_tables(con)
@@ -691,7 +691,7 @@ class TestCheckJoinHealth:
         con.close()
 
     def test_returns_none_when_counts_match(self, tmp_path: Path):
-        from feather_etl.transforms import check_join_health
+        from feather_flow.transforms import check_join_health
 
         con = duckdb.connect(str(tmp_path / "h.duckdb"))
         _make_bronze_tables(con)
@@ -711,7 +711,7 @@ class TestCheckJoinHealth:
         """If one of the COUNT queries raises (e.g. the declared fact table
         doesn't exist), check_join_health returns an explanatory string
         rather than propagating the exception."""
-        from feather_etl.transforms import check_join_health
+        from feather_flow.transforms import check_join_health
 
         con = duckdb.connect(str(tmp_path / "h.duckdb"))
         con.execute("CREATE SCHEMA gold")

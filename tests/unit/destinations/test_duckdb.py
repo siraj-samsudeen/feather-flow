@@ -38,7 +38,7 @@ class TestQualifiedTableGuard:
         ],
     )
     def test_rejects_bare_table_name(self, tmp_path: Path, method: str, call) -> None:
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         dest = DuckDBDestination(path=tmp_path / "data.duckdb")
         dest.setup_schemas()
@@ -48,7 +48,7 @@ class TestQualifiedTableGuard:
 
 class TestDuckDBDestination:
     def test_setup_schemas(self, tmp_path: Path):
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         db_path = tmp_path / "data.duckdb"
         dest = DuckDBDestination(path=db_path)
@@ -66,7 +66,7 @@ class TestDuckDBDestination:
             assert s in schemas
 
     def test_load_full_creates_table(self, tmp_path: Path):
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         db_path = tmp_path / "data.duckdb"
         dest = DuckDBDestination(path=db_path)
@@ -82,7 +82,7 @@ class TestDuckDBDestination:
         con.close()
 
     def test_load_full_has_etl_metadata(self, tmp_path: Path):
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         db_path = tmp_path / "data.duckdb"
         dest = DuckDBDestination(path=db_path)
@@ -100,7 +100,7 @@ class TestDuckDBDestination:
         assert row[1] == "run_xyz"  # _etl_run_id
 
     def test_load_full_swap_replaces_data(self, tmp_path: Path):
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         db_path = tmp_path / "data.duckdb"
         dest = DuckDBDestination(path=db_path)
@@ -122,7 +122,7 @@ class TestDuckDBDestination:
         assert run_id == "run_2"
 
     def test_new_db_gets_600_permissions(self, tmp_path: Path):
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         db_path = tmp_path / "new_data.duckdb"
         dest = DuckDBDestination(path=db_path)
@@ -131,18 +131,18 @@ class TestDuckDBDestination:
         assert mode == 0o600
 
     def test_chmod_oserror_is_swallowed(self, tmp_path: Path):
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         db_path = tmp_path / "data.duckdb"
         dest = DuckDBDestination(path=db_path)
         with patch(
-            "feather_etl.destinations.duckdb.os.chmod", side_effect=OSError("denied")
+            "feather_flow.destinations.duckdb.os.chmod", side_effect=OSError("denied")
         ):
             dest.setup_schemas()  # should not raise
         assert db_path.exists()
 
     def test_load_full_rollback_on_error(self, tmp_path: Path):
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         db_path = tmp_path / "data.duckdb"
         dest = DuckDBDestination(path=db_path)
@@ -154,7 +154,7 @@ class TestDuckDBDestination:
     def test_load_append_rollback_on_error(self, tmp_path: Path):
         """load_append must ROLLBACK and re-raise when CREATE/INSERT fails
         (here: the target schema doesn't exist, so CREATE TABLE errors)."""
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         db_path = tmp_path / "data.duckdb"
         dest = DuckDBDestination(path=db_path)
@@ -177,7 +177,7 @@ class TestDuckDBDestination:
     def test_load_incremental_rollback_on_error(self, tmp_path: Path):
         """load_incremental must ROLLBACK and re-raise when the target table
         doesn't exist (the DELETE FROM raises CatalogException)."""
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         db_path = tmp_path / "data.duckdb"
         dest = DuckDBDestination(path=db_path)

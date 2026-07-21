@@ -12,13 +12,13 @@ import inspect
 
 
 def test_cli_has_no_inline_app_command_decorators() -> None:
-    import feather_etl.cli
+    import feather_flow.cli
 
-    assert "@app.command" not in inspect.getsource(feather_etl.cli)
+    assert "@app.command" not in inspect.getsource(feather_flow.cli)
 
 
 def test_cli_registers_expected_commands_on_app() -> None:
-    from feather_etl.cli import app
+    from feather_flow.cli import app
 
     registered_command_names = {
         command.name for command in app.registered_commands if command.name
@@ -63,7 +63,7 @@ def test_command_modules_expose_register_functions() -> None:
 
     for module_name in module_names:
         module = __import__(
-            f"feather_etl.commands.{module_name}", fromlist=["register"]
+            f"feather_flow.commands.{module_name}", fromlist=["register"]
         )
         assert callable(module.register)
 

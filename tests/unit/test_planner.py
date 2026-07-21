@@ -9,10 +9,10 @@ from datetime import datetime
 
 import pytest
 
-from feather_etl.config import ExtractDefaultsConfig, TableConfig
-from feather_etl.planner import Blocker, ExtractPlan, pick_plan  # noqa: F401
-from feather_etl.sources import StreamSchema
-from feather_etl.state import ExtractOverride
+from feather_flow.config import ExtractDefaultsConfig, TableConfig
+from feather_flow.planner import Blocker, ExtractPlan, pick_plan  # noqa: F401
+from feather_flow.sources import StreamSchema
+from feather_flow.state import ExtractOverride
 
 
 # ---------------------------------------------------------------------------

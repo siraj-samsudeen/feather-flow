@@ -5,9 +5,9 @@ All tests are pure — no DB connections, no file I/O.
 
 from __future__ import annotations
 
-from feather_etl.extract_windows import WindowSpec
-from feather_etl.planner import ExtractPlan
-from feather_etl.preflight_banner import _format_wall_time, render
+from feather_flow.extract_windows import WindowSpec
+from feather_flow.planner import ExtractPlan
+from feather_flow.preflight_banner import _format_wall_time, render
 
 
 # ---------------------------------------------------------------------------

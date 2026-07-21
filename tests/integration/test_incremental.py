@@ -8,9 +8,9 @@ from pathlib import Path
 
 import duckdb
 
-from feather_etl.config import load_config
-from feather_etl.pipeline import run_table
-from feather_etl.state import StateManager
+from feather_flow.config import load_config
+from feather_flow.pipeline import run_table
+from feather_flow.state import StateManager
 from tests.helpers import make_curation_entry, write_curation
 
 

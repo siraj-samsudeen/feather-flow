@@ -29,8 +29,8 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from feather_etl.cli import app
-from feather_etl.state import StateManager
+from feather_flow.cli import app
+from feather_flow.state import StateManager
 from tests.helpers import (
     RaisingSource,
     copy_transform_fixture,
@@ -412,7 +412,7 @@ def test_unexpected_config_load_error_returns_exit_2(
     def _boom(*_a, **_kw):
         raise RuntimeError("synthetic config-load failure")
 
-    monkeypatch.setattr("feather_etl.commands.transform._load_and_validate", _boom)
+    monkeypatch.setattr("feather_flow.commands.transform._load_and_validate", _boom)
 
     result = _invoke("transform", "--config", str(project_dir / "feather.yaml"))
     assert result.exit_code == 2
@@ -431,7 +431,7 @@ def test_unreachable_destination_returns_exit_2(
     # Provide bronze so we'd otherwise succeed.
     _populate_bronze_directly(project_dir / "feather_data.duckdb")
 
-    from feather_etl.destinations.duckdb import DuckDBDestination
+    from feather_flow.destinations.duckdb import DuckDBDestination
 
     def _boom(self):
         raise RuntimeError("synthetic destination-open failure")

@@ -7,7 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from feather_etl.sources.sqlserver import SqlServerSource
+from feather_flow.sources.sqlserver import SqlServerSource
 
 
 _CONN_KWARGS = dict(
@@ -76,7 +76,7 @@ def test_extract_batches_delegates_to_transport(monkeypatch, tmp_path: Path) -> 
         yield pa.RecordBatch.from_pylist([{"id": 1}])
 
     monkeypatch.setattr(
-        "feather_etl.transports.pyodbc_transport.PyodbcTransport.stream_batches",
+        "feather_flow.transports.pyodbc_transport.PyodbcTransport.stream_batches",
         fake_stream,
     )
 

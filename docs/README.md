@@ -1,6 +1,6 @@
 # `docs/` — map
 
-Documentation for feather-etl lives here. This file is the map — read it first, then navigate to the folder you need. Each sub-folder has its own `README.md` hub with a one-line summary of every doc in that folder.
+Documentation for feather-flow lives here. This file is the map — read it first, then navigate to the folder you need. Each sub-folder has its own `README.md` hub with a one-line summary of every doc in that folder.
 
 ## Top-level docs (stable, cross-cutting)
 
@@ -8,7 +8,7 @@ Documentation for feather-etl lives here. This file is the map — read it first
 - [`personas.md`](personas.md) — Builder, Analyst, Decision-maker (latent stakeholder), and artifact consumers (human viewer, AI triage agent, future SQLite metadata DB). Every feature design must cite this.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — work conventions: plan-then-code, spec/plan/review artifact chain, commit style.
 - [`research.md`](research.md) — ongoing research notes about ERP sources, data patterns, and scaling considerations.
-- [`testing-feather-etl.md`](testing-feather-etl.md) — testing strategy and patterns.
+- [`testing-feather-flow.md`](testing-feather-flow.md) — testing strategy and patterns.
 
 ## Sub-folders (each has its own `README.md` hub)
 

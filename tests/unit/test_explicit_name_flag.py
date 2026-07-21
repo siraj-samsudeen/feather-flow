@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from feather_etl.config import load_config
-from feather_etl.sources.duckdb_file import DuckDBFileSource
-from feather_etl.sources.postgres import PostgresSource
+from feather_flow.config import load_config
+from feather_flow.sources.duckdb_file import DuckDBFileSource
+from feather_flow.sources.postgres import PostgresSource
 from tests.helpers import write_config
 
 

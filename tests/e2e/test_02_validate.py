@@ -11,7 +11,7 @@ import json
 import yaml
 from typer.testing import CliRunner
 
-from feather_etl.cli import app
+from feather_flow.cli import app
 
 
 def test_validate_missing_config_shows_friendly_error(tmp_path, monkeypatch):
@@ -98,11 +98,11 @@ def test_missing_config_file_shows_friendly_error(project, cli):
 def test_validate_prints_details_on_source_failure(project, cli, monkeypatch):
     """When source.check() fails, the real exception must be surfaced as 'Details: ...'.
 
-    Regression for siraj-samsudeen/feather-etl#2: the CLI used to print only
+    Regression for siraj-samsudeen/feather-flow#2: the CLI used to print only
     'Source connection failed.' and swallow the real error, making remote DB
     misconfig (TLS, creds, driver) impossible to diagnose without code changes.
     """
-    import feather_etl.config as _config_mod
+    import feather_flow.config as _config_mod
 
     project.copy_fixture("client.duckdb")
     project.write_config(

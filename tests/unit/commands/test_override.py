@@ -12,8 +12,8 @@ from pathlib import Path
 import yaml
 from typer.testing import CliRunner
 
-from feather_etl.cli import app
-from feather_etl.state import StateManager
+from feather_flow.cli import app
+from feather_flow.state import StateManager
 
 
 # ---------------------------------------------------------------------------

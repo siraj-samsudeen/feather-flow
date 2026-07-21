@@ -12,9 +12,9 @@ import duckdb
 
 import logging
 
-from feather_etl.config import load_config
-from feather_etl.pipeline import run_table
-from feather_etl.state import StateManager
+from feather_flow.config import load_config
+from feather_flow.pipeline import run_table
+from feather_flow.state import StateManager
 from tests.helpers import make_curation_entry, write_curation
 
 
@@ -117,7 +117,7 @@ def test_schema_drift_check_failure_is_caught_and_logged(
 
     # Make detect_drift raise on the next run. run_table imports detect_drift
     # locally at call time, so patch the definition in schema_drift.
-    import feather_etl.schema_drift as schema_drift_mod
+    import feather_flow.schema_drift as schema_drift_mod
 
     def _boom(*_a, **_kw):
         raise RuntimeError("synthetic drift-check failure")
@@ -134,7 +134,7 @@ def test_schema_drift_check_failure_is_caught_and_logged(
     con.close()
     os.utime(str(sample_erp_db), None)
 
-    with caplog.at_level(logging.WARNING, logger="feather_etl.pipeline"):
+    with caplog.at_level(logging.WARNING, logger="feather_flow.pipeline"):
         second = run_table(cfg, cfg.tables[0], project.root)
 
     # Extract still succeeds despite the failed drift check.

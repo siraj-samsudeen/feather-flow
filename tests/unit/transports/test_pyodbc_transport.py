@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 
-from feather_etl.transports.pyodbc_transport import PyodbcTransport
+from feather_flow.transports.pyodbc_transport import PyodbcTransport
 
 
 FAKE_CONN = "DRIVER={ODBC Driver 18};SERVER=fake;DATABASE=db"
@@ -25,7 +25,7 @@ def test_name_and_does_not_support_partition_on() -> None:
     assert t.supports_partition_on() is False
 
 
-@patch("feather_etl.transports.pyodbc_transport.pyodbc")
+@patch("feather_flow.transports.pyodbc_transport.pyodbc")
 def test_stream_batches_yields_record_batches(mock_pyodbc: MagicMock) -> None:
     cursor = _cursor_with(
         rows=[(1, "a"), (2, "b")],
@@ -59,7 +59,7 @@ def test_stream_batches_yields_record_batches(mock_pyodbc: MagicMock) -> None:
     assert calls[1] == "SELECT id, name FROM x"
 
 
-@patch("feather_etl.transports.pyodbc_transport.pyodbc")
+@patch("feather_flow.transports.pyodbc_transport.pyodbc")
 def test_multi_batch_fetch_yields_one_record_batch_per_chunk(
     mock_pyodbc: MagicMock,
 ) -> None:
@@ -81,7 +81,7 @@ def test_multi_batch_fetch_yields_one_record_batch_per_chunk(
     assert [b.column("id").to_pylist() for b in batches] == [[1], [2], [3, 4]]
 
 
-@patch("feather_etl.transports.pyodbc_transport.pyodbc")
+@patch("feather_flow.transports.pyodbc_transport.pyodbc")
 def test_decimal_and_uuid_are_coerced(mock_pyodbc: MagicMock) -> None:
     import decimal
     import uuid
@@ -108,7 +108,7 @@ def test_decimal_and_uuid_are_coerced(mock_pyodbc: MagicMock) -> None:
     assert batches[0].column("id").to_pylist() == [str(val_uuid)]
 
 
-@patch("feather_etl.transports.pyodbc_transport.pyodbc")
+@patch("feather_flow.transports.pyodbc_transport.pyodbc")
 def test_zero_row_query_yields_schema_only_batch(mock_pyodbc: MagicMock) -> None:
     """Preserves the fetch_batches contract: every call yields >=1 batch
     so the destination's schema-from-first-batch path keeps working."""
@@ -131,7 +131,7 @@ def test_zero_row_query_yields_schema_only_batch(mock_pyodbc: MagicMock) -> None
     assert batches[0].column_names == ["id"]
 
 
-@patch("feather_etl.transports.pyodbc_transport.pyodbc")
+@patch("feather_flow.transports.pyodbc_transport.pyodbc")
 def test_no_description_query_yields_nothing(mock_pyodbc: MagicMock) -> None:
     """e.g. an UPDATE in a query slot — cursor.description is None."""
     cursor = MagicMock()

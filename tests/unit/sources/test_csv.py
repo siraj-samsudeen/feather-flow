@@ -25,19 +25,19 @@ class TestCsvSource:
         return dst
 
     def test_check_valid_directory(self, csv_dir: Path):
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         source = CsvSource(path=csv_dir)
         assert source.check() is True
 
     def test_check_nonexistent_directory(self, tmp_path: Path):
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         source = CsvSource(path=tmp_path / "nope")
         assert source.check() is False
 
     def test_check_file_not_directory(self, tmp_path: Path):
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         file = tmp_path / "not_a_dir.csv"
         file.write_text("a,b\n1,2\n")
@@ -45,7 +45,7 @@ class TestCsvSource:
         assert source.check() is False
 
     def test_detect_changes_first_run(self, csv_dir: Path):
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         source = CsvSource(path=csv_dir)
         result = source.detect_changes("orders.csv")
@@ -56,7 +56,7 @@ class TestCsvSource:
 
     def test_source_path_for_table_per_file(self, csv_dir: Path):
         """CSV source resolves per-file: path/orders.csv, not the directory."""
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         source = CsvSource(path=csv_dir)
         assert source._source_path_for_table("orders.csv") == csv_dir / "orders.csv"
@@ -65,7 +65,7 @@ class TestCsvSource:
 class TestCsvGlobDiscover:
     def test_discover_shows_glob_as_single_table(self, tmp_path: Path):
         """feather discover shows a glob pattern as one logical table."""
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         data_dir = tmp_path / "data"
         shutil.copytree(GLOB_FIXTURES, data_dir)
@@ -80,7 +80,7 @@ class TestCsvGlobExtractErrors:
     def test_extract_glob_with_no_matches_raises(self, tmp_path: Path):
         """Extract against a glob pattern that matches nothing raises
         FileNotFoundError, surfacing a clear message to the caller."""
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         (tmp_path / "data").mkdir()
         source = CsvSource(path=tmp_path / "data")
@@ -90,7 +90,7 @@ class TestCsvGlobExtractErrors:
     def test_get_schema_glob_with_no_matches_returns_empty_list(self, tmp_path: Path):
         """get_schema on an empty glob returns [] (not raises) — caller can
         decide what to do with an empty schema."""
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         (tmp_path / "data").mkdir()
         source = CsvSource(path=tmp_path / "data")
@@ -105,7 +105,7 @@ class TestCsvGlobStateRecovery:
         non-string type), detect_changes treats the run as first-run instead
         of raising — the JSON/Type errors are swallowed and stored_files
         stays empty."""
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         data_dir = tmp_path / "data"
         shutil.copytree(GLOB_FIXTURES, data_dir)

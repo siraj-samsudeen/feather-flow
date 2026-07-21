@@ -12,9 +12,9 @@ def test_dq_results_stored_in_state(tmp_path: Path):
     import yaml
 
     from tests.conftest import FIXTURES_DIR
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_table
-    from feather_etl.state import StateManager
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_table
+    from feather_flow.state import StateManager
     from tests.helpers import make_curation_entry, write_curation
 
     client_db = tmp_path / "client.duckdb"
@@ -55,8 +55,8 @@ def test_dq_failure_does_not_block_pipeline(tmp_path: Path):
     import yaml
 
     from tests.conftest import FIXTURES_DIR
-    from feather_etl.config import load_config
-    from feather_etl.pipeline import run_table
+    from feather_flow.config import load_config
+    from feather_flow.pipeline import run_table
     from tests.helpers import make_curation_entry, write_curation
 
     client_db = tmp_path / "client.duckdb"

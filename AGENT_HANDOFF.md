@@ -27,7 +27,7 @@
 | Artifact                 | Location                                                                       | Role for this task                                                                                 |
 | ------------------------ | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
 | Layout convention doc    | `docs/conventions/code-layout.md`                                              | The template to apply; read first.                                                                 |
-| Reference implementation | `src/feather_etl/discover.py`                                                  | Canonical example of the template; study before reformatting others.                               |
+| Reference implementation | `src/feather_flow/discover.py`                                                  | Canonical example of the template; study before reformatting others.                               |
 | Issue #26 context        | `docs/issues/26-discover-views.md`                                             | Background on why these files are being touched; do NOT implement these requirements in this task. |
 
 ---
@@ -37,14 +37,14 @@
 - `uv run pytest -q` must be green before starting. Expected: `770 passed, 16 skipped`. The 16 skips are environmental (Postgres + SQL Server not running locally); see issue #48.
 - Run `uv run pytest -q` after each file touched. Same baseline expected every time. Red → stop, diagnose, do not push through.
 - Read `docs/conventions/code-layout.md` in full before editing any file.
-- Open `src/feather_etl/discover.py` and mentally map each region to the template sections.
+- Open `src/feather_flow/discover.py` and mentally map each region to the template sections.
 
 ---
 
 ## Where to start
 
 1. **Read** `docs/conventions/code-layout.md`. It is self-contained; vault access is not required.
-2. **Study** `src/feather_etl/discover.py` as the working example.
+2. **Study** `src/feather_flow/discover.py` as the working example.
 3. **Refactor `run_discover`** into named step functions. Incrementally — one extract at a time, tests between each. Target: a `run_discover` body that reads like a TOC of named steps. Accept the two coverage gaps explicitly.
 4. **Batch-reformat the 12 source files** (listed below). Apply the template. Run tests after each.
 5. **Reformat the test files** (listed below) using the same template where it applies. Run tests after each.
@@ -53,18 +53,18 @@
 
 ## Source files in scope (12; `discover.py` already done)
 
-- `src/feather_etl/sources/__init__.py` — Source protocol, `StreamSchema`
-- `src/feather_etl/sources/file_source.py` — base for sqlite + duckdb_file
-- `src/feather_etl/sources/database_source.py` — base for postgres / sqlserver / mysql
-- `src/feather_etl/sources/sqlite.py`
-- `src/feather_etl/sources/postgres.py`
-- `src/feather_etl/sources/sqlserver.py`
-- `src/feather_etl/sources/mysql.py`
-- `src/feather_etl/sources/duckdb_file.py`
-- `src/feather_etl/sources/expand.py`
-- `src/feather_etl/discover_state.py`
-- `src/feather_etl/commands/discover.py` — Typer wrapper
-- `src/feather_etl/viewer_server.py`
+- `src/feather_flow/sources/__init__.py` — Source protocol, `StreamSchema`
+- `src/feather_flow/sources/file_source.py` — base for sqlite + duckdb_file
+- `src/feather_flow/sources/database_source.py` — base for postgres / sqlserver / mysql
+- `src/feather_flow/sources/sqlite.py`
+- `src/feather_flow/sources/postgres.py`
+- `src/feather_flow/sources/sqlserver.py`
+- `src/feather_flow/sources/mysql.py`
+- `src/feather_flow/sources/duckdb_file.py`
+- `src/feather_flow/sources/expand.py`
+- `src/feather_flow/discover_state.py`
+- `src/feather_flow/commands/discover.py` — Typer wrapper
+- `src/feather_flow/viewer_server.py`
 
 ---
 

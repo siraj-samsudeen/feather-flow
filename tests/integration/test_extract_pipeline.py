@@ -1,4 +1,4 @@
-"""Integration: feather_etl.extract.run_extract — bronze extractor.
+"""Integration: feather_flow.extract.run_extract — bronze extractor.
 
 Exercises extract + config + state + destinations cross-module behavior.
 All tests invoke extract.run_extract directly; the CLI counterpart lives
@@ -13,8 +13,8 @@ from __future__ import annotations
 import duckdb
 import pytest
 
-from feather_etl.config import load_config
-from feather_etl.extract import run_extract
+from feather_flow.config import load_config
+from feather_flow.extract import run_extract
 from tests.db_bootstrap import MYSQL_ADMIN_KWARGS, mysql_marker
 from tests.helpers import make_curation_entry, write_curation
 

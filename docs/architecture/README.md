@@ -1,6 +1,6 @@
 # Architecture
 
-Project-level architectural decisions for feather-etl. Every doc here captures a decision with long half-life — something that shapes many features, not a single implementation.
+Project-level architectural decisions for feather-flow. Every doc here captures a decision with long half-life — something that shapes many features, not a single implementation.
 
 Read the relevant doc before making a decision in its domain. Cite it by filename and version in feature specs and plans.
 

@@ -14,7 +14,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from feather_etl.state import VALID_TRIGGERS, StateManager
+from feather_flow.state import VALID_TRIGGERS, StateManager
 
 
 def _columns_of(state_path: Path, table: str) -> list[str]:
@@ -195,7 +195,7 @@ def _seed_mixed_history(state_path: Path) -> StateManager:
 
 
 def test_load_history_with_trigger_returns_only_matching_rows(tmp_path: Path):
-    from feather_etl.history import load_history
+    from feather_flow.history import load_history
 
     state_path = tmp_path / "state.duckdb"
     _seed_mixed_history(state_path)
@@ -207,7 +207,7 @@ def test_load_history_with_trigger_returns_only_matching_rows(tmp_path: Path):
 
 
 def test_load_history_unfiltered_includes_null_trigger_rows(tmp_path: Path):
-    from feather_etl.history import load_history
+    from feather_flow.history import load_history
 
     state_path = tmp_path / "state.duckdb"
     _seed_mixed_history(state_path)

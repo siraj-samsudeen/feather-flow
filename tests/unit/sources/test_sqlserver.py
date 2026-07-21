@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pyarrow as pa
 import pytest
 
-from feather_etl.sources.sqlserver import SqlServerSource
+from feather_flow.sources.sqlserver import SqlServerSource
 from tests.helpers import write_config
 
 FAKE_CONN_STR = "DRIVER={ODBC Driver 18};SERVER=fake;DATABASE=testdb"
@@ -25,7 +25,7 @@ def source() -> SqlServerSource:
 # --- extract ---
 
 
-@patch("feather_etl.transports.pyodbc_transport.pyodbc")
+@patch("feather_flow.transports.pyodbc_transport.pyodbc")
 def test_sqlserver_full_extract_loads_rows(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -55,7 +55,7 @@ def test_sqlserver_full_extract_loads_rows(
     mock_cursor.execute.assert_any_call("SET NOCOUNT ON")
 
 
-@patch("feather_etl.transports.pyodbc_transport.pyodbc")
+@patch("feather_flow.transports.pyodbc_transport.pyodbc")
 def test_sqlserver_incremental_extract_with_watermark(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -87,7 +87,7 @@ def test_sqlserver_incremental_extract_with_watermark(
     assert "updated_at > '2026-03-26'" in query_call[0]
 
 
-@patch("feather_etl.transports.pyodbc_transport.pyodbc")
+@patch("feather_flow.transports.pyodbc_transport.pyodbc")
 def test_sqlserver_extract_with_filter_and_columns(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -118,7 +118,7 @@ def test_sqlserver_extract_with_filter_and_columns(
     assert "status = 'active'" in query_call[0]
 
 
-@patch("feather_etl.transports.pyodbc_transport.pyodbc")
+@patch("feather_flow.transports.pyodbc_transport.pyodbc")
 def test_sqlserver_empty_table(mock_pyodbc: MagicMock, source: SqlServerSource) -> None:
     """Extract on empty table returns empty table with correct schema."""
     mock_cursor = MagicMock()
@@ -141,7 +141,7 @@ def test_sqlserver_empty_table(mock_pyodbc: MagicMock, source: SqlServerSource) 
 # --- change detection ---
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_change_detection_first_run(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -160,7 +160,7 @@ def test_sqlserver_change_detection_first_run(
     assert result.metadata["row_count"] == 100
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_change_detection_skip(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -178,7 +178,7 @@ def test_sqlserver_change_detection_skip(
     assert result.reason == "unchanged"
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_change_detection_changed(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -216,7 +216,7 @@ def test_sqlserver_change_detection_incremental_always_changed(
 # --- discover ---
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_discover_returns_schemas(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -251,7 +251,7 @@ def test_sqlserver_discover_returns_schemas(
 # --- get_schema ---
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_get_schema(mock_pyodbc: MagicMock, source: SqlServerSource) -> None:
     """get_schema returns column list for a single table."""
     mock_cursor = MagicMock()
@@ -265,7 +265,7 @@ def test_sqlserver_get_schema(mock_pyodbc: MagicMock, source: SqlServerSource) -
     assert cols == [("id", "int"), ("name", "nvarchar")]
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_get_schema_unqualified(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -287,7 +287,7 @@ def test_sqlserver_get_schema_unqualified(
 # --- connection ---
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_check_success(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -299,7 +299,7 @@ def test_sqlserver_check_success(
     mock_conn.close.assert_called_once()
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_connection_failure(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -316,8 +316,8 @@ def test_sqlserver_connection_failure(
     )
 
 
-@patch("feather_etl.sources.sqlserver.platform.system", return_value="Darwin")
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.platform.system", return_value="Darwin")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_missing_driver18_open_lib_adds_hint(
     mock_pyodbc: MagicMock, _mock_platform_system: MagicMock, source: SqlServerSource
 ) -> None:
@@ -333,8 +333,8 @@ def test_sqlserver_missing_driver18_open_lib_adds_hint(
     assert "brew install msodbcsql18" in source._last_error
 
 
-@patch("feather_etl.sources.sqlserver.platform.system", return_value="Windows")
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.platform.system", return_value="Windows")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_im002_with_driver18_adds_hint(
     mock_pyodbc: MagicMock, _mock_platform_system: MagicMock, source: SqlServerSource
 ) -> None:
@@ -350,8 +350,8 @@ def test_sqlserver_im002_with_driver18_adds_hint(
     assert "download-odbc-driver-for-sql-server" in source._last_error
 
 
-@patch("feather_etl.sources.sqlserver.platform.system", return_value="Windows")
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.platform.system", return_value="Windows")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_im002_for_dsn_does_not_add_driver18_hint(
     mock_pyodbc: MagicMock, _mock_platform_system: MagicMock
 ) -> None:
@@ -370,7 +370,7 @@ def test_sqlserver_im002_for_dsn_does_not_add_driver18_hint(
     )
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_check_success_clears_last_error(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -393,14 +393,14 @@ def test_sqlserver_check_success_clears_last_error(
 
 def test_registry_creates_sqlserver_source() -> None:
     """Registry resolves SqlServerSource when type is 'sqlserver'."""
-    from feather_etl.sources.registry import get_source_class
-    from feather_etl.sources.sqlserver import SqlServerSource as _Cls
+    from feather_flow.sources.registry import get_source_class
+    from feather_flow.sources.sqlserver import SqlServerSource as _Cls
 
     assert get_source_class("sqlserver") is _Cls
 
 
 def test_sqlserver_connection_string_builder_trusts_self_signed_cert(tmp_path) -> None:
-    """Regression for siraj-samsudeen/feather-etl#3.
+    """Regression for siraj-samsudeen/feather-flow#3.
 
     Driver 18 enforces strict TLS validation by default, so connecting to a
     SQL Server with a self-signed cert fails with "certificate verify failed".
@@ -408,7 +408,7 @@ def test_sqlserver_connection_string_builder_trusts_self_signed_cert(tmp_path) -
     so that on-prem ERP servers work out of the box. Users who want strict TLS
     can override by providing a raw `connection_string:` in feather.yaml.
     """
-    from feather_etl.config import load_config
+    from feather_flow.config import load_config
 
     from tests.helpers import make_curation_entry, write_curation
 
@@ -440,7 +440,7 @@ def test_sqlserver_connection_string_builder_trusts_self_signed_cert(tmp_path) -
 
 def test_config_validation_sqlserver_requires_connection_string(tmp_path) -> None:
     """Config validation rejects sqlserver without connection_string."""
-    from feather_etl.config import load_config
+    from feather_flow.config import load_config
 
     cfg = {
         "sources": [{"type": "sqlserver"}],
@@ -494,7 +494,7 @@ def test_build_where_clause_both(source: SqlServerSource) -> None:
 
 class TestSqlServerFromYaml:
     def test_minimal_db_entry_builds_connection_string(self):
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         entry = {
             "name": "erp",
@@ -514,7 +514,7 @@ class TestSqlServerFromYaml:
         assert "DATABASE=SALES" in src.connection_string
 
     def test_explicit_port(self):
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         entry = {
             "name": "erp",
@@ -530,7 +530,7 @@ class TestSqlServerFromYaml:
         assert "SERVER=h,1444" in src.connection_string
 
     def test_databases_list(self):
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         entry = {
             "name": "erp",
@@ -545,7 +545,7 @@ class TestSqlServerFromYaml:
         assert src.databases == ["A", "B"]
 
     def test_database_xor_databases_both(self):
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         entry = {
             "name": "erp",
@@ -560,7 +560,7 @@ class TestSqlServerFromYaml:
             SqlServerSource.from_yaml(entry, Path("."))
 
     def test_databases_empty_list(self):
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         entry = {
             "name": "erp",
@@ -574,7 +574,7 @@ class TestSqlServerFromYaml:
             SqlServerSource.from_yaml(entry, Path("."))
 
     def test_explicit_connection_string_overrides(self):
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         entry = {
             "name": "erp",
@@ -587,13 +587,13 @@ class TestSqlServerFromYaml:
 
 class TestSqlServerValidateSourceTable:
     def test_schema_dot_table_ok(self):
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource(connection_string="dummy", name="x")
         assert src.validate_source_table("dbo.MyTable") == []
 
     def test_plain_table_ok(self):
-        from feather_etl.sources.sqlserver import SqlServerSource
+        from feather_flow.sources.sqlserver import SqlServerSource
 
         src = SqlServerSource(connection_string="dummy", name="x")
         assert src.validate_source_table("MyTable") == []
@@ -602,7 +602,7 @@ class TestSqlServerValidateSourceTable:
 class TestSqlServerListDatabases:
     def test_query_filters_system_dbs(self, monkeypatch):
         """Should run a query against sys.databases excluding master/tempdb/model/msdb."""
-        from feather_etl.sources import sqlserver as ss
+        from feather_flow.sources import sqlserver as ss
 
         captured_sql: list[str] = []
 
@@ -635,7 +635,7 @@ class TestSqlServerListDatabases:
             assert f"'{sysdb}'" in captured_sql[0]
 
     def test_propagates_pyodbc_error(self, monkeypatch):
-        from feather_etl.sources import sqlserver as ss
+        from feather_flow.sources import sqlserver as ss
 
         def raise_(*a, **k):
             raise ss.pyodbc.Error("Login failed")
@@ -655,7 +655,7 @@ class TestIsMissingOdbcDriver18Error:
     def test_file_not_found_with_explicit_driver18(self):
         """The ``file not found`` branch returns True when the error + conn
         string both mention Driver 18."""
-        from feather_etl.sources.sqlserver import _is_missing_odbc_driver_18_error
+        from feather_flow.sources.sqlserver import _is_missing_odbc_driver_18_error
 
         assert (
             _is_missing_odbc_driver_18_error(
@@ -668,7 +668,7 @@ class TestIsMissingOdbcDriver18Error:
     def test_unrelated_error_returns_false(self):
         """A generic network error that doesn't mention any Driver-18 hints
         should NOT be mis-attributed to a missing driver."""
-        from feather_etl.sources.sqlserver import _is_missing_odbc_driver_18_error
+        from feather_flow.sources.sqlserver import _is_missing_odbc_driver_18_error
 
         assert (
             _is_missing_odbc_driver_18_error(
@@ -684,8 +684,8 @@ class TestIsMissingOdbcDriver18Error:
 # ---------------------------------------------------------------------------
 
 
-@patch("feather_etl.sources.sqlserver.platform.system", return_value="Linux")
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.platform.system", return_value="Linux")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_missing_driver18_on_linux_adds_linux_hint(
     mock_pyodbc: MagicMock, _mock_platform: MagicMock, source: SqlServerSource
 ) -> None:
@@ -706,7 +706,7 @@ def test_sqlserver_missing_driver18_on_linux_adds_linux_hint(
 # ---------------------------------------------------------------------------
 
 
-@patch("feather_etl.transports.pyodbc_transport.pyodbc")
+@patch("feather_flow.transports.pyodbc_transport.pyodbc")
 def test_sqlserver_extract_description_none_returns_empty_table(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -727,7 +727,7 @@ def test_sqlserver_extract_description_none_returns_empty_table(
     mock_conn.close.assert_called_once()
 
 
-@patch("feather_etl.transports.pyodbc_transport.pyodbc")
+@patch("feather_flow.transports.pyodbc_transport.pyodbc")
 def test_sqlserver_extract_coerces_decimal_and_uuid(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -762,7 +762,7 @@ def test_sqlserver_extract_coerces_decimal_and_uuid(
 # ---------------------------------------------------------------------------
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_detect_changes_checksum_error_on_pyodbc_error(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -776,7 +776,7 @@ def test_sqlserver_detect_changes_checksum_error_on_pyodbc_error(
     assert result.reason == "checksum_error"
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_detect_changes_first_run_when_row_is_none(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -803,7 +803,7 @@ def test_sqlserver_detect_changes_first_run_when_row_is_none(
 # ---------------------------------------------------------------------------
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_discover_populates_pk_single_column(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -828,7 +828,7 @@ def test_sqlserver_discover_populates_pk_single_column(
     assert schemas[0].primary_key == ["id"]
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_discover_populates_pk_composite(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -853,7 +853,7 @@ def test_sqlserver_discover_populates_pk_composite(
     assert schemas[0].primary_key == ["order_id", "item_id"]
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_discover_no_pk_returns_none(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -874,7 +874,7 @@ def test_sqlserver_discover_no_pk_returns_none(
     assert schemas[0].primary_key is None
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_discover_pk_permission_error_falls_back_to_none(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -924,7 +924,7 @@ def test_sqlserver_discover_pk_permission_error_falls_back_to_none(
 # ---------------------------------------------------------------------------
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_cheap_rowcount_returns_int(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -949,7 +949,7 @@ def test_sqlserver_cheap_rowcount_returns_int(
 # ---------------------------------------------------------------------------
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_get_window_range_returns_min_max(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -970,7 +970,7 @@ def test_sqlserver_get_window_range_returns_min_max(
     assert result[1] == datetime.datetime(2026, 5, 15)
 
 
-@patch("feather_etl.sources.sqlserver.pyodbc")
+@patch("feather_flow.sources.sqlserver.pyodbc")
 def test_sqlserver_get_window_range_empty_table_returns_none(
     mock_pyodbc: MagicMock, source: SqlServerSource
 ) -> None:
@@ -995,7 +995,7 @@ def test_sqlserver_get_window_range_rejects_invalid_column(
 
 
 class TestSqlServerColumnQuoting:
-    @patch("feather_etl.transports.pyodbc_transport.pyodbc")
+    @patch("feather_flow.transports.pyodbc_transport.pyodbc")
     def test_columns_are_bracket_quoted(self, mock_pyodbc, source):
         mock_cursor = MagicMock()
         mock_cursor.description = [
@@ -1012,12 +1012,12 @@ class TestSqlServerColumnQuoting:
         query = executed[1][0][0]
         assert "[Invoice Date], [Quantity]" in query
 
-    @patch("feather_etl.transports.pyodbc_transport.pyodbc")
+    @patch("feather_flow.transports.pyodbc_transport.pyodbc")
     def test_columns_with_bracket_rejected(self, mock_pyodbc, source):
         with pytest.raises(ValueError, match="cannot be bracket-quoted"):
             source.extract("dbo.Sales", columns=["col]name"])
 
-    @patch("feather_etl.transports.pyodbc_transport.pyodbc")
+    @patch("feather_flow.transports.pyodbc_transport.pyodbc")
     def test_columns_none_uses_star(self, mock_pyodbc, source):
         mock_cursor = MagicMock()
         mock_cursor.description = [

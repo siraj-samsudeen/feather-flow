@@ -228,7 +228,7 @@ def test_full_onboarding_flow(project, cli, monkeypatch):
 
     # --- 4. feather discover ---
     monkeypatch.chdir(project_dir)
-    import feather_etl.commands.discover as discover_cmd
+    import feather_flow.commands.discover as discover_cmd
 
     monkeypatch.setattr(discover_cmd, "serve_and_open", lambda *args, **kwargs: None)
     result = cli("discover", config=config_path)

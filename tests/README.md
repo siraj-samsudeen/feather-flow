@@ -1,4 +1,4 @@
-# feather-etl test suite
+# feather-flow test suite
 
 This directory is organised by **what a test exercises**, not by what source
 file it happens to cover. The three-way layout mirrors the classic test
@@ -6,7 +6,7 @@ pyramid:
 
 - `tests/e2e/` — CLI journeys; reading top-to-bottom = user story.
 - `tests/integration/` — multi-module slices invoked via the Python API.
-- `tests/unit/` — single-module tests, mirroring `src/feather_etl/`.
+- `tests/unit/` — single-module tests, mirroring `src/feather_flow/`.
 
 > **Migration status (2026-04-19):** Wave A of issue #40 is complete. The
 > `e2e/`, `integration/`, and `unit/` trees exist but are mostly empty;
@@ -21,14 +21,14 @@ For any new or existing test, ask in order:
    spawns the `feather` binary via subprocess) → `tests/e2e/`. File chosen
    by workflow stage (`test_02_validate.py`, `test_04_extract_full.py`,
    etc. — see the list below).
-2. **Does it exercise 2+ modules from `src/feather_etl/` through a
+2. **Does it exercise 2+ modules from `src/feather_flow/` through a
    pipeline-level API** (e.g., `pipeline.run_pipeline()`,
    `extract.run_extract()`)? → `tests/integration/`. File chosen by
    feature/capability (`test_incremental.py`, `test_schema_drift.py`,
    etc.).
 3. **Otherwise — exercises a single module's functions/classes** →
    `tests/unit/`. File mirrors the source path:
-   `src/feather_etl/sources/csv.py` → `tests/unit/sources/test_csv.py`.
+   `src/feather_flow/sources/csv.py` → `tests/unit/sources/test_csv.py`.
 
 `CliRunner` alone makes a test e2e even when it only tests one command;
 that is intentional.

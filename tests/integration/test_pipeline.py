@@ -1,4 +1,4 @@
-"""Integration: feather_etl.pipeline — run_table and run_all orchestration across sources, destinations, and state."""
+"""Integration: feather_flow.pipeline — run_table and run_all orchestration across sources, destinations, and state."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ import time
 
 import duckdb
 
-from feather_etl.config import load_config
-from feather_etl.pipeline import run_all, run_table
-from feather_etl.state import StateManager
+from feather_flow.config import load_config
+from feather_flow.pipeline import run_all, run_table
+from feather_flow.state import StateManager
 
 
 def _setup_project(project):

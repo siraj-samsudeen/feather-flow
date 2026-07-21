@@ -21,7 +21,7 @@ from tests.db_bootstrap import MYSQL_CONN_KWARGS, mysql_marker
 
 class TestMySQLFromYaml:
     def test_minimal_entry_builds_connect_kwargs(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         entry = {
             "name": "wh",
@@ -43,7 +43,7 @@ class TestMySQLFromYaml:
         assert src._connect_kwargs["password"] == "p"
 
     def test_explicit_port(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         entry = {
             "name": "wh",
@@ -59,7 +59,7 @@ class TestMySQLFromYaml:
         assert src._connect_kwargs["port"] == 3307
 
     def test_explicit_connection_string(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         entry = {
             "name": "wh",
@@ -70,7 +70,7 @@ class TestMySQLFromYaml:
         assert src.connection_string == "host=raw;database=verbatim"
 
     def test_databases_list_and_xor_rules(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         ok = {
             "name": "wh",
@@ -90,7 +90,7 @@ class TestMySQLFromYaml:
             MySQLSource.from_yaml({**ok, "databases": []}, Path("."))
 
     def test_missing_host_and_connection_string_raises(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         with pytest.raises(ValueError, match="requires either"):
             MySQLSource.from_yaml({"name": "x", "type": "mysql"}, Path("."))
@@ -109,7 +109,7 @@ class TestMySQLConnectKwargs:
     destination DuckDB as BLOB. See issue #52."""
 
     def test_host_form_sets_charset_and_use_unicode(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource.from_yaml(
             {
@@ -129,7 +129,7 @@ class TestMySQLConnectKwargs:
         """The multi-DB form must also carry charset settings — when
         ``resolve_source`` binds a child per ``source_db``, the child is
         built via the same ``from_yaml`` host branch."""
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource.from_yaml(
             {
@@ -150,7 +150,7 @@ class TestMySQLConnectKwargs:
         charset there — operators using an explicit connection string are
         responsible for including ``charset=utf8mb4;use_unicode=True`` in
         the string themselves."""
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource.from_yaml(
             {
@@ -178,7 +178,7 @@ class TestMySQLFieldTypeToArrow:
         import pyarrow as pa
         from mysql.connector.constants import FieldFlag
 
-        from feather_etl.sources.mysql import _mysql_field_type_to_arrow
+        from feather_flow.sources.mysql import _mysql_field_type_to_arrow
 
         # type code 252 = BLOB/TEXT, BINARY flag set → real binary
         assert _mysql_field_type_to_arrow(252, FieldFlag.BINARY) == pa.binary()
@@ -187,7 +187,7 @@ class TestMySQLFieldTypeToArrow:
         """The TEXT case: same type code 252, but no BINARY flag."""
         import pyarrow as pa
 
-        from feather_etl.sources.mysql import _mysql_field_type_to_arrow
+        from feather_flow.sources.mysql import _mysql_field_type_to_arrow
 
         assert _mysql_field_type_to_arrow(252, 0) == pa.string()
 
@@ -195,7 +195,7 @@ class TestMySQLFieldTypeToArrow:
         import pyarrow as pa
         from mysql.connector.constants import FieldFlag
 
-        from feather_etl.sources.mysql import _mysql_field_type_to_arrow
+        from feather_flow.sources.mysql import _mysql_field_type_to_arrow
 
         # 249 = TINY_BLOB / TINYTEXT
         assert _mysql_field_type_to_arrow(249, FieldFlag.BINARY) == pa.binary()
@@ -211,7 +211,7 @@ class TestMySQLFieldTypeToArrow:
         """Code 253 = VAR_STRING (the actual VARCHAR wire type). Always string."""
         import pyarrow as pa
 
-        from feather_etl.sources.mysql import _mysql_field_type_to_arrow
+        from feather_flow.sources.mysql import _mysql_field_type_to_arrow
 
         assert _mysql_field_type_to_arrow(253, 0) == pa.string()
 
@@ -219,7 +219,7 @@ class TestMySQLFieldTypeToArrow:
         """Code 254 = STRING (CHAR). Always string."""
         import pyarrow as pa
 
-        from feather_etl.sources.mysql import _mysql_field_type_to_arrow
+        from feather_flow.sources.mysql import _mysql_field_type_to_arrow
 
         assert _mysql_field_type_to_arrow(254, 0) == pa.string()
 
@@ -229,7 +229,7 @@ class TestMySQLFieldTypeToArrow:
         import pyarrow as pa
         from mysql.connector.constants import FieldFlag
 
-        from feather_etl.sources.mysql import _mysql_field_type_to_arrow
+        from feather_flow.sources.mysql import _mysql_field_type_to_arrow
 
         # code 3 = LONG → int64 regardless of flags
         assert _mysql_field_type_to_arrow(3, 0) == pa.int64()
@@ -243,26 +243,26 @@ class TestMySQLFieldTypeToArrow:
 
 class TestMySQLSourceUnit:
     def test_source_type_is_mysql(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         assert MySQLSource.type == "mysql"
 
     def test_watermark_passthrough(self):
         """MySQLSource uses the default _format_watermark (ISO unchanged)."""
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource(connection_string="dummy")
         assert src._format_watermark("2026-01-01T10:00:00") == "2026-01-01T10:00:00"
 
     def test_build_where_filter_only(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource(connection_string="dummy")
         result = src._build_where_clause(filter="active = 1")
         assert result == " WHERE (active = 1)"
 
     def test_build_where_watermark_only(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource(connection_string="dummy")
         result = src._build_where_clause(
@@ -271,7 +271,7 @@ class TestMySQLSourceUnit:
         assert result == " WHERE modified_at > '2026-01-01'"
 
     def test_build_where_both(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource(connection_string="dummy")
         result = src._build_where_clause(
@@ -284,13 +284,13 @@ class TestMySQLSourceUnit:
 
 class TestMySQLValidateSourceTable:
     def test_plain_table_ok(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource(connection_string="dummy", name="x")
         assert src.validate_source_table("orders") == []
 
     def test_qualified_table_ok(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource(connection_string="dummy", name="x")
         assert src.validate_source_table("mydb.orders") == []
@@ -306,8 +306,8 @@ mysql_db = mysql_marker()
 
 class TestMySQLCheckLastError:
     def test_check_failure_populates_last_error(self, monkeypatch):
-        from feather_etl.sources import mysql as mysql_mod
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources import mysql as mysql_mod
+        from feather_flow.sources.mysql import MySQLSource
 
         def boom(**kwargs):
             raise mysql_mod.mysql.connector.Error("Access denied for user 'root'")
@@ -321,8 +321,8 @@ class TestMySQLCheckLastError:
         assert "Access denied" in src._last_error
 
     def test_check_success_clears_last_error(self, monkeypatch):
-        from feather_etl.sources import mysql as mysql_mod
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources import mysql as mysql_mod
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource(connection_string="dummy")
         src._connect_kwargs = {"host": "localhost"}
@@ -348,7 +348,7 @@ class TestMySQLCheckLastError:
 class TestMySQLDiscoverIntegration:
     @pytest.fixture
     def source(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource(connection_string="")
         src._connect_kwargs = MYSQL_CONN_KWARGS
@@ -390,7 +390,7 @@ class TestMySQLDiscoverIntegration:
 class TestMySQLGetSchemaIntegration:
     @pytest.fixture
     def source(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource(connection_string="")
         src._connect_kwargs = MYSQL_CONN_KWARGS
@@ -423,7 +423,7 @@ class TestMySQLGetSchemaIntegration:
 class TestMySQLExtractIntegration:
     @pytest.fixture
     def source(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource(connection_string="")
         src._connect_kwargs = MYSQL_CONN_KWARGS
@@ -478,7 +478,7 @@ class TestMySQLExtractIntegration:
 class TestMySQLDetectChangesIntegration:
     @pytest.fixture
     def source(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource(connection_string="")
         src._connect_kwargs = MYSQL_CONN_KWARGS
@@ -516,8 +516,8 @@ class TestMySQLDetectChangesIntegration:
 
 class TestMySQLListDatabases:
     def test_query_filters_system_dbs(self, monkeypatch):
-        from feather_etl.sources import mysql as mysql_mod
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources import mysql as mysql_mod
+        from feather_flow.sources.mysql import MySQLSource
 
         captured_sql: list[str] = []
 
@@ -555,8 +555,8 @@ class TestMySQLListDatabases:
         assert "sys" in sql
 
     def test_propagates_connector_error(self, monkeypatch):
-        from feather_etl.sources import mysql as mysql_mod
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources import mysql as mysql_mod
+        from feather_flow.sources.mysql import MySQLSource
 
         def raise_(**k):
             raise mysql_mod.mysql.connector.Error("connection refused")
@@ -575,8 +575,8 @@ class TestMySQLListDatabases:
 
 class TestMySQLRegistry:
     def test_source_in_registry(self):
-        from feather_etl.sources.mysql import MySQLSource
-        from feather_etl.sources.registry import get_source_class
+        from feather_flow.sources.mysql import MySQLSource
+        from feather_flow.sources.registry import get_source_class
 
         assert get_source_class("mysql") is MySQLSource
 
@@ -588,7 +588,7 @@ class TestMySQLRegistry:
 
 class TestMySQLDiscoverGuard:
     def test_discover_without_database_raises(self):
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         src = MySQLSource(connection_string="dummy")
         with pytest.raises(ValueError, match="requires database"):
@@ -604,8 +604,8 @@ class TestMySQLConnectFallback:
     def test_connect_uses_connection_string_when_kwargs_empty(self, monkeypatch):
         """When ``_connect_kwargs`` is empty, _connect falls back to passing
         ``connection_string=...`` to ``mysql.connector.connect``."""
-        from feather_etl.sources import mysql as mysql_mod
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources import mysql as mysql_mod
+        from feather_flow.sources.mysql import MySQLSource
 
         captured: dict = {}
 
@@ -639,8 +639,8 @@ class TestMySQLExtractEdgeCases:
         empty arrow table."""
         import pyarrow as pa
 
-        from feather_etl.sources import mysql as mysql_mod
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources import mysql as mysql_mod
+        from feather_flow.sources.mysql import MySQLSource
 
         cursor_closed: list[bool] = []
 
@@ -681,7 +681,7 @@ class TestMySQLExtractEdgeCases:
 
 class TestMySQLDetectChangesMocked:
     def _install_conn(self, monkeypatch, cursor_factory):
-        from feather_etl.sources import mysql as mysql_mod
+        from feather_flow.sources import mysql as mysql_mod
 
         class FakeConn:
             def cursor(self):
@@ -697,8 +697,8 @@ class TestMySQLDetectChangesMocked:
     def test_checksum_error_when_connector_raises(self, monkeypatch):
         """A mysql.connector.Error while running CHECKSUM TABLE is swallowed
         and surfaces as ``ChangeResult(changed=True, reason='checksum_error')``."""
-        from feather_etl.sources import mysql as mysql_mod
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources import mysql as mysql_mod
+        from feather_flow.sources.mysql import MySQLSource
 
         def raise_(**k):
             raise mysql_mod.mysql.connector.Error("server gone")
@@ -716,7 +716,7 @@ class TestMySQLDetectChangesMocked:
     def test_first_run_when_checksum_row_is_none(self, monkeypatch):
         """If CHECKSUM TABLE yields no row (fetchone() is None), detect_changes
         treats it as first_run to be safe."""
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         class FakeCursor:
             _calls = 0
@@ -745,7 +745,7 @@ class TestMySQLDetectChangesMocked:
     def test_checksum_changed_metadata_populated(self, monkeypatch):
         """When last_checksum differs, detect_changes reports
         ``checksum_changed`` with the fresh checksum + row count."""
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources.mysql import MySQLSource
 
         class FakeCursor:
             _calls = 0
@@ -784,8 +784,8 @@ class TestMySQLDetectChangesMocked:
 
 class TestMySQLColumnQuoting:
     def test_columns_are_backtick_quoted(self, monkeypatch):
-        from feather_etl.sources import mysql as mysql_mod
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources import mysql as mysql_mod
+        from feather_flow.sources.mysql import MySQLSource
 
         captured_sql: list[str] = []
 
@@ -822,8 +822,8 @@ class TestMySQLColumnQuoting:
         assert any("`Invoice Date`, `Quantity`" in sql for sql in captured_sql)
 
     def test_columns_with_backtick_rejected(self, monkeypatch):
-        from feather_etl.sources import mysql as mysql_mod
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources import mysql as mysql_mod
+        from feather_flow.sources.mysql import MySQLSource
 
         # Must monkeypatch connect to prevent real connection attempt
         # Even though validation happens before connect, other tests may
@@ -838,8 +838,8 @@ class TestMySQLColumnQuoting:
             src.extract("erp_sales", columns=["col`name"])
 
     def test_columns_none_uses_star(self, monkeypatch):
-        from feather_etl.sources import mysql as mysql_mod
-        from feather_etl.sources.mysql import MySQLSource
+        from feather_flow.sources import mysql as mysql_mod
+        from feather_flow.sources.mysql import MySQLSource
 
         captured_sql: list[str] = []
 
@@ -882,7 +882,7 @@ def test_mysql_discover_populates_pk() -> None:
     """discover() sets primary_key=[col] when one PK column is returned."""
     from unittest.mock import MagicMock, patch
 
-    from feather_etl.sources.mysql import MySQLSource
+    from feather_flow.sources.mysql import MySQLSource
 
     mock_cursor = MagicMock()
     # fetchall call sequence:
@@ -917,7 +917,7 @@ def test_mysql_cheap_rowcount_returns_estimate() -> None:
     """cheap_rowcount() queries INFORMATION_SCHEMA.TABLES.TABLE_ROWS and returns int."""
     from unittest.mock import MagicMock, patch
 
-    from feather_etl.sources.mysql import MySQLSource
+    from feather_flow.sources.mysql import MySQLSource
 
     mock_cursor = MagicMock()
     mock_cursor.fetchone.return_value = (75000,)
@@ -945,7 +945,7 @@ def test_mysql_get_window_range_returns_min_max() -> None:
     import datetime
     from unittest.mock import MagicMock, patch
 
-    from feather_etl.sources.mysql import MySQLSource
+    from feather_flow.sources.mysql import MySQLSource
 
     mock_cursor = MagicMock()
     mock_cursor.fetchone.return_value = (

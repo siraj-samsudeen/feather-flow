@@ -9,7 +9,7 @@ from typing import Iterator
 import pyarrow as pa
 import pytest
 
-from feather_etl.transports.base import _emit_heartbeats
+from feather_flow.transports.base import _emit_heartbeats
 
 
 def _batch(n: int) -> pa.RecordBatch:
@@ -31,7 +31,7 @@ def test_passthrough_yields_all_batches() -> None:
 
 
 def test_row_threshold_emits_heartbeat(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level(logging.INFO, logger="feather_etl.transports.base")
+    caplog.set_level(logging.INFO, logger="feather_flow.transports.base")
     out = _emit_heartbeats(
         iter([_batch(50), _batch(50), _batch(50)]),
         table_label="t",
@@ -46,7 +46,7 @@ def test_row_threshold_emits_heartbeat(caplog: pytest.LogCaptureFixture) -> None
 
 
 def test_time_threshold_emits_heartbeat(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level(logging.INFO, logger="feather_etl.transports.base")
+    caplog.set_level(logging.INFO, logger="feather_flow.transports.base")
     tick = iter([0.0, 0.5, 1.5, 2.5])
     out = _emit_heartbeats(
         iter([_batch(1), _batch(1), _batch(1)]),
@@ -63,7 +63,7 @@ def test_time_threshold_emits_heartbeat(caplog: pytest.LogCaptureFixture) -> Non
 def test_both_thresholds_zero_disables_heartbeat(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.INFO, logger="feather_etl.transports.base")
+    caplog.set_level(logging.INFO, logger="feather_flow.transports.base")
     out = _emit_heartbeats(
         iter([_batch(10_000), _batch(10_000)]),
         table_label="t",

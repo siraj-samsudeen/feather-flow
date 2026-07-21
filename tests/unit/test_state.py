@@ -15,7 +15,7 @@ CURRENT_SCHEMA_VERSION = 2
 
 class TestStateInit:
     def test_creates_all_tables(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -43,7 +43,7 @@ class TestStateInit:
 
     def test_watermarks_has_source_db_column(self, tmp_path: Path):
         """_watermarks includes source_db for extract-written rows."""
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -59,7 +59,7 @@ class TestStateInit:
         assert "source_db" in cols
 
     def test_state_meta_version(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -70,7 +70,7 @@ class TestStateInit:
         assert row[0] == CURRENT_SCHEMA_VERSION
 
     def test_idempotent_init(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -85,7 +85,7 @@ class TestStateInit:
         """Upgrading a v1 state DB: _cache_watermarks rows land in _watermarks."""
         from datetime import datetime, timezone
 
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         state_path = tmp_path / "state.duckdb"
         con = duckdb.connect(str(state_path))
@@ -163,7 +163,7 @@ class TestStateInit:
         con2.close()
 
     def test_downgrade_protection(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -173,11 +173,11 @@ class TestStateInit:
         con.execute("UPDATE _state_meta SET schema_version = 99")
         con.close()
 
-        with pytest.raises(RuntimeError, match="newer than feather-etl"):
+        with pytest.raises(RuntimeError, match="newer than feather-flow"):
             sm.init_state()
 
     def test_new_state_db_gets_600_permissions(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -185,17 +185,17 @@ class TestStateInit:
         assert mode == 0o600
 
     def test_chmod_oserror_is_swallowed(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
-        with patch("feather_etl.state.os.chmod", side_effect=OSError("denied")):
+        with patch("feather_flow.state.os.chmod", side_effect=OSError("denied")):
             sm.init_state()  # should not raise
         assert sm.path.exists()
 
 
 class TestWatermarks:
     def test_write_and_read(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -207,14 +207,14 @@ class TestWatermarks:
         assert wm["strategy"] == "full"
 
     def test_read_nonexistent(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
         assert sm.read_watermark("nonexistent") is None
 
     def test_upsert_watermark(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -230,7 +230,7 @@ class TestWatermarks:
         assert count == 1
 
     def test_write_watermark_with_mtime_and_hash(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -246,7 +246,7 @@ class TestWatermarks:
         assert wm["last_file_hash"] == "abc123def456"
 
     def test_write_watermark_update_preserves_mtime_hash(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -268,7 +268,7 @@ class TestWatermarks:
         assert wm["last_file_hash"] == "hash2"
 
     def test_write_watermark_without_mtime_hash_stays_null(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -280,7 +280,7 @@ class TestWatermarks:
 
     def test_write_watermark_preserves_last_value_on_update(self, tmp_path: Path):
         """H-1: write_watermark() without last_value must preserve existing last_value."""
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -309,7 +309,7 @@ class TestWatermarks:
 
     def test_write_watermark_updates_last_value_when_provided(self, tmp_path: Path):
         """H-1: write_watermark() with explicit last_value should update it."""
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -334,7 +334,7 @@ class TestConnectionCleanup:
     def test_read_watermark_closes_on_error(self, tmp_path: Path):
         from unittest.mock import MagicMock
 
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -351,7 +351,7 @@ class TestConnectionCleanup:
     def test_write_watermark_closes_on_error(self, tmp_path: Path):
         from unittest.mock import MagicMock
 
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -368,7 +368,7 @@ class TestConnectionCleanup:
     def test_record_run_closes_on_error(self, tmp_path: Path):
         from unittest.mock import MagicMock
 
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -392,7 +392,7 @@ class TestConnectionCleanup:
     def test_get_status_closes_on_error(self, tmp_path: Path):
         from unittest.mock import MagicMock
 
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -409,7 +409,7 @@ class TestConnectionCleanup:
 
 class TestRuns:
     def test_record_and_get_status(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -436,7 +436,7 @@ class TestWatermarkRoundtrip:
     """write_watermark / read_watermark round-trip — replaces the removed cache_watermark tests."""
 
     def test_read_returns_none_when_absent(self, tmp_path: Path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -444,7 +444,7 @@ class TestWatermarkRoundtrip:
 
     def test_write_then_read_roundtrip(self, tmp_path: Path):
         from datetime import datetime, timezone
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -470,7 +470,7 @@ class TestWatermarkRoundtrip:
 
     def test_write_upserts_existing_row(self, tmp_path: Path):
         from datetime import datetime, timezone
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -506,7 +506,7 @@ class TestWatermarkRoundtrip:
     def test_write_watermark_stores_source_db(self, tmp_path: Path):
         """write_watermark stores source_db in the unified _watermarks table."""
         from datetime import datetime, timezone
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -524,7 +524,7 @@ class TestWatermarkRoundtrip:
         """Int checksums (SQL Server CHECKSUM_AGG) are stored as str so the
         VARCHAR column accepts them uniformly with Postgres md5() hex strings."""
         from datetime import datetime, timezone
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -546,7 +546,7 @@ class TestExtractOverrides:
     """Tests for _extract_overrides table + StateManager CRUD methods."""
 
     def _make_sm(self, tmp_path):
-        from feather_etl.state import StateManager
+        from feather_flow.state import StateManager
 
         sm = StateManager(tmp_path / "state.duckdb")
         sm.init_state()
@@ -569,7 +569,7 @@ class TestExtractOverrides:
         sm = self._make_sm(tmp_path)
         sm.set_override("orders", window_strategy="date", window_column="created_at")
 
-        from feather_etl.state import ExtractOverride
+        from feather_flow.state import ExtractOverride
 
         override = sm.get_override("orders")
         assert override is not None

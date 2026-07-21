@@ -7,7 +7,7 @@ import logging
 import pyarrow as pa
 import pytest
 
-from feather_etl.sources.fetch_batches import (
+from feather_flow.sources.fetch_batches import (
     _should_emit_heartbeat,
     fetch_batches,
 )
@@ -149,7 +149,7 @@ class TestFetchBatches:
     def test_heartbeat_fires_on_row_threshold(self, caplog, two_col_schema) -> None:
         rows = [(i, f"r{i}") for i in range(250)]
         cursor = _FakeCursor(rows)
-        with caplog.at_level(logging.INFO, logger="feather_etl.sources.fetch_batches"):
+        with caplog.at_level(logging.INFO, logger="feather_flow.sources.fetch_batches"):
             list(
                 fetch_batches(
                     cursor=cursor,
@@ -179,7 +179,7 @@ class TestFetchBatches:
         cursor = _FakeCursor(rows)
         # Clock jumps 60s between fetches → time trigger fires while row count
         # is well below the row threshold.
-        with caplog.at_level(logging.INFO, logger="feather_etl.sources.fetch_batches"):
+        with caplog.at_level(logging.INFO, logger="feather_flow.sources.fetch_batches"):
             list(
                 fetch_batches(
                     cursor=cursor,

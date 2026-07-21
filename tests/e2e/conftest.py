@@ -1,4 +1,4 @@
-"""End-to-end test harness for feather-etl.
+"""End-to-end test harness for feather-flow.
 
 This module provides:
 
@@ -28,7 +28,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner, Result
 
-from feather_etl.cli import app
+from feather_flow.cli import app
 
 from tests.conftest import FIXTURES_DIR
 from tests.helpers import make_curation_entry, write_curation
@@ -146,6 +146,6 @@ def stub_viewer_serve(monkeypatch):
     (directly or via `@pytest.mark.usefixtures("stub_viewer_serve")`) and
     the function becomes a no-op.
     """
-    import feather_etl.commands.discover as discover_cmd
+    import feather_flow.commands.discover as discover_cmd
 
     monkeypatch.setattr(discover_cmd, "serve_and_open", lambda *a, **kw: None)

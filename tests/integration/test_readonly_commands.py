@@ -1,4 +1,4 @@
-"""Integration: feather_etl.status.load_status + feather_etl.history.load_history.
+"""Integration: feather_flow.status.load_status + feather_flow.history.load_history.
 
 Both are thin orchestrators over StateManager; grouped here since they share
 shape (read state DB, construct a DTO, surface to a caller — no writes).
@@ -14,7 +14,7 @@ import pytest
 
 def _make_state_with_runs(state_path: Path) -> None:
     """Create a state DB and insert run rows for two tables."""
-    from feather_etl.state import StateManager
+    from feather_flow.state import StateManager
 
     sm = StateManager(state_path)
     sm.init_state()
@@ -43,7 +43,7 @@ def _make_state_with_runs(state_path: Path) -> None:
 
 
 def test_status_returns_rows_for_each_table(project):
-    from feather_etl.status import load_status
+    from feather_flow.status import load_status
 
     state_path = project.root / "feather_state.duckdb"
     _make_state_with_runs(state_path)
@@ -54,8 +54,8 @@ def test_status_returns_rows_for_each_table(project):
 
 
 def test_status_returns_empty_list_when_no_runs(project):
-    from feather_etl.state import StateManager
-    from feather_etl.status import load_status
+    from feather_flow.state import StateManager
+    from feather_flow.status import load_status
 
     state_path = project.root / "feather_state.duckdb"
     sm = StateManager(state_path)
@@ -67,8 +67,8 @@ def test_status_returns_empty_list_when_no_runs(project):
 
 
 def test_status_raises_state_db_missing_when_no_db(project):
-    from feather_etl.exceptions import StateDBMissingError
-    from feather_etl.status import load_status
+    from feather_flow.exceptions import StateDBMissingError
+    from feather_flow.status import load_status
 
     with pytest.raises(StateDBMissingError):
         load_status(project.root / "missing.duckdb")
@@ -80,7 +80,7 @@ def test_status_raises_state_db_missing_when_no_db(project):
 
 
 def test_history_returns_rows_from_state_db(project):
-    from feather_etl.history import load_history
+    from feather_flow.history import load_history
 
     state_path = project.root / "feather_state.duckdb"
     _make_state_with_runs(state_path)
@@ -93,7 +93,7 @@ def test_history_returns_rows_from_state_db(project):
 
 
 def test_history_filters_by_table_name(project):
-    from feather_etl.history import load_history
+    from feather_flow.history import load_history
 
     state_path = project.root / "feather_state.duckdb"
     _make_state_with_runs(state_path)
@@ -105,7 +105,7 @@ def test_history_filters_by_table_name(project):
 
 
 def test_history_respects_limit(project):
-    from feather_etl.history import load_history
+    from feather_flow.history import load_history
 
     state_path = project.root / "feather_state.duckdb"
     _make_state_with_runs(state_path)
@@ -116,8 +116,8 @@ def test_history_respects_limit(project):
 
 
 def test_history_raises_state_db_missing_when_no_db(project):
-    from feather_etl.exceptions import StateDBMissingError
-    from feather_etl.history import load_history
+    from feather_flow.exceptions import StateDBMissingError
+    from feather_flow.history import load_history
 
     with pytest.raises(StateDBMissingError):
         load_history(project.root / "missing.duckdb")

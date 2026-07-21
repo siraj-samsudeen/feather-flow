@@ -1,7 +1,7 @@
 [project]
-name = "feather-etl"
-version = "0.1.3"
-description = "Config-driven ETL for heterogeneous ERP sources → local DuckDB"
+name = "feather-flow"
+version = "0.2.0"
+description = "Config-driven data pipelines for heterogeneous ERP sources → local DuckDB"
 readme = "README.md"
 license = "MIT"
 authors = [
@@ -43,16 +43,16 @@ Issues = "https://github.com/siraj-samsudeen/feather-flow/issues"
 connectorx = ["connectorx>=0.4"]
 
 [project.scripts]
-feather = "feather_etl.cli:app"
-feather-etl = "feather_etl.cli:app"
+feather = "feather_flow.cli:app"
+feather-flow = "feather_flow.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/feather_etl"]
-include = ["src/feather_etl/resources/**"]
+packages = ["src/feather_flow"]
+include = ["src/feather_flow/resources/**"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
@@ -74,13 +74,13 @@ dev = [
 ]
 
 [tool.poe.tasks.cov]
-help = "Run tests matching <keyword> with branch coverage for feather_etl.<keyword>, then open the HTML report."
-shell = "pytest -k ${keyword} -rs --cov-branch --cov=feather_etl.${keyword} --cov-report=term-missing --cov-report=html ; open htmlcov/index.html"
+help = "Run tests matching <keyword> with branch coverage for feather_flow.<keyword>, then open the HTML report."
+shell = "pytest -k ${keyword} -rs --cov-branch --cov=feather_flow.${keyword} --cov-report=term-missing --cov-report=html ; open htmlcov/index.html"
 args = [{ name = "keyword", positional = true, required = true }]
 
 [tool.poe.tasks.cov-all]
-help = "Branch coverage across the whole feather_etl package, then open the HTML report."
-shell = "pytest -rs --cov-branch --cov=feather_etl --cov-report=term-missing --cov-report=html ; open htmlcov/index.html"
+help = "Branch coverage across the whole feather_flow package, then open the HTML report."
+shell = "pytest -rs --cov-branch --cov=feather_flow --cov-report=term-missing --cov-report=html ; open htmlcov/index.html"
 
 [tool.poe.tasks.tw]
 help = "Watch mode: re-run only tests affected by saved changes (Jest-like). Extra args go to pytest, e.g. `poe tw -k transforms`."

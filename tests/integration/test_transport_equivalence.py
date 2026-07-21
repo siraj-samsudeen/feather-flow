@@ -14,7 +14,7 @@ from typing import Iterator
 import pyarrow as pa
 import pytest
 
-from feather_etl.sources.sqlserver import SqlServerSource
+from feather_flow.sources.sqlserver import SqlServerSource
 
 
 CANNED_BATCHES = [
@@ -52,15 +52,15 @@ def test_extract_batches_identical_across_transports(
     monkeypatch, tmp_path: Path, transport: str
 ) -> None:
     monkeypatch.setattr(
-        "feather_etl.transports.pyodbc_transport.PyodbcTransport.stream_batches",
+        "feather_flow.transports.pyodbc_transport.PyodbcTransport.stream_batches",
         _stub,
     )
     monkeypatch.setattr(
-        "feather_etl.transports.arrow_odbc_transport.ArrowOdbcTransport.stream_batches",
+        "feather_flow.transports.arrow_odbc_transport.ArrowOdbcTransport.stream_batches",
         _stub,
     )
     monkeypatch.setattr(
-        "feather_etl.transports.connectorx_transport.ConnectorxTransport.stream_batches",
+        "feather_flow.transports.connectorx_transport.ConnectorxTransport.stream_batches",
         _stub,
     )
 

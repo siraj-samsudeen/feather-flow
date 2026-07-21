@@ -1,4 +1,4 @@
-"""Integration: feather_etl.discover — run_discover, detect_renames_for_sources,
+"""Integration: feather_flow.discover — run_discover, detect_renames_for_sources,
 apply_rename_decision.
 
 Exercises discover + config + discover_state + sources.expand cross-module
@@ -12,15 +12,15 @@ import shutil
 
 import yaml
 
-from feather_etl.config import load_config
-from feather_etl.discover import (
+from feather_flow.config import load_config
+from feather_flow.discover import (
     _fingerprint_for,
     apply_rename_decision,
     detect_renames_for_sources,
     run_discover,
 )
-from feather_etl.discover_state import DiscoverState
-from feather_etl.sources.expand import expand_db_sources
+from feather_flow.discover_state import DiscoverState
+from feather_flow.sources.expand import expand_db_sources
 
 from tests.conftest import FIXTURES_DIR
 
@@ -246,8 +246,8 @@ def test_run_discover_records_failed_when_write_schema_raises(project, monkeypat
       - append a matching SourceDiscoveryResult(status='failed'),
       - continue processing subsequent sources.
     (discover.py:251-269)"""
-    from feather_etl import discover as discover_mod
-    from feather_etl.discover_state import DiscoverState
+    from feather_flow import discover as discover_mod
+    from feather_flow.discover_state import DiscoverState
 
     cfg = load_config(_setup_sqlite_project(project), validate=False)
 

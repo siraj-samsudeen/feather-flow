@@ -5,7 +5,7 @@ from __future__ import annotations
 
 class TestSourceDataclasses:
     def test_stream_schema_fields(self):
-        from feather_etl.sources import StreamSchema
+        from feather_flow.sources import StreamSchema
 
         s = StreamSchema(
             name="test",
@@ -17,7 +17,7 @@ class TestSourceDataclasses:
         assert len(s.columns) == 2
 
     def test_change_result_fields(self):
-        from feather_etl.sources import ChangeResult
+        from feather_flow.sources import ChangeResult
 
         r = ChangeResult(changed=True, reason="first_run", metadata={})
         assert r.changed is True

@@ -19,7 +19,7 @@ def _make_table(num_rows: int = 5, id_offset: int = 0) -> pa.Table:
 
 class TestLoadAppend:
     def test_load_append_inserts_with_metadata(self, tmp_path: Path):
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         db_path = tmp_path / "data.duckdb"
         dest = DuckDBDestination(path=db_path)
@@ -42,7 +42,7 @@ class TestLoadAppend:
         assert row[1] == "run_001"
 
     def test_load_append_accumulates_rows(self, tmp_path: Path):
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         db_path = tmp_path / "data.duckdb"
         dest = DuckDBDestination(path=db_path)
@@ -68,7 +68,7 @@ class TestLoadAppend:
         assert run_ids == {"run_001", "run_002"}
 
     def test_load_append_creates_table_if_not_exists(self, tmp_path: Path):
-        from feather_etl.destinations.duckdb import DuckDBDestination
+        from feather_flow.destinations.duckdb import DuckDBDestination
 
         db_path = tmp_path / "data.duckdb"
         dest = DuckDBDestination(path=db_path)

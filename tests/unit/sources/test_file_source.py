@@ -16,7 +16,7 @@ import pytest
 
 class TestFileSource:
     def test_check_existing_path(self, tmp_path: Path):
-        from feather_etl.sources.file_source import FileSource
+        from feather_flow.sources.file_source import FileSource
 
         existing = tmp_path / "somefile"
         existing.write_text("data")
@@ -24,13 +24,13 @@ class TestFileSource:
         assert source.check() is True
 
     def test_check_nonexistent_path(self, tmp_path: Path):
-        from feather_etl.sources.file_source import FileSource
+        from feather_flow.sources.file_source import FileSource
 
         source = FileSource(path=tmp_path / "nope")
         assert source.check() is False
 
     def test_detect_changes_first_run(self, tmp_path: Path):
-        from feather_etl.sources.file_source import FileSource
+        from feather_flow.sources.file_source import FileSource
 
         existing = tmp_path / "somefile"
         existing.write_text("data")
@@ -45,7 +45,7 @@ class TestFileSource:
         """File untouched between runs → changed=False, empty metadata."""
         import os
 
-        from feather_etl.sources.file_source import FileSource
+        from feather_flow.sources.file_source import FileSource
 
         f = tmp_path / "somefile"
         f.write_text("data")
@@ -69,7 +69,7 @@ class TestFileSource:
         import os
         import time
 
-        from feather_etl.sources.file_source import FileSource
+        from feather_flow.sources.file_source import FileSource
 
         f = tmp_path / "somefile"
         f.write_text("data")
@@ -95,7 +95,7 @@ class TestFileSource:
 
     def test_detect_changes_content_changed(self, tmp_path: Path):
         """File content changes → changed=True, reason=hash_changed."""
-        from feather_etl.sources.file_source import FileSource
+        from feather_flow.sources.file_source import FileSource
 
         f = tmp_path / "somefile"
         f.write_text("original")
@@ -117,7 +117,7 @@ class TestFileSource:
 
     def test_detect_changes_partial_state_null_mtime(self, tmp_path: Path):
         """Watermark exists but mtime is NULL (Slice 1 legacy) → treat as first run."""
-        from feather_etl.sources.file_source import FileSource
+        from feather_flow.sources.file_source import FileSource
 
         f = tmp_path / "somefile"
         f.write_text("data")
@@ -132,7 +132,7 @@ class TestFileSource:
 
     def test_source_path_for_table_returns_self_path(self, tmp_path: Path):
         """Base FileSource returns self.path (whole file)."""
-        from feather_etl.sources.file_source import FileSource
+        from feather_flow.sources.file_source import FileSource
 
         f = tmp_path / "db.duckdb"
         f.write_text("data")
@@ -140,15 +140,15 @@ class TestFileSource:
         assert source._source_path_for_table("any_table") == f
 
     def test_path_stored(self, tmp_path: Path):
-        from feather_etl.sources.file_source import FileSource
+        from feather_flow.sources.file_source import FileSource
 
         p = tmp_path / "test"
         source = FileSource(path=p)
         assert source.path == p
 
     def test_duckdb_file_source_extends_file_source(self, client_db: Path):
-        from feather_etl.sources.duckdb_file import DuckDBFileSource
-        from feather_etl.sources.file_source import FileSource
+        from feather_flow.sources.duckdb_file import DuckDBFileSource
+        from feather_flow.sources.file_source import FileSource
 
         source = DuckDBFileSource(path=client_db)
         assert isinstance(source, FileSource)
@@ -169,7 +169,7 @@ class TestFileSourceFromYaml:
         return f
 
     def test_csv_from_yaml(self, csv_dir):
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         entry = {"name": "sheets", "type": "csv", "path": str(csv_dir)}
         src = CsvSource.from_yaml(entry, csv_dir.parent)
@@ -177,7 +177,7 @@ class TestFileSourceFromYaml:
         assert src.path == csv_dir
 
     def test_csv_relative_path_resolves_against_config_dir(self, tmp_path):
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         d = tmp_path / "rel" / "csvs"
         d.mkdir(parents=True)
@@ -186,27 +186,27 @@ class TestFileSourceFromYaml:
         assert src.path == d.resolve()
 
     def test_csv_path_required(self, tmp_path):
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         with pytest.raises(ValueError, match="path"):
             CsvSource.from_yaml({"name": "x", "type": "csv"}, tmp_path)
 
     def test_csv_rejects_database_field(self, csv_dir):
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         entry = {"name": "x", "type": "csv", "path": str(csv_dir), "database": "BAD"}
         with pytest.raises(ValueError, match="not supported for source type csv"):
             CsvSource.from_yaml(entry, csv_dir.parent)
 
     def test_sqlite_from_yaml(self, sqlite_file):
-        from feather_etl.sources.sqlite import SqliteSource
+        from feather_flow.sources.sqlite import SqliteSource
 
         entry = {"name": "db", "type": "sqlite", "path": str(sqlite_file)}
         src = SqliteSource.from_yaml(entry, sqlite_file.parent)
         assert src.path == sqlite_file
 
     def test_duckdb_from_yaml(self, tmp_path):
-        from feather_etl.sources.duckdb_file import DuckDBFileSource
+        from feather_flow.sources.duckdb_file import DuckDBFileSource
 
         f = tmp_path / "src.duckdb"
         f.write_bytes(b"")
@@ -215,7 +215,7 @@ class TestFileSourceFromYaml:
         assert src.path == f
 
     def test_excel_from_yaml(self, tmp_path):
-        from feather_etl.sources.excel import ExcelSource
+        from feather_flow.sources.excel import ExcelSource
 
         d = tmp_path / "xlsx"
         d.mkdir()
@@ -225,7 +225,7 @@ class TestFileSourceFromYaml:
         assert src.path == d
 
     def test_json_from_yaml(self, tmp_path):
-        from feather_etl.sources.json_source import JsonSource
+        from feather_flow.sources.json_source import JsonSource
 
         d = tmp_path / "json"
         d.mkdir()
@@ -237,19 +237,19 @@ class TestFileSourceFromYaml:
 
 class TestFileSourceValidateSourceTable:
     def test_csv_accepts_filename(self, tmp_path):
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         src = CsvSource(path=tmp_path, name="x")
         assert src.validate_source_table("orders.csv") == []
 
     def test_csv_accepts_glob(self, tmp_path):
-        from feather_etl.sources.csv import CsvSource
+        from feather_flow.sources.csv import CsvSource
 
         src = CsvSource(path=tmp_path, name="x")
         assert src.validate_source_table("sales_*.csv") == []
 
     def test_sqlite_rejects_dotted(self, tmp_path):
-        from feather_etl.sources.sqlite import SqliteSource
+        from feather_flow.sources.sqlite import SqliteSource
 
         src = SqliteSource(path=tmp_path / "x.sqlite", name="x")
         errs = src.validate_source_table("schema.table")
@@ -257,14 +257,14 @@ class TestFileSourceValidateSourceTable:
         assert "'table'" in errs[0]  # suggests correct form
 
     def test_sqlite_rejects_invalid_identifier(self, tmp_path):
-        from feather_etl.sources.sqlite import SqliteSource
+        from feather_flow.sources.sqlite import SqliteSource
 
         src = SqliteSource(path=tmp_path / "x.sqlite", name="x")
         errs = src.validate_source_table("bad-name")  # hyphen not allowed
         assert errs and "identifier" in errs[0].lower()
 
     def test_duckdb_requires_dotted(self, tmp_path):
-        from feather_etl.sources.duckdb_file import DuckDBFileSource
+        from feather_flow.sources.duckdb_file import DuckDBFileSource
 
         src = DuckDBFileSource(path=tmp_path / "x.duckdb", name="x")
         errs = src.validate_source_table("plain")
@@ -278,11 +278,11 @@ class TestFileSourcesRejectDbFields:
     @pytest.mark.parametrize(
         "cls_path,type_name,path_factory",
         [
-            ("feather_etl.sources.csv.CsvSource", "csv", "dir"),
-            ("feather_etl.sources.sqlite.SqliteSource", "sqlite", "file"),
-            ("feather_etl.sources.duckdb_file.DuckDBFileSource", "duckdb", "file"),
-            ("feather_etl.sources.excel.ExcelSource", "excel", "dir"),
-            ("feather_etl.sources.json_source.JsonSource", "json", "dir"),
+            ("feather_flow.sources.csv.CsvSource", "csv", "dir"),
+            ("feather_flow.sources.sqlite.SqliteSource", "sqlite", "file"),
+            ("feather_flow.sources.duckdb_file.DuckDBFileSource", "duckdb", "file"),
+            ("feather_flow.sources.excel.ExcelSource", "excel", "dir"),
+            ("feather_flow.sources.json_source.JsonSource", "json", "dir"),
         ],
     )
     def test_rejects_database_field(self, cls_path, type_name, path_factory, tmp_path):

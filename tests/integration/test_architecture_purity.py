@@ -13,16 +13,16 @@ import inspect
 import pytest
 
 CORE_MODULES = [
-    "feather_etl.pipeline",
-    "feather_etl.extract",
-    "feather_etl.viewer_server",
-    "feather_etl.init_wizard",
-    "feather_etl.exceptions",
-    "feather_etl.history",
-    "feather_etl.status",
-    "feather_etl.validate",
-    "feather_etl.setup",
-    "feather_etl.discover",
+    "feather_flow.pipeline",
+    "feather_flow.extract",
+    "feather_flow.viewer_server",
+    "feather_flow.init_wizard",
+    "feather_flow.exceptions",
+    "feather_flow.history",
+    "feather_flow.status",
+    "feather_flow.validate",
+    "feather_flow.setup",
+    "feather_flow.discover",
 ]
 
 
