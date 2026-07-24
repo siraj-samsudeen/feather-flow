@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from feather_etl.commands.init import core
+from feather_flow.commands.init import core
 
 
 def register(app: typer.Typer) -> None:

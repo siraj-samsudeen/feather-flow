@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 FEATHER_YAML_TEMPLATE = """\
-# feather-etl project configuration
+# feather-flow project configuration
 # Add sources with: feather source add
 
 # sources:        # populated by `feather source add`

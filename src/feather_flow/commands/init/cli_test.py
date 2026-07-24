@@ -2,7 +2,7 @@
 
 from typer.testing import CliRunner
 
-from feather_etl.cli import app
+from feather_flow.cli import app
 
 
 def test_init_with_no_arg_stamps_files_into_cwd_if_empty(monkeypatch, tmp_path) -> None:

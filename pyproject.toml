@@ -1,5 +1,5 @@
 [project]
-name = "feather-etl"
+name = "feather-flow"
 version = "0.0.0"
 description = "Config-driven Python ETL — workbench for heterogeneous ERP sources."
 readme = "README.md"
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-feather = "feather_etl.cli:app"
+feather = "feather_flow.cli:app"
 
 [project.optional-dependencies]
 dev = [
@@ -27,11 +27,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/feather_etl"]
+packages = ["src/feather_flow"]
 exclude = [
-    "src/feather_etl/**/*_test.py",
-    "src/feather_etl/**/scenarios/**",
-    "src/feather_etl/testing/**",
+    "src/feather_flow/**/*_test.py",
+    "src/feather_flow/**/scenarios/**",
+    "src/feather_flow/testing/**",
 ]
 
 [tool.pytest.ini_options]
@@ -43,5 +43,5 @@ addopts = "--import-mode=importlib"
 
 [tool.coverage.run]
 branch = true
-source = ["src/feather_etl"]
+source = ["src/feather_flow"]
 omit = ["*_test.py"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from feather_etl.commands.init.cli import register as register_init
+from feather_flow.commands.init.cli import register as register_init
 
 app = typer.Typer(name="feather")
 
