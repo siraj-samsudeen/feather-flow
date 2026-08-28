@@ -17,6 +17,7 @@ VENDORED = [
     REPO / "gofrugal_extract/src/control_plane",
     REPO / "zakya_extract/src/control_plane",
     REPO / "sap_bronze/src/control_plane",
+    REPO / "dbt_runner/src/control_plane",
 ]
 
 

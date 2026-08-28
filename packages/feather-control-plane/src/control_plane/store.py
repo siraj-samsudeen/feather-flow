@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS control.run (
     n_err         INTEGER,
     n_skipped     INTEGER,
     reconciled_by TEXT,
-    wal_path      TEXT
+    wal_path      TEXT,
+    extra         JSONB
 );
 CREATE INDEX IF NOT EXISTS run_extractor_unfinished
     ON control.run (extractor) WHERE finished_at IS NULL;
@@ -87,6 +88,10 @@ def ensure_schema(conn: psycopg.Connection) -> None:
         # Migration for control planes created before control.event.extra existed (e.g. the
         # live GoFrugal table): CREATE TABLE IF NOT EXISTS above won't add a column to it.
         cur.execute("ALTER TABLE control.event ADD COLUMN IF NOT EXISTS extra JSONB")
+        # Same for control.run.extra, added for dbt (#2640): dbt's run row carries fields no
+        # extractor has -- bronze_watermark, action, dbt_rc -- and bolting five dbt-specific
+        # columns onto the table five writers share would be worse than one JSONB bag.
+        cur.execute("ALTER TABLE control.run ADD COLUMN IF NOT EXISTS extra JSONB")
     conn.commit()
 
 
@@ -96,26 +101,33 @@ def apply(cur: psycopg.Cursor, rec: dict) -> None:
     """Project one WAL record into Postgres. Idempotent; dispatched by `kind`."""
     kind = rec["kind"]
     if kind == "run_start":
+        run_extra = rec.get("extra")
         cur.execute(
             "INSERT INTO control.run "
-            "(run_id, extractor, mode, host, pid, started_at, status, wal_path) "
-            "VALUES (%s,%s,%s,%s,%s,%s::timestamptz,%s,%s) ON CONFLICT (run_id) DO NOTHING",
+            "(run_id, extractor, mode, host, pid, started_at, status, wal_path, extra) "
+            "VALUES (%s,%s,%s,%s,%s,%s::timestamptz,%s,%s,%s) ON CONFLICT (run_id) DO NOTHING",
             (rec["run_id"], rec["extractor"], rec.get("mode"), rec.get("host"),
-             rec.get("pid"), rec["started_at"], rec["status"], rec.get("wal_path")),
+             rec.get("pid"), rec["started_at"], rec["status"], rec.get("wal_path"),
+             Json(run_extra) if run_extra is not None else None),
         )
     elif kind == "run_finish":
         # Upsert: if PG was down at start (no run_start row landed), still record the run.
+        fin_extra = rec.get("extra")
         cur.execute(
             "INSERT INTO control.run "
-            "(run_id, extractor, started_at, finished_at, status, stop_reason, n_ok, n_err, n_skipped) "
-            "VALUES (%s,%s,%s::timestamptz,%s::timestamptz,%s,%s,%s,%s,%s) "
+            "(run_id, extractor, started_at, finished_at, status, stop_reason, n_ok, n_err, n_skipped, extra) "
+            "VALUES (%s,%s,%s::timestamptz,%s::timestamptz,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (run_id) DO UPDATE SET "
             "finished_at=EXCLUDED.finished_at, status=EXCLUDED.status, "
             "stop_reason=EXCLUDED.stop_reason, n_ok=EXCLUDED.n_ok, n_err=EXCLUDED.n_err, "
-            "n_skipped=EXCLUDED.n_skipped",
+            "n_skipped=EXCLUDED.n_skipped, "
+            # COALESCE, not overwrite: a finish that carries no extra must never erase what
+            # run_start recorded (dbt's bronze_watermark lands at start).
+            "extra=COALESCE(EXCLUDED.extra, control.run.extra)",
             (rec["run_id"], rec["extractor"], rec.get("started_at", rec["finished_at"]),
              rec["finished_at"], rec["status"], rec.get("stop_reason"),
-             rec.get("n_ok"), rec.get("n_err"), rec.get("n_skipped")),
+             rec.get("n_ok"), rec.get("n_err"), rec.get("n_skipped"),
+             Json(fin_extra) if fin_extra is not None else None),
         )
     elif kind == "event":
         extra = rec.get("extra")

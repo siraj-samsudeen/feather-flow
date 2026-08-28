@@ -18,6 +18,7 @@ TARGETS=(
   "gofrugal_extract/src"   # Railway
   "zakya_extract/src"      # Railway
   "sap_bronze/src"         # on-prem box (rides ssh_box.py put src/)
+  "dbt_runner/src"         # Railway cron; uses store.py only (#2640, see dbt_control_pg.py)
 )
 
 for dest in "${TARGETS[@]}"; do

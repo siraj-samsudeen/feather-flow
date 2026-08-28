@@ -58,6 +58,42 @@ def test_event_extra_jsonb_round_trip(fresh_schema):
     assert _q(dsn, "SELECT extra FROM control.event WHERE run_id='RX' AND seq=1") == [(None,)]
 
 
+def test_run_extra_jsonb_survives_a_finish_that_carries_none(fresh_schema):
+    """control.run.extra (#2640) — dbt's bronze_watermark/action/dbt_rc land at run_start, and a
+    finish without an extra must NOT erase them (the ON CONFLICT uses COALESCE, not EXCLUDED)."""
+    dsn = fresh_schema
+    extra = {"action": "ran", "bronze_watermark": "2026-08-28T05:55:00+00:00", "dbt_rc": 1}
+    with psycopg.connect(dsn) as c:
+        with c.cursor() as cur:
+            store.apply(cur, {"kind": "run_start", "run_id": "D1", "extractor": "dbt",
+                              "mode": "cron", "host": "h", "pid": 7,
+                              "started_at": "2026-08-28T06:00:00+00:00",
+                              "status": "running", "extra": extra})
+            # a finish with no `extra` at all — the extractors' shape
+            store.apply(cur, {"kind": "run_finish", "run_id": "D1", "extractor": "dbt",
+                              "started_at": "2026-08-28T06:00:00+00:00",
+                              "finished_at": "2026-08-28T06:04:00+00:00",
+                              "status": "ok", "stop_reason": "clean"})
+        c.commit()
+    assert _q(dsn, "SELECT extra, status FROM control.run WHERE run_id='D1'") == [(extra, "ok")]
+
+
+def test_run_extra_is_replaced_when_the_finish_carries_one(fresh_schema):
+    dsn = fresh_schema
+    with psycopg.connect(dsn) as c:
+        with c.cursor() as cur:
+            store.apply(cur, {"kind": "run_start", "run_id": "D2", "extractor": "dbt",
+                              "started_at": "2026-08-28T06:00:00+00:00",
+                              "status": "running", "extra": {"dbt_rc": None}})
+            store.apply(cur, {"kind": "run_finish", "run_id": "D2", "extractor": "dbt",
+                              "started_at": "2026-08-28T06:00:00+00:00",
+                              "finished_at": "2026-08-28T06:04:00+00:00",
+                              "status": "ok", "stop_reason": "clean",
+                              "extra": {"dbt_rc": 0, "duration_s": 241.5}})
+        c.commit()
+    assert _q(dsn, "SELECT extra->>'dbt_rc' FROM control.run WHERE run_id='D2'") == [("0",)]
+
+
 def test_shipper_tails_and_resumes(fresh_schema, tmp_path):
     dsn = fresh_schema
     w = Wal(str(tmp_path / EXT / "R2.jsonl"))
