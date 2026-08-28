@@ -21,7 +21,7 @@ def _off_path(wal_path: str) -> str:
 def _read_off(wal_path: str) -> int:
     p = _off_path(wal_path)
     try:
-        with open(p) as f:
+        with open(p, encoding="utf-8") as f:
             return int(f.read().strip() or 0)
     except (FileNotFoundError, ValueError):
         return 0
@@ -30,7 +30,7 @@ def _read_off(wal_path: str) -> int:
 def _write_off(wal_path: str, offset: int) -> None:
     p = _off_path(wal_path)
     tmp = p + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         f.write(str(offset))
     os.replace(tmp, p)  # atomic
 
