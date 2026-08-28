@@ -158,6 +158,35 @@ def apply(cur: psycopg.Cursor, rec: dict) -> None:
         raise ValueError(f"unknown WAL record kind: {kind!r}")
 
 
+def apply_events_batch(cur: psycopg.Cursor, recs: list[dict]) -> None:
+    """Batch form of apply() for a homogeneous list of kind='event' records.
+
+    Same SQL and same idempotency key as the per-record path -- executemany just sends it in
+    one pipelined batch instead of one round-trip per row. Added for #2640: dbt's run_results
+    projection can carry tens of thousands of nodes in a catch-up window, and at ~250ms RTT over
+    the public proxy the per-record path turns 28k rows into two hours. executemany does it in
+    seconds, and on Railway's private network the difference is merely large.
+    """
+    if not recs:
+        return
+    bad = [r["kind"] for r in recs if r.get("kind") != "event"]
+    if bad:
+        raise ValueError(f"apply_events_batch only takes kind='event' records, got {bad[:3]}")
+    cur.executemany(
+        "INSERT INTO control.event "
+        "(extractor, run_id, seq, ran_at, entity, unit, business_date, status, "
+        " http_status, rows, source_attempts, sink_attempts, pull_ms, load_ms, error_detail, extra) "
+        "VALUES (%s,%s,%s,%s::timestamptz,%s,%s,%s::date,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+        "ON CONFLICT (extractor, run_id, seq) DO NOTHING",
+        [(r["extractor"], r["run_id"], r["seq"], r["ran_at"], r.get("entity"),
+          r.get("unit"), r.get("business_date"), r["status"], r.get("http_status"),
+          r.get("rows"), r.get("source_attempts"), r.get("sink_attempts"),
+          r.get("pull_ms"), r.get("load_ms"), r.get("error_detail"),
+          Json(r["extra"]) if r.get("extra") is not None else None)
+         for r in recs],
+    )
+
+
 # --- the liveness lease (the deterministic death-detection primitive) ---
 
 def lease_acquire(conn: psycopg.Connection, extractor: str, run_id: str, ttl_s: int) -> bool:
