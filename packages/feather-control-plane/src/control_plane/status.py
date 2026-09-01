@@ -40,6 +40,9 @@ EV_TIMEOUT = "timeout"          # source did not respond at all (http=0, all att
 EV_SINK_ERROR = "sink_error"    # the load/sink (MotherDuck) failed after retries (API extractors)
 EV_RATE_LIMITED = "rate_limited"  # source 429 (Zakya)
 EV_OK_PARTIAL = "ok_partial"    # landed, but some records quarantined (Zakya, ADR 0021)
+EV_SOURCE_NOT_SETTLED = "source_not_settled"  # source answered, but as-of a moment before the
+                                # business date closed, so the answer cannot be complete —
+                                # NOT terminal, retry once the source has caught up (#2957)
 EV_ERROR = "error"              # DB extractors: fused read-or-load failure (single leg)
 
 # --- control.budget_usage.budget_name ---
