@@ -49,7 +49,7 @@ Exit codes: `0` clean, `1` at least one error-severity problem, `2` a malformed 
 | `source` | which relations: `include`/`exclude`/`deny` globs on `schema.table`, plus an optional catalog `discovery.adapter` |
 | `destination` | MotherDuck database, schema mapping (default: source schemas preserved), dlt pipeline name, retirement policy |
 | `replication` | slot, publication, cadence, key policy for unkeyed tables, replica identity, batch size |
-| `control` | the extractor identity, control-plane availability policy, event durability |
+| `control` | the extractor identity, control-plane availability policy, event durability, `reconcile_exclude` |
 | `classification` | optional first-match rules overriding the default `table_class` |
 
 Secrets are **references**: `dsn_env` and `token_env` name environment variables. A manifest
@@ -73,6 +73,17 @@ Primary key → merge. Otherwise a **NOT NULL** non-partial, non-expression uniq
 it (`NULL = NULL` is never true, so a nullable key would insert a duplicate on every load).
 Otherwise `replication.tables_without_key`: `reject` (default, an error naming the table) or
 `append_only`. `key_overrides` can force `append_only` or `full_row` per table.
+
+`append_only` is a load contract, not "no key": on the CDC path the relation **merges on `lsn`**
+(unique per WAL record), so a batch replayed after a crash lands exactly once. An UPDATE lands as
+an additional row version and a DELETE record removes nothing — updates and deletes are recorded
+as arrivals, not applied. A re-baseline (resnapshot, a resumed interrupted snapshot, a slot-loss
+re-init) therefore REPLACES the destination copy: a snapshot row has no `lsn` to dedup on.
+
+`control.reconcile_exclude` names `schema.table` globs the reconcile counts skip — for relations
+this drainer writes while it runs (`control.run`, `control.event`), which can never tie
+source-now against destination-now. They still emit a `reconcile` event with `skipped`/`excluded`
+and a reason, so the gap is visible.
 
 Merging on a unique index needs the source to publish those columns on DELETE — set
 `replica_identity: full` or `ALTER TABLE ... REPLICA IDENTITY USING INDEX`. The compiler warns

@@ -120,3 +120,16 @@ def test_shipped_registrations_validate_with_zero_errors(name):
     assert [p for p in problems if p.severity == "error"] == []
     # env references only — no value ever lands in a registration file
     assert m.source.dsn_env.isupper() and m.destination.token_env.isupper()
+
+
+def test_reconcile_exclude_entries_must_be_schema_qualified():
+    ok = mf.validate_static(_m(control={"reconcile_exclude": ["control.run", "control.event*"]}))
+    assert "reconcile_exclude_pattern" not in _codes(ok, "error")
+    bad = mf.validate_static(_m(control={"reconcile_exclude": ["run"]}))
+    assert "reconcile_exclude_pattern" in _codes(bad, "error")
+
+
+def test_the_control_plane_registration_excludes_the_tables_it_writes_while_running():
+    m = mf.load(str(REGISTRATIONS / "control_plane.yml"))
+    assert set(m.control.reconcile_exclude) == {"control.run", "control.event",
+                                                "control.budget_usage"}

@@ -15,8 +15,14 @@ from typing import Iterable, Sequence
 
 import dlt
 import duckdb
+from dlt.destinations.impl.motherduck.configuration import MotherDuckCredentials
 
 RUNTIME_SCHEMA = "_cdc_runtime"
+
+
+def q(identifier: str) -> str:
+    """One duckdb identifier, quoted. An embedded double quote is doubled, never dropped."""
+    return '"' + str(identifier).replace('"', '""') + '"'
 
 
 @dataclass
@@ -36,15 +42,24 @@ class Destination:
         self._ensured = False
 
     # --- credentials ---
-    def credentials(self) -> str:
+    def _token(self) -> str:
+        token = os.environ.get(self.spec.token_env or "")
+        if not token:
+            raise ValueError(f"env var {self.spec.token_env!r} is not set (no token value is logged)")
+        return token
+
+    def credentials(self):
+        """duckdb: the file path. motherduck: a typed `MotherDuckCredentials` whose `str()`
+        masks the password — NEVER `md:<db>?motherduck_token=<token>`, because duckdb echoes a
+        connection string back in its exception text and Railway logs it (#3079 review)."""
         if self.spec.kind == "duckdb":
             if not self.spec.path:
                 raise ValueError("duckdb destination needs `path`")
             return self.spec.path
-        token = os.environ.get(self.spec.token_env or "")
-        if not token:
-            raise ValueError(f"env var {self.spec.token_env!r} is not set (no token value is logged)")
-        return f"md:{self.spec.database}?motherduck_token={token}"
+        creds = MotherDuckCredentials()
+        creds.database = self.spec.database
+        creds.password = self._token()
+        return creds
 
     def _dlt_destination(self):
         if self.spec.kind == "duckdb":
@@ -52,7 +67,11 @@ class Destination:
         return dlt.destinations.motherduck(credentials=self.credentials())
 
     def connect(self) -> duckdb.DuckDBPyConnection:
-        return duckdb.connect(self.credentials())
+        if self.spec.kind == "duckdb":
+            return duckdb.connect(self.credentials())
+        # config= keeps the token out of the connection string duckdb quotes in errors.
+        return duckdb.connect(f"md:{self.spec.database}",
+                              config={"motherduck_token": self._token()})
 
     # --- pipelines ---
     def pipeline_for_schema(self, source_schema: str, target_schema: str,
@@ -185,7 +204,7 @@ class Destination:
     def table_row_count(self, schema: str, table: str) -> int | None:
         try:
             with self.connect() as con:
-                return con.execute(f'select count(*) from "{schema}"."{table}"').fetchone()[0]
+                return con.execute(f"select count(*) from {q(schema)}.{q(table)}").fetchone()[0]
         except Exception:  # noqa: BLE001 — table not there yet is not an error here
             return None
 
@@ -196,7 +215,7 @@ class Destination:
         with self.connect() as con:
             for sch in (schema, f"{schema}_staging"):
                 try:
-                    con.execute(f'drop table if exists "{sch}"."{table}"')
+                    con.execute(f"drop table if exists {q(sch)}.{q(table)}")
                     dropped.append(f"{sch}.{table}")
                 except Exception:  # noqa: BLE001 — missing schema is fine
                     pass

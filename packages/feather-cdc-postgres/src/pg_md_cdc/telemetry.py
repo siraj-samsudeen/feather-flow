@@ -10,8 +10,10 @@ carrying a delta in `extra`.
 from __future__ import annotations
 
 import datetime as _dt
+import fnmatch
 
 import psycopg
+from psycopg import sql
 
 from control_plane import status as cp_status
 
@@ -82,13 +84,25 @@ def checkpoint_age_s(committed_at) -> float | None:
     return (_dt.datetime.now(_dt.timezone.utc) - committed_at).total_seconds()
 
 
+EXCLUDED_REASON = "excluded by manifest: self-written by this drainer"
+
+
 def reconcile_counts(dsn: str, destination, relations, schema_map,
-                     *, threshold: int = RECONCILE_MAX_ROWS) -> list[dict]:
+                     *, threshold: int = RECONCILE_MAX_ROWS,
+                     exclude: "list[str] | None" = None) -> list[dict]:
     """Source vs destination row counts, per relation. A table whose source count exceeds
-    `threshold` is reported as skipped with a reason — never as a silent pass."""
+    `threshold`, or which the manifest excludes, is reported as skipped with a reason — never
+    as a silent pass. `exclude` exists because a relation this drainer WRITES DURING THE RUN
+    (its own `control.run`/`control.event`) can never tie "now" against "now".
+    """
     out: list[dict] = []
+    patterns = list(exclude or [])
     with psycopg.connect(dsn, connect_timeout=10) as conn:
         for schema, table in relations:
+            if any(fnmatch.fnmatchcase(f"{schema}.{table}", pat) for pat in patterns):
+                out.append({"schema": schema, "table": table, "skipped": True,
+                            "excluded": True, "reason": EXCLUDED_REASON})
+                continue
             row = conn.execute(
                 "select reltuples::bigint from pg_class c join pg_namespace n "
                 "on n.oid = c.relnamespace where n.nspname = %s and c.relname = %s",
@@ -98,7 +112,8 @@ def reconcile_counts(dsn: str, destination, relations, schema_map,
                 out.append({"schema": schema, "table": table, "skipped": True,
                             "reason": f"estimated {estimate} rows > threshold {threshold}"})
                 continue
-            src = conn.execute(f'select count(*) from "{schema}"."{table}"').fetchone()[0]
+            src = conn.execute(sql.SQL("select count(*) from {}.{}").format(
+                sql.Identifier(schema), sql.Identifier(table))).fetchone()[0]
             dest = destination.table_row_count(schema_map.get(schema, schema), table)
             out.append({"schema": schema, "table": table, "skipped": False,
                         "source_rows": int(src), "destination_rows": dest,
@@ -114,8 +129,11 @@ def emit_reconcile(run, per_table_rows) -> None:
     for row in per_table_rows:
         entity = f"{row['schema']}.{row['table']}"
         if row.get("skipped"):
+            extra = {"skipped": True, "reason": row.get("reason")}
+            if row.get("excluded"):
+                extra["excluded"] = True
             run.event(entity=entity, status=cp_status.EV_ZERO_ROWS, unit="reconcile",
-                      extra={"skipped": True, "reason": row.get("reason")})
+                      extra=extra)
         else:
             # A count that does not tie is the whole point of reconciling: it is an error-class
             # event, never an `ok` with an interesting `extra` nobody queries.

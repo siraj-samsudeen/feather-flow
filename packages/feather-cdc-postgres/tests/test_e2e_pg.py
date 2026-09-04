@@ -6,6 +6,7 @@ does not duplicate, ownership blocks a second run) only exist across those three
 """
 from __future__ import annotations
 
+import contextlib
 import threading
 
 import duckdb
@@ -559,3 +560,98 @@ def test_a_steady_state_run_records_lifecycle_for_tables_it_did_not_baseline(
     dest.write_lifecycle(cfg.registration, "public", "b", "drift_review", "hand-set")
     tick(cfg, relations)
     assert dest.read_lifecycle(cfg.registration)[("public", "b")] == "drift_review"
+
+
+# --------------------------------------------------------------------------- append_only
+
+
+def test_an_append_only_replay_after_a_crash_lands_each_change_exactly_once(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """A keyless relation gets primary_key=[], so a plain "merge" DEGRADES TO APPEND and the
+    batch replayed after a crash between the load commit and the checkpoint write lands twice.
+    append_only merges on `lsn` — unique per WAL record — so the replay is exact."""
+    sql(fresh_db, "create table public.events (id int, note text)",
+        "insert into public.events values (0, 'baseline')")
+    relations = [rel("public", "events", policy="append_only")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)   # the snapshot creates the table with NO key; CDC then adds `lsn`
+    sql(fresh_db, "insert into public.events values (1, 'a'), (2, 'b')")
+
+    original = dest.write_checkpoint
+    monkeypatch.setattr(dest, "write_checkpoint", lambda *a, **kw: (_ for _ in ()).throw(
+        RuntimeError("the load committed, then the checkpoint write died")))
+    with pytest.raises(RuntimeError):
+        tick(cfg, relations)
+    monkeypatch.setattr(dest, "write_checkpoint", original)
+
+    tick(cfg, relations)
+    con = duckdb.connect(duckdb_path)
+    assert con.execute("select id, note from public.events order by id").fetchall() == [
+        (0, "baseline"), (1, "a"), (2, "b")]
+    assert con.execute("select count(*) - count(distinct lsn) from public.events "
+                       "where lsn is not null").fetchone() == (0,)
+    con.close()
+
+
+def test_an_append_only_update_adds_a_row_version_while_a_keyed_update_replaces(
+        fresh_db, names, duckdb_path, tmp_path):
+    """append_only promises inserts: an UPDATE is recorded as an arrival, not applied, and a
+    DELETE record removes nothing. The keyed table beside it is the positive control."""
+    sql(fresh_db,
+        "create table public.events (id int, note text)",
+        "create table public.keyed (id int primary key, note text)",
+        "insert into public.events values (1, 'first')",
+        "insert into public.keyed values (1, 'first')")
+    relations = [rel("public", "events", policy="append_only"), rel("public", "keyed", "id")]
+    cfg, _ = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+
+    sql(fresh_db, "update public.events set note = 'second' where id = 1",
+        "update public.keyed set note = 'second' where id = 1",
+        "insert into public.events values (2, 'gone')",
+        "delete from public.events where id = 2")
+    tick(cfg, relations)
+
+    con = duckdb.connect(duckdb_path)
+    assert con.execute("select note from public.events where id = 1 order by lsn nulls first").fetchall() == [
+        ("first",), ("second",)], "the update landed as an additional row version"
+    assert con.execute("select count(*) from public.events where id = 2").fetchone() == (2,), \
+        "the insert AND the delete are both recorded as arrivals; neither removes the other"
+    assert con.execute("select count(*) from public.events where id = 2 "
+                       "and deleted_ts is not null").fetchone() == (1,)
+    assert con.execute("select note from public.keyed").fetchall() == [("second",)]
+    con.close()
+
+
+def test_resuming_an_interrupted_append_only_snapshot_replaces_the_baseline(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """A snapshot row carries no `lsn` to dedup on, so re-reading a keyless table on top of a
+    partial copy doubles it. The resume must DROP the destination copy before re-baselining."""
+    sql(fresh_db, "create table public.events (id int, note text)",
+        "insert into public.events values (1, 'pre'), (2, 'also')")
+    relations = [rel("public", "events", policy="append_only")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+
+    # The slot is created, the baseline load lands, and THEN the run dies — so the lifecycle
+    # row still says `snapshotting` and the next run retakes the same baseline.
+    real = runner.snapshot.snapshot_resources
+
+    @contextlib.contextmanager
+    def load_then_die(*a, **kw):
+        with real(*a, **kw) as by_schema:
+            yield by_schema
+        raise RuntimeError("container killed after the snapshot load")
+
+    monkeypatch.setattr(runner.snapshot, "snapshot_resources", load_then_die)
+    with pytest.raises(RuntimeError):
+        tick(cfg, relations)
+    monkeypatch.undo()
+    assert dest.read_lifecycle(cfg.registration) == {("public", "events"): "snapshotting"}
+    assert len(table(duckdb_path, "public.events")) == 2, "the interrupted baseline did land"
+
+    tick(cfg, relations)
+    con = duckdb.connect(duckdb_path)
+    assert con.execute("select id, note from public.events order by id").fetchall() == [
+        (1, "pre"), (2, "also")]
+    con.close()
+    assert dest.read_lifecycle(cfg.registration) == {("public", "events"): STREAMING}

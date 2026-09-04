@@ -636,6 +636,8 @@ class ItemGenerator:
     # (schema, table) -> primary key columns (#3079): saves one catalog round-trip per
     # Relation message and keeps relation identity schema-qualified.
     keys_by_relation: Optional[Dict[Any, Sequence[str]]] = None
+    # (schema, table) -> key policy; "append_only" turns the CDC merge key into `lsn`.
+    policies_by_relation: Optional[Dict[Any, str]] = None
     last_commit_lsn: Optional[int] = field(default=None, init=False)
     generated_all: bool = False
 
@@ -683,6 +685,7 @@ class ItemGenerator:
                 columns=self.columns,
                 credentials=self.credentials,  # for true-PK resolution (#2851 patch)
                 keys_by_relation=self.keys_by_relation,
+                policies_by_relation=self.policies_by_relation,
             )
             cur.consume_stream(consumer)
         except StopReplication:  # completed batch or reached `upto_lsn`
@@ -717,8 +720,11 @@ class MessageConsumer:
         columns: Optional[Dict[str, TTableSchemaColumns]] = None,
         credentials: Optional[ConnectionStringCredentials] = None,
         keys_by_relation: Optional[Dict[Any, Sequence[str]]] = None,
+        policies_by_relation: Optional[Dict[Any, str]] = None,
     ) -> None:
         self.keys_by_relation = keys_by_relation or {}
+        # (schema, table) -> compiled key policy (#3079 D-8). "append_only" merges on `lsn`.
+        self.policies_by_relation = policies_by_relation or {}
         self.upto_lsn = upto_lsn
         self.pub_ops = pub_ops
         self.target_batch_size = target_batch_size
@@ -854,12 +860,17 @@ class MessageConsumer:
             columns[column_name] = merge_column(columns[column_name], column_val)
 
         # add hints for replication columns
+        append_only = (
+            self.policies_by_relation.get((decoded_msg.namespace, table_name)) == "append_only"
+        )
         columns["lsn"] = {"data_type": "bigint", "nullable": True}
         if self.pub_ops["update"] or self.pub_ops["delete"]:
             columns["lsn"]["dedup_sort"] = "desc"
         if self.pub_ops["delete"]:
             columns["deleted_ts"] = {
-                "hard_delete": True,
+                # An append_only relation records arrivals; a DELETE record must not remove
+                # the row version it refers to (#3079 D-8).
+                "hard_delete": not append_only,
                 "data_type": "timestamp",
                 "nullable": True,
             }
@@ -867,6 +878,13 @@ class MessageConsumer:
         # determine write disposition
         write_disposition: TWriteDisposition = "append"
         if self.pub_ops["update"] or self.pub_ops["delete"]:
+            write_disposition = "merge"
+        if append_only:
+            # A keyless relation gets primary_key=[], so a "merge" with no key silently
+            # DEGRADES TO APPEND and a batch replayed after a crash lands twice. `lsn` is
+            # unique per WAL record, so merging on it makes the replay exact; an UPDATE
+            # still lands as a new row version, which is what append_only promises.
+            columns["lsn"]["primary_key"] = True
             write_disposition = "merge"
 
         # include meta item to emit hints while yielding data

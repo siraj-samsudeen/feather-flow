@@ -156,3 +156,55 @@ def test_an_empty_source_table_with_no_destination_table_yet_ties(fresh_db, duck
     telemetry.emit_reconcile(run, rows)
     assert {e["entity"]: e["status"] for e in run.events} == {
         "public.still_empty": "ok", "public.has_rows": "error"}
+
+
+def test_a_relation_the_drainer_writes_during_the_run_is_excluded_not_failed(
+        fresh_db, duckdb_path, tmp_path):
+    """`control.run`/`control.event` change while this drainer runs, so a source-now vs
+    destination-now count can never tie. Excluded is VISIBLE (zero_rows + a reason), never a
+    silent pass and never the EV_ERROR it would otherwise emit on every tick forever."""
+    dest = Destination(DestinationSpec(kind="duckdb", database="t", path=duckdb_path,
+                                       pipelines_dir=str(tmp_path / "dlt")))
+    dest.ensure_runtime_tables()
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create schema control")
+        c.execute("create table control.run (id int primary key)")
+        c.execute("create table control.other (id int primary key)")
+        c.execute("insert into control.run values (1)")
+        c.execute("insert into control.other values (1)")
+
+    rows = telemetry.reconcile_counts(fresh_db, dest, [("control", "run"), ("control", "other")],
+                                      {}, exclude=["control.run"])
+    by_table = {r["table"]: r for r in rows}
+    assert by_table["run"] == {"schema": "control", "table": "run", "skipped": True,
+                               "excluded": True, "reason": telemetry.EXCLUDED_REASON}
+    assert by_table["other"]["skipped"] is False and by_table["other"]["match"] is False
+
+    run = FakeRun()
+    telemetry.emit_reconcile(run, rows)
+    by_entity = {e["entity"]: e for e in run.events}
+    excluded = by_entity["control.run"]
+    assert (excluded["status"], excluded["unit"]) == ("zero_rows", "reconcile")
+    assert excluded["extra"] == {"skipped": True, "reason": telemetry.EXCLUDED_REASON,
+                                 "excluded": True}
+    assert by_entity["control.other"]["status"] == "error", "the positive control still fires"
+
+
+def test_reconcile_counts_quotes_an_embedded_double_quote_in_a_table_name(
+        fresh_db, duckdb_path, tmp_path):
+    dest = Destination(DestinationSpec(kind="duckdb", database="t", path=duckdb_path,
+                                       pipelines_dir=str(tmp_path / "dlt")))
+    dest.ensure_runtime_tables()
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute('create table public."we""ird" (id int primary key)')
+        c.execute('insert into public."we""ird" values (1), (2)')
+    with dest.connect() as con:
+        con.execute('create schema if not exists "public"')
+        con.execute('create table "public"."we""ird" (id integer)')
+        con.execute('insert into "public"."we""ird" values (1), (2)')
+
+    rows = telemetry.reconcile_counts(fresh_db, dest, [("public", 'we"ird')], {})
+    assert rows == [{"schema": "public", "table": 'we"ird', "skipped": False,
+                     "source_rows": 2, "destination_rows": 2, "delta": 0, "match": True}]
+    assert 'public.we"ird' in dest.drop_table("public", 'we"ird')
+    assert dest.table_row_count("public", 'we"ird') is None

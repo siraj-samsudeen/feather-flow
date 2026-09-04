@@ -99,6 +99,9 @@ class Control:
     availability_policy: str = "pause_if_control_unreachable"
     event_durability: str = "direct_postgres"  # direct_postgres | persistent_local_wal
     wal_dir: Optional[str] = None
+    # "schema.table" globs whose row counts this drainer must NOT reconcile: relations it
+    # writes to DURING the run can never tie source-now against destination-now.
+    reconcile_exclude: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -187,7 +190,11 @@ def parse(raw: Dict[str, Any], *, path: Optional[str] = None) -> Manifest:
         "replication",
     )
     ctl = raw.get("control") or {}
-    _reject_unknown(ctl, {"extractor", "availability_policy", "event_durability", "wal_dir"}, "control")
+    _reject_unknown(
+        ctl,
+        {"extractor", "availability_policy", "event_durability", "wal_dir", "reconcile_exclude"},
+        "control",
+    )
     cls_raw = raw.get("classification") or {}
     _reject_unknown(cls_raw, {"rules"}, "classification")
     rules = [Rule(match=str(r["match"]), table_class=str(r["table_class"])) for r in (cls_raw.get("rules") or [])]
@@ -224,6 +231,7 @@ def parse(raw: Dict[str, Any], *, path: Optional[str] = None) -> Manifest:
             availability_policy=str(ctl.get("availability_policy", "pause_if_control_unreachable")),
             event_durability=str(ctl.get("event_durability", "direct_postgres")),
             wal_dir=ctl.get("wal_dir"),
+            reconcile_exclude=[str(x) for x in (ctl.get("reconcile_exclude") or [])],
         ),
         classification=Classification(rules=rules),
         path=path,
@@ -352,6 +360,10 @@ def validate_static(m: Manifest) -> List[Problem]:
     _check_enum(
         p, "control.event_durability", m.control.event_durability, ("direct_postgres", "persistent_local_wal")
     )
+    for pat in m.control.reconcile_exclude:
+        if not _QUALIFIED.match(pat):
+            err("reconcile_exclude_pattern",
+                f"control.reconcile_exclude entry {pat!r} must be a 'schema.table' glob")
     if m.control.event_durability == "persistent_local_wal":
         if not m.control.wal_dir:
             err("wal_dir_missing", "event_durability=persistent_local_wal requires control.wal_dir")

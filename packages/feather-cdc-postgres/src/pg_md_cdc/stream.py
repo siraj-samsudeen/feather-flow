@@ -4,7 +4,8 @@ Yields `Batch`es the caller loads and only THEN checkpoints — the checkpoint i
 (`_cdc_runtime.checkpoint`), never dlt resource state, so an LSN is never discarded before its
 destination load commits. A transaction larger than `target_batch_size` still lands whole
 (pgoutput never splits a commit). Kept from the #2851 pilot via the vendored consumer: true-PK
-override, unchanged-TOAST splice, `lsn` dedup_sort desc, `deleted_ts` hard_delete.
+override, unchanged-TOAST splice, `lsn` dedup_sort desc, `deleted_ts` hard_delete. An
+`append_only` relation merges on `lsn` instead (no key of its own), so a replay is exact.
 """
 from __future__ import annotations
 
@@ -53,6 +54,7 @@ def drain(
     *,
     target_batch_size: int = 1000,
     keys_by_relation: Mapping[Relation, Sequence[str]] | None = None,
+    policies_by_relation: Mapping[Relation, str] | None = None,
 ) -> Iterator[Batch]:
     """Iterate committed batches from `start_lsn` up to the slot's current max LSN.
 
@@ -77,6 +79,7 @@ def drain(
             include_columns=None,
             columns=None,
             keys_by_relation=dict(keys_by_relation or {}),
+            policies_by_relation=dict(policies_by_relation or {}),
         )
         grouped = gen.collect()
         yield Batch(grouped, gen.last_commit_lsn or cursor_lsn, gen.generated_all)

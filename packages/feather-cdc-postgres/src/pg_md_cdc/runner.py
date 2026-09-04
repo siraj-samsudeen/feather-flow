@@ -43,6 +43,7 @@ class RuntimeConfig:
     slot_loss_policy: str = "resnapshot"
     retirement_policy: str = "freeze"
     reconcile_threshold: int = telemetry.RECONCILE_MAX_ROWS
+    reconcile_exclude: list = field(default_factory=list)
     manifest_path: str = "<manifest>"   # only ever interpolated into operator remedy text
 
     def target_schema(self, source_schema: str) -> str:
@@ -82,6 +83,16 @@ def _load_ids(info) -> list[str]:
 
 
 # --------------------------------------------------------------------------- phases
+
+
+def _baseline_kwargs(rel) -> dict:
+    """An append_only relation has no key a baseline could dedup on — its CDC key is `lsn`,
+    which a snapshot row does not carry — so re-reading it on top of the old copy DOUBLES it.
+    Re-baselining one is a replace: dlt's `drop_resources` drops the destination table and
+    forgets it, which a bare `drop table` does not (dlt then skips the CREATE and the load
+    dies "table does not exist")."""
+    from .selectors import APPEND_ONLY
+    return {"refresh": "drop_resources"} if rel.key_policy == APPEND_ONLY else {}
 
 
 def _to_snapshotting(lc: Lifecycle, schema: str, table: str, detail: str) -> None:
@@ -127,10 +138,20 @@ def _initialize(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
         with snapshot.snapshot_resources(cfg.source_dsn, handle.snapshot_name, desired,
                                          keys, key_policies=policies) as by_schema:
             handle.close()  # the import already happened; the exporter is no longer needed
+            by_key = {(r.schema, r.table): r for r in relations}
             for source_schema, resources in by_schema.items():
                 owner.assert_held()
                 pipe = pipelines.get(source_schema)
-                pipe.run(resources)
+                # append_only relations re-baseline as a REPLACE, so they load in their own
+                # call: `drop_resources` would otherwise drop the keyed tables beside them.
+                plain = [x for x in resources
+                         if not _baseline_kwargs(by_key[(source_schema, x.name)])]
+                replaced = [x for x in resources
+                            if _baseline_kwargs(by_key[(source_schema, x.name)])]
+                if plain:
+                    pipe.run(plain)
+                if replaced:
+                    pipe.run(replaced, refresh="drop_resources")
                 _emit_table_events(run, pipe, "snapshot",
                                    {t for s, t in desired if s == source_schema},
                                    {"reinit_reason": reason})
@@ -156,7 +177,7 @@ def _baseline(cfg: RuntimeConfig, rel, *, run, owner, lc: Lifecycle, pipelines: 
     pipe = pipelines.get(rel.schema)
     with snapshot.baseline_resource(cfg.source_dsn, (rel.schema, rel.table), list(rel.key),
                                     key_policy=rel.key_policy) as resource:
-        pipe.run(resource)
+        pipe.run(resource, **_baseline_kwargs(rel))
     _emit_table_events(run, pipe, "backfill", {rel.table}, {"detail": detail})
     lc.ensure(rel.schema, rel.table, STREAMING, detail)
 
@@ -176,7 +197,7 @@ def _resume_interrupted_snapshots(cfg: RuntimeConfig, relations, *, run, owner,
         pipe = pipelines.get(r.schema)
         with snapshot.baseline_resource(cfg.source_dsn, (r.schema, r.table), list(r.key),
                                         key_policy=r.key_policy) as resource:
-            pipe.run(resource)
+            pipe.run(resource, **_baseline_kwargs(r))
         _emit_table_events(run, pipe, "snapshot", {r.table},
                            {"detail": "resumed an interrupted snapshot"})
         lc.ensure(r.schema, r.table, CATCHING_UP, "resumed an interrupted snapshot")
@@ -213,6 +234,7 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines) 
     """Batch loop. The checkpoint moves only after every namespace in the batch committed;
     the slot is advanced only to a checkpointed LSN."""
     keys = {(r.schema, r.table): list(r.key) for r in relations}
+    policies = {(r.schema, r.table): r.key_policy for r in relations}
     checkpoint = cfg.destination.read_checkpoint(cfg.registration)
     start_lsn = checkpoint[0] if checkpoint else 0
 
@@ -226,7 +248,8 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines) 
     batches = rows = 0
     for batch in stream.drain(cfg.source_dsn, cfg.slot, cfg.publication, start_lsn,
                               target_batch_size=cfg.target_batch_size,
-                              keys_by_relation=keys):
+                              keys_by_relation=keys,
+                              policies_by_relation=policies):
         owner.assert_held()
         load_ids: list[str] = []
         for source_schema, items in batch.items_by_namespace.items():
@@ -314,7 +337,8 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
 
     telemetry.emit_reconcile(run, telemetry.reconcile_counts(
         cfg.source_dsn, cfg.destination, [(r.schema, r.table) for r in active],
-        cfg.schema_map, threshold=cfg.reconcile_threshold))
+        cfg.schema_map, threshold=cfg.reconcile_threshold,
+        exclude=list(cfg.reconcile_exclude)))
     return result
 
 
@@ -393,6 +417,7 @@ def config_from_manifest(m, *, dsn: str, destination: Destination,
         replica_identity=m.replication.replica_identity,
         slot_loss_policy=m.replication.slot_loss_policy,
         retirement_policy=m.destination.retirement_policy,
+        reconcile_exclude=list(m.control.reconcile_exclude),
     )
 
 
@@ -511,7 +536,7 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
                 pipe = pipelines.get(rel.schema)
                 with snapshot.baseline_resource(cfg.source_dsn, (rel.schema, rel.table),
                                                 list(rel.key), key_policy=rel.key_policy) as res:
-                    pipe.run(res)
+                    pipe.run(res, **_baseline_kwargs(rel))
                 _emit_table_events(run_ctx, pipe, "snapshot", {rel.table},
                                    {"reason": "operator resnapshot"})
                 # The refreshed signature is what clears a key_change block: without it the

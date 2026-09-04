@@ -11,6 +11,18 @@ import psycopg
 
 KEY_PREFIX = "pg_md_cdc:"
 
+# `pg_try_advisory_lock(bigint)` splits its key across pg_locks: classid = the high 32 bits,
+# objid = the low 32 bits, objsubid = 1 (2 marks the two-int form). Probed on PG 17,
+# 04-Sep-2026 — a negative hashtext sign-extends, so classid is 4294967295, never 0. Counting
+# any granted advisory lock instead would call someone else's lock our own.
+_HELD_SQL = """
+select count(*) from pg_locks
+where locktype = 'advisory' and pid = pg_backend_pid() and granted
+  and objsubid = 1
+  and classid = ((hashtext(%s)::bigint >> 32) & 4294967295)::bigint::oid
+  and objid = (hashtext(%s)::bigint & 4294967295)::bigint::oid
+"""
+
 
 class OwnershipLost(RuntimeError):
     """The owner session is gone (connection dead or advisory lock no longer held)."""
@@ -44,10 +56,7 @@ class OwnerSession:
             raise OwnershipLost(f"owner session for slot {self.slot!r} is not held")
         try:
             self._conn.execute("select 1").fetchone()
-            granted = self._conn.execute(
-                "select count(*) from pg_locks where locktype = 'advisory' "
-                "and pid = pg_backend_pid() and granted"
-            ).fetchone()[0]
+            granted = self._conn.execute(_HELD_SQL, (self.key, self.key)).fetchone()[0]
         except Exception as exc:  # noqa: BLE001 — a dead connection IS a lost lock
             self._held = False
             raise OwnershipLost(
