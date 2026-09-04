@@ -1,0 +1,31 @@
+[project]
+name = "pg-md-cdc"
+version = "0.1.0"
+description = "Declarative PostgreSQL -> MotherDuck CDC runtime (#3079; generalizes the #2851 Featherbase pilot)"
+requires-python = ">=3.12"
+dependencies = [
+    # sql_database extra is a real requirement of the vendored pg_replication source
+    # (upstream dlt-hub/verified-sources#685 — `dlt init` ships incomplete requirements).
+    "dlt[motherduck,sql_database]>=1.0.0",
+    # Pin EXACT — an open top end lets a rebuild grab a duckdb MotherDuck has no extension
+    # build for, which fails at CONNECT time and reads like an outage (#1187/#2808).
+    "duckdb==1.5.2",
+    # pgoutput replication protocol lives in psycopg2 only (psycopg3 has no replication
+    # support) — used by the vendored pg_replication source.
+    "psycopg2-binary>=2.9.9",
+    # Source catalog reads, the advisory owner session, and the Postgres control plane (#204);
+    # control_plane is vendored into src/ (control_plane/vendor-sync.sh).
+    "psycopg[binary]>=3.1",
+    # Registration manifests are YAML (registrations/*.yml).
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pg_md_cdc", "src/control_plane", "src/pg_replication"]
