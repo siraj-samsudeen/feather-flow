@@ -48,7 +48,9 @@ def slot_probe(dsn: str, slot: str) -> dict | None:
 
 
 def _fuse_bytes(setting) -> int | None:
-    """pg_settings gives a number plus a unit ('MB', '8kB', …); -1 means no fuse."""
+    """pg_settings gives a number plus a unit ('MB', '8kB', …). A negative setting means NO
+    fuse, and it reports as None — the same spelling `discovery.slot_state` uses. Never -1:
+    a consumer comparing `lag > 10% of fuse` reads that as a zero fuse and alarms forever."""
     if not setting:
         return None
     value, unit = setting
@@ -57,7 +59,7 @@ def _fuse_bytes(setting) -> int | None:
     except (TypeError, ValueError):
         return None
     if n < 0:
-        return -1
+        return None
     factors = {"B": 1, "kB": 1024, "8kB": 8192, "MB": 1024 ** 2, "GB": 1024 ** 3}
     return n * factors.get(unit or "B", 1)
 

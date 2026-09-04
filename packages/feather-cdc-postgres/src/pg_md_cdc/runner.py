@@ -161,6 +161,32 @@ def _baseline(cfg: RuntimeConfig, rel, *, run, owner, lc: Lifecycle, pipelines: 
     lc.ensure(rel.schema, rel.table, STREAMING, detail)
 
 
+def _resume_interrupted_snapshots(cfg: RuntimeConfig, relations, *, run, owner,
+                                  lc: Lifecycle, pipelines: _Pipelines) -> list:
+    """A run killed between `create_slot_with_snapshot` and the snapshot load leaves relations
+    in `snapshotting` — and because the SLOT now exists, the next run goes straight to steady
+    state and would never take that baseline: the pre-slot rows are lost silently (the CDC
+    stream only carries what happened after the consistent point). Retake the baseline here,
+    before the drain, so a concurrent change also arrives via CDC and merge dedups it."""
+    resumed = []
+    for r in relations:
+        if lc.state_of(r.schema, r.table) != SNAPSHOTTING:
+            continue
+        owner.assert_held()
+        pipe = pipelines.get(r.schema)
+        with snapshot.baseline_resource(cfg.source_dsn, (r.schema, r.table), list(r.key),
+                                        key_policy=r.key_policy) as resource:
+            pipe.run(resource)
+        _emit_table_events(run, pipe, "snapshot", {r.table},
+                           {"detail": "resumed an interrupted snapshot"})
+        lc.ensure(r.schema, r.table, CATCHING_UP, "resumed an interrupted snapshot")
+        lc.ensure(r.schema, r.table, STREAMING, "resumed an interrupted snapshot")
+        resumed.append((r.schema, r.table))
+    if resumed:
+        _log(f"resumed interrupted snapshots: {resumed}")
+    return resumed
+
+
 def _reconcile_selection(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
                          pipelines: _Pipelines, blocked: set | None = None) -> tuple[list, list]:
     owner.assert_held()
@@ -243,6 +269,10 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
     if slot is None or lost:
         reason = "first run" if slot is None else f"slot invalidated ({slot.get('wal_status')})"
         if lost:
+            # Dropping the publication and the slot is the most destructive thing this runtime
+            # does — a peer that acquired the freed lock could already be re-initialising. Prove
+            # ownership BEFORE the drop, not at the top of _initialize which runs after it.
+            owner.assert_held()
             for r in relations:
                 lc.ensure(r.schema, r.table, RESNAPSHOT_REQUIRED, reason)
             publication.drop_publication(cfg.source_dsn, cfg.publication)
@@ -262,6 +292,8 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
         active = outcome.active(relations)
         _reconcile_selection(cfg, active, run=run, owner=owner, lc=lc, pipelines=pipelines,
                              blocked=blocked)
+        _resume_interrupted_snapshots(cfg, active, run=run, owner=owner, lc=lc,
+                                      pipelines=pipelines)
 
     result = _drain(cfg, active, run=run, owner=owner, pipelines=pipelines)
     result["drift_blocked"] = sorted(blocked)

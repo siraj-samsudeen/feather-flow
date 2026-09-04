@@ -662,6 +662,10 @@ class ItemGenerator:
         Maintains LSN of last consumed Commit message in object state.
         Does not advance the slot.
         """
+        # Local patch (#3079 review): `cur` must exist before the try, or a failure to OPEN the
+        # replication connection — the slot already having a consumer, or an unreachable source —
+        # dies in `finally` with `UnboundLocalError: cur` and hides the real error from the log.
+        cur = None
         try:
             cur = _get_rep_conn(self.credentials).cursor()
             pub_ops = get_pub_ops(self.options["publication_names"], cur)
@@ -684,7 +688,8 @@ class ItemGenerator:
         except StopReplication:  # completed batch or reached `upto_lsn`
             pass
         finally:
-            cur.connection.close()
+            if cur is not None:
+                cur.connection.close()
         self.last_commit_lsn = consumer.last_commit_lsn
         self.generated_all = consumer.consumed_all
         return consumer

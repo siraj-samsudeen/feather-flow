@@ -48,7 +48,9 @@ def test_emit_probe_uses_the_entity_and_unit_the_sweep_queries(fresh_db, names):
 
 def test_fuse_bytes_reads_units_and_the_unlimited_sentinel():
     assert telemetry._fuse_bytes(("2048", "MB")) == 2048 * 1024 ** 2
-    assert telemetry._fuse_bytes(("-1", "MB")) == -1
+    # unlimited reads as None, NOT -1: cdc_alarms compares lag against a fraction of the
+    # fuse, and -1 makes every lag "over" it (a phantom orange on every sweep).
+    assert telemetry._fuse_bytes(("-1", "MB")) is None
     assert telemetry._fuse_bytes(("16", "8kB")) == 16 * 8192
     assert telemetry._fuse_bytes(None) is None
 

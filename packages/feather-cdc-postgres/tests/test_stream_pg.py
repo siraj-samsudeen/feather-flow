@@ -217,3 +217,18 @@ def test_the_vendored_single_schema_resource_still_yields_a_flat_stream(fresh_db
     assert items[1].meta.table_name == "t"
     assert [r["v"] for r in items[1].data] == ["a"]
     assert gen.generated_all is True and gen.last_commit_lsn > 0
+
+
+def test_a_replication_connection_that_cannot_open_reports_the_real_error(names):
+    """An unopenable replication connection (unreachable source, or the slot already has a
+    consumer) used to die in `finally` with `UnboundLocalError: cur`, hiding the cause."""
+    from dlt.sources.credentials import ConnectionStringCredentials
+    from pg_replication.helpers import ItemGenerator
+
+    gen = ItemGenerator(credentials=ConnectionStringCredentials(
+        "postgresql://cdc@127.0.0.1:1/nope"), slot_name=names["slot"],
+        options={"publication_names": names["publication"], "proto_version": "1"}, upto_lsn=1)
+    with pytest.raises(Exception) as exc:
+        gen.collect()
+    assert not isinstance(exc.value, UnboundLocalError), exc.value
+    assert "connect" in str(exc.value).lower() or "connection" in str(exc.value).lower()

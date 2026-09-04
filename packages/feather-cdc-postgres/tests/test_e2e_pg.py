@@ -16,7 +16,7 @@ from control_plane import ControlPlane
 from pg_md_cdc import publication, runner, stream, telemetry
 from pg_md_cdc.destination import Destination, DestinationSpec
 from pg_md_cdc.lifecycle import RETIRED, STREAMING
-from pg_md_cdc.ownership import OwnerSession
+from pg_md_cdc.ownership import OwnershipLost, OwnerSession
 from pg_md_cdc.selectors import Relation
 
 
@@ -232,6 +232,35 @@ def test_an_ambiguous_destination_commit_replays_without_duplicating(
     con.close()
 
 
+def test_a_crash_between_slot_creation_and_the_snapshot_still_gets_its_baseline(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """The worst crash window in the whole runtime: the slot EXISTS but the snapshot never
+    loaded. The next run sees a live slot, goes straight to steady state, and the rows that
+    were there before the consistent point are in no WAL record — so unless the interrupted
+    `snapshotting` state is resumed, they are lost silently and forever."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'pre-existing'), (2, 'also')")
+    relations = [rel("public", "t", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+
+    monkeypatch.setattr(runner.snapshot, "snapshot_resources",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("container killed")))
+    with pytest.raises(RuntimeError):
+        tick(cfg, relations)
+    monkeypatch.undo()
+    assert telemetry.slot_probe(fresh_db, cfg.slot) is not None, "the slot outlived the crash"
+    assert dest.read_lifecycle(cfg.registration) == {("public", "t"): "snapshotting"}
+
+    sql(fresh_db, "insert into public.t values (3, 'after')")
+    run, _ = tick(cfg, relations)
+    con = duckdb.connect(duckdb_path)
+    assert con.execute("select id, v from public.t order by id").fetchall() == [
+        (1, "pre-existing"), (2, "also"), (3, "after")]
+    assert con.execute("select count(*) - count(distinct id) from public.t").fetchone() == (0,)
+    con.close()
+    assert dest.read_lifecycle(cfg.registration) == {("public", "t"): STREAMING}
+
+
 def test_a_failed_load_leaves_the_checkpoint_and_the_slot_where_they_were(
         fresh_db, names, duckdb_path, tmp_path, monkeypatch):
     sql(fresh_db, "create table public.t (id int primary key, v text)")
@@ -428,6 +457,32 @@ def test_an_invalidated_slot_is_rebuilt_and_the_data_converges(
     assert con.execute("select count(*) - count(distinct id) from public.t").fetchone() == (0,)
     con.close()
     assert old_slot_created is not None
+
+
+def test_a_lost_owner_lock_stops_the_slot_rebuild_before_it_drops_anything(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """The invalidated-slot path DROPS the publication and the slot. If the owner session died
+    in the meantime the lock is already free, so a peer may be re-initialising — the drop must
+    not happen first and be discovered afterwards."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'a')")
+    relations = [rel("public", "t", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+
+    owner = OwnerSession(fresh_db, cfg.slot)
+    assert owner.acquire()
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        for (pid,) in c.execute(
+                "select pid from pg_locks where locktype = 'advisory' and granted").fetchall():
+            c.execute("select pg_terminate_backend(%s)", (pid,))
+
+    _report_lost_once(monkeypatch)
+    with pytest.raises(OwnershipLost):
+        runner.run_relations(cfg, relations, run=FakeRun(), owner=owner)
+
+    assert publication.published_relations(fresh_db, cfg.publication) == {("public", "t")}
+    assert telemetry.slot_probe(fresh_db, cfg.slot) is not None, "the slot was dropped anyway"
 
 
 def test_slot_loss_policy_pause_stops_instead_of_re_snapshotting(
