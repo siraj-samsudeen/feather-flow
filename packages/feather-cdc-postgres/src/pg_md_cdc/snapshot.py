@@ -21,7 +21,7 @@ from psycopg import sql
 from psycopg2.extras import LogicalReplicationConnection
 
 from pg_replication.decoders import ColumnType
-from pg_replication.schema_types import _to_dlt_column_schema
+from pg_replication.schema_types import _PG_TYPES, _to_dlt_column_schema
 
 Relation = tuple[str, str]
 
@@ -84,13 +84,41 @@ def column_hints(conn: psycopg.Connection, schema: str, table: str, keys: Sequen
     }
 
 
-def _rows(conn: psycopg.Connection, schema: str, table: str, cursor_name: str, itersize: int):
+def _select_list(conn: psycopg.Connection, schema: str, table: str):
+    """`select *` except that every column with no declared OID mapping is cast to text.
+
+    Those columns compile to `text_fallback` (schema_registry), and the CDC path already
+    receives pgoutput's text rendering — but psycopg hands the SNAPSHOT path a native object
+    (`inet` → IPv4Address), which dlt cannot serialise. Casting here makes both paths agree.
+    """
+    rows = conn.execute(
+        "select a.attname, a.atttypid, t.typcategory = 'A' as is_array from pg_attribute a "
+        "join pg_class c on c.oid = a.attrelid "
+        "join pg_namespace n on n.oid = c.relnamespace "
+        "join pg_type t on t.oid = a.atttypid "
+        "where n.nspname = %s and c.relname = %s and a.attnum > 0 and not a.attisdropped "
+        "order by a.attnum",
+        (schema, table),
+    ).fetchall()
+    parts = []
+    for name, type_oid, is_array in rows:
+        if is_array or int(type_oid) not in _PG_TYPES:
+            parts.append(sql.SQL("{}::text as {}").format(sql.Identifier(name),
+                                                          sql.Identifier(name)))
+        else:
+            parts.append(sql.Identifier(name))
+    return sql.SQL(", ").join(parts) if parts else sql.SQL("*")
+
+
+def _rows(conn: psycopg.Connection, schema: str, table: str, cursor_name: str, itersize: int,
+          select_list):
     """Server-side cursor so a large table never materialises in memory."""
     def gen():
         with conn.cursor(name=cursor_name) as cur:
             cur.itersize = itersize
             cur.execute(
-                sql.SQL("select * from {}.{}").format(sql.Identifier(schema), sql.Identifier(table))
+                sql.SQL("select {} from {}.{}").format(
+                    select_list, sql.Identifier(schema), sql.Identifier(table))
             )
             cols = [d.name for d in cur.description]
             for row in cur:
@@ -100,9 +128,10 @@ def _rows(conn: psycopg.Connection, schema: str, table: str, cursor_name: str, i
 
 def _resource(conn, schema, table, keys, key_policy, cursor_name, itersize):
     hints = column_hints(conn, schema, table, keys)
+    select_list = _select_list(conn, schema, table)
     merge = bool(keys) and key_policy != "append_only"
     return dlt.resource(
-        _rows(conn, schema, table, cursor_name, itersize),
+        _rows(conn, schema, table, cursor_name, itersize, select_list),
         name=table,
         write_disposition="merge" if merge else "append",
         primary_key=list(keys) if merge else None,

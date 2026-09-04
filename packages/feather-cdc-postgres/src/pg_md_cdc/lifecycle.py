@@ -3,6 +3,10 @@
 States are the ONLY record of why a table is not streaming, so every move is validated and
 mirrored to `control.event` (unit='lifecycle'). Slot loss is never a silent empty stream: it
 lands as `resnapshot_required` before any re-snapshot begins.
+`drift_review` has NO edge back to `streaming`: a run that merely sees no further drift must
+not clear a reported break, so the only way out is `resnapshot` (which passes through
+resnapshot_required → snapshotting → streaming) or retirement. The state machine enforces
+that rather than a convention (#3079 D7).
 """
 from __future__ import annotations
 
@@ -20,12 +24,15 @@ STATES = frozenset({DISCOVERED, SNAPSHOTTING, CATCHING_UP, STREAMING,
                     DRIFT_REVIEW, RESNAPSHOT_REQUIRED, RETIRED})
 
 ALLOWED: dict[str | None, frozenset[str]] = {
-    None: frozenset({DISCOVERED, SNAPSHOTTING}),
+    # STREAMING from nothing is ADOPTION only (runner._adopt_streaming): a slot that already
+    # exists is proof a previous drainer baselined the table; inventing a snapshot it never ran
+    # would be the bigger lie.
+    None: frozenset({DISCOVERED, SNAPSHOTTING, STREAMING}),
     DISCOVERED: frozenset({SNAPSHOTTING, CATCHING_UP, RETIRED}),
     SNAPSHOTTING: frozenset({CATCHING_UP, STREAMING, RESNAPSHOT_REQUIRED, RETIRED}),
     CATCHING_UP: frozenset({STREAMING, DRIFT_REVIEW, RESNAPSHOT_REQUIRED, RETIRED}),
     STREAMING: frozenset({CATCHING_UP, DRIFT_REVIEW, RESNAPSHOT_REQUIRED, RETIRED}),
-    DRIFT_REVIEW: frozenset({STREAMING, RESNAPSHOT_REQUIRED, RETIRED}),
+    DRIFT_REVIEW: frozenset({RESNAPSHOT_REQUIRED, RETIRED}),
     RESNAPSHOT_REQUIRED: frozenset({SNAPSHOTTING, RETIRED}),
     RETIRED: frozenset({DISCOVERED}),   # re-widening the selection re-admits the table
 }

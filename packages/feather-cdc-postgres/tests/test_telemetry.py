@@ -76,7 +76,8 @@ def test_reconcile_compares_counts_and_skips_the_big_ones(fresh_db, names, duckd
                                       {}, threshold=50)
     by_table = {r["table"]: r for r in rows}
     assert by_table["small"] == {"schema": "public", "table": "small", "skipped": False,
-                                 "source_rows": 7, "destination_rows": 7, "delta": 0}
+                                 "source_rows": 7, "destination_rows": 7, "delta": 0,
+                                 "match": True}
     assert by_table["big"]["skipped"] is True and "threshold" in by_table["big"]["reason"]
 
     run = FakeRun()
@@ -94,3 +95,62 @@ def test_a_table_missing_at_the_destination_reports_none_not_zero(fresh_db, duck
         c.execute("create table public.only_source (id int primary key)")
     (row,) = telemetry.reconcile_counts(fresh_db, dest, [("public", "only_source")], {})
     assert row["destination_rows"] is None and row["delta"] is None
+
+
+def test_a_forced_count_mismatch_is_an_error_event_not_an_ok_with_a_delta(
+        fresh_db, duckdb_path, tmp_path):
+    """Reconciliation only earns its keep if a disagreement is visible where the sweep looks:
+    the event STATUS, not a number buried in `extra`."""
+    import duckdb
+
+    dest = Destination(DestinationSpec(kind="duckdb", database="t", path=duckdb_path,
+                                       pipelines_dir=str(tmp_path / "dlt")))
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.drifted (id int primary key)")
+        c.execute("insert into public.drifted select generate_series(1, 5)")
+    with snapshot.baseline_resource(fresh_db, ("public", "drifted"), ["id"]) as res:
+        dest.pipeline_for_schema("public", "public").run(res)
+
+    con = duckdb.connect(duckdb_path)
+    # a row the source never had (_dlt_load_id/_dlt_id are NOT NULL at the destination)
+    con.execute("insert into public.drifted (id, _dlt_load_id, _dlt_id) "
+                "values (999, 'hand-inserted', 'hand-inserted')")
+    con.close()
+
+    (row,) = telemetry.reconcile_counts(fresh_db, dest, [("public", "drifted")], {})
+    assert (row["source_rows"], row["destination_rows"], row["delta"]) == (5, 6, -1)
+    assert row["match"] is False
+
+    run = FakeRun()
+    telemetry.emit_reconcile(run, [row])
+    (event,) = run.events
+    assert event["status"] == "error" and event["unit"] == "reconcile"
+    assert "source 5 vs destination 6" in event["error_detail"]
+    assert event["extra"]["match"] is False
+
+
+def test_an_empty_source_table_with_no_destination_table_yet_ties(fresh_db, duckdb_path,
+                                                                  tmp_path):
+    """dlt creates a table on its FIRST row. Calling "0 rows at the source, no table at the
+    destination" a mismatch fired an EV_ERROR every tick for every still-empty selected table
+    (9 of 11 on a fresh control plane) — the positive control below is the non-empty case,
+    which must still be an error."""
+    dest = Destination(DestinationSpec(kind="duckdb", database="t", path=duckdb_path,
+                                       pipelines_dir=str(tmp_path / "dlt")))
+    dest.ensure_runtime_tables()
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.still_empty (id int primary key)")
+        c.execute("create table public.has_rows (id int primary key)")
+        c.execute("insert into public.has_rows values (1)")
+
+    rows = telemetry.reconcile_counts(fresh_db, dest,
+                                      [("public", "still_empty"), ("public", "has_rows")], {})
+    by_table = {r["table"]: r for r in rows}
+    assert by_table["still_empty"]["destination_rows"] is None, "the gap stays visible"
+    assert by_table["still_empty"]["match"] is True
+    assert by_table["has_rows"]["match"] is False
+
+    run = FakeRun()
+    telemetry.emit_reconcile(run, rows)
+    assert {e["entity"]: e["status"] for e in run.events} == {
+        "public.still_empty": "ok", "public.has_rows": "error"}

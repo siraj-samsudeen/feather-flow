@@ -94,6 +94,9 @@ class Destination:
                 registration varchar, "schema" varchar, "table" varchar, "column" varchar,
                 type_oid bigint, typmod bigint, not_null boolean, key_role varchar,
                 dest_type varchar, mapping varchar, seen_at timestamptz)''')
+            con.execute(f'''create table if not exists "{RUNTIME_SCHEMA}".signature (
+                registration varchar, "schema" varchar, "table" varchar,
+                signature_json varchar, seen_at timestamptz)''')
         self._ensured = True
 
     def read_checkpoint(self, registration: str) -> tuple[int, str | None] | None:
@@ -149,6 +152,28 @@ class Destination:
                      r.get("key_role"), r.get("dest_type"), r.get("mapping"),
                      r.get("seen_at") or now])
         return len(rows)
+
+    def write_signature(self, registration: str, schema: str, table: str, signature: dict) -> None:
+        """One row per relation, replaced in place: the ONLY thing the next run diffs against.
+        A key_change deliberately leaves the old row standing (see drift.py)."""
+        import json
+        self.ensure_runtime_tables()
+        with self.connect() as con:
+            con.execute(f'delete from "{RUNTIME_SCHEMA}".signature '
+                        'where registration = ? and "schema" = ? and "table" = ?',
+                        [registration, schema, table])
+            con.execute(f'insert into "{RUNTIME_SCHEMA}".signature values (?, ?, ?, ?, ?)',
+                        [registration, schema, table, json.dumps(signature, sort_keys=True),
+                         _dt.datetime.now(_dt.timezone.utc)])
+
+    def read_signatures(self, registration: str) -> dict[tuple[str, str], dict]:
+        import json
+        self.ensure_runtime_tables()
+        with self.connect() as con:
+            rows = con.execute(
+                f'select "schema", "table", signature_json from "{RUNTIME_SCHEMA}".signature '
+                "where registration = ?", [registration]).fetchall()
+        return {(r[0], r[1]): json.loads(r[2]) for r in rows if r[2]}
 
     def destination_tables(self, schemas: Iterable[str]) -> set[tuple[str, str]]:
         with self.connect() as con:

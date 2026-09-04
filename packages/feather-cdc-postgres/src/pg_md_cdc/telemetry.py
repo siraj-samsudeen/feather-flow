@@ -4,7 +4,8 @@ The `_slot` probe keeps the Sweep 2e contract byte-for-byte (entity `_slot`, uni
 extra carrying slot/active/wal_status/restart_lsn/confirmed_flush_lsn/lag_bytes) and adds the
 D-7 fuse read from the server (`max_slot_wal_keep_size`), the selected/published/destination
 counts and checkpoint age. Reconciliation counts skip tables above a row threshold rather than
-pretending to compare them.
+pretending to compare them; a compared table that does not tie is an EV_ERROR, not an `ok`
+carrying a delta in `extra`.
 """
 from __future__ import annotations
 
@@ -99,7 +100,11 @@ def reconcile_counts(dsn: str, destination, relations, schema_map,
             dest = destination.table_row_count(schema_map.get(schema, schema), table)
             out.append({"schema": schema, "table": table, "skipped": False,
                         "source_rows": int(src), "destination_rows": dest,
-                        "delta": None if dest is None else int(src) - int(dest)})
+                        "delta": None if dest is None else int(src) - int(dest),
+                        # dlt creates a table on its FIRST row, so "0 at the source, absent at
+                        # the destination" ties — reporting it as a mismatch would fire an
+                        # error every tick for every still-empty selected table.
+                        "match": (int(dest) == int(src)) if dest is not None else int(src) == 0})
     return out
 
 
@@ -110,7 +115,15 @@ def emit_reconcile(run, per_table_rows) -> None:
             run.event(entity=entity, status=cp_status.EV_ZERO_ROWS, unit="reconcile",
                       extra={"skipped": True, "reason": row.get("reason")})
         else:
-            run.event(entity=entity, status=cp_status.EV_OK, unit="reconcile",
-                      rows=row.get("source_rows"),
-                      extra={"destination_rows": row.get("destination_rows"),
-                             "delta": row.get("delta")})
+            # A count that does not tie is the whole point of reconciling: it is an error-class
+            # event, never an `ok` with an interesting `extra` nobody queries.
+            matched = bool(row.get("match"))
+            run.event(entity=entity,
+                      status=cp_status.EV_OK if matched else cp_status.EV_ERROR,
+                      unit="reconcile", rows=row.get("source_rows"),
+                      error_detail=None if matched else (
+                          f"source {row.get('source_rows')} vs destination "
+                          f"{row.get('destination_rows')} (delta {row.get('delta')})"),
+                      extra={"source_rows": row.get("source_rows"),
+                             "destination_rows": row.get("destination_rows"),
+                             "delta": row.get("delta"), "match": matched})

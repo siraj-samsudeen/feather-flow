@@ -477,3 +477,30 @@ def test_drop_table_removes_the_merge_staging_twin_too(fresh_db, names, duckdb_p
     assert con.execute("select count(*) from information_schema.tables "
                        "where table_name = 't'").fetchone() == (0,)
     con.close()
+
+
+def test_a_steady_state_run_records_lifecycle_for_tables_it_did_not_baseline(
+        fresh_db, names, duckdb_path, tmp_path):
+    """A takeover (the pilot's slot, or a `_cdc_runtime` rebuilt underneath us) leaves tables
+    streaming with NO lifecycle row. The run adopts them rather than reporting an empty
+    lifecycle table — but adoption must never overwrite a state that already says otherwise."""
+    sql(fresh_db, "create table public.a (id int primary key, v text)",
+        "create table public.b (id int primary key, v text)",
+        "insert into public.a values (1, 'a')", "insert into public.b values (1, 'b')")
+    relations = [rel("public", "a", "id"), rel("public", "b", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+
+    con = duckdb.connect(duckdb_path)
+    con.execute('delete from "_cdc_runtime".lifecycle')
+    con.close()
+    assert dest.read_lifecycle(cfg.registration) == {}
+
+    sql(fresh_db, "insert into public.a values (2, 'a2')")
+    tick(cfg, relations)
+    assert dest.read_lifecycle(cfg.registration) == {
+        ("public", "a"): STREAMING, ("public", "b"): STREAMING}
+
+    dest.write_lifecycle(cfg.registration, "public", "b", "drift_review", "hand-set")
+    tick(cfg, relations)
+    assert dest.read_lifecycle(cfg.registration)[("public", "b")] == "drift_review"

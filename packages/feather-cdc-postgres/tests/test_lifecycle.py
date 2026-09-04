@@ -54,10 +54,13 @@ def test_streaming_cannot_jump_back_to_snapshotting(lc):
     lc.transition("public", "t", SNAPSHOTTING)
 
 
-def test_a_new_relation_may_only_start_discovered_or_snapshotting(lc):
+def test_a_new_relation_starts_discovered_snapshotting_or_adopted_as_streaming(lc):
+    """`streaming` from nothing is the ADOPTION edge (runner._adopt_streaming): a table already
+    in the publication was baselined by whoever ran before us. Everything else stays illegal."""
     with pytest.raises(IllegalTransition):
-        lc.transition("public", "t", STREAMING)
-    lc.transition("public", "t", DISCOVERED)
+        lc.transition("public", "t", RESNAPSHOT_REQUIRED)
+    lc.transition("public", "t", STREAMING, "adopted")
+    lc.transition("a", "t", DISCOVERED)
 
 
 def test_retired_is_re_admitted_through_discovered(lc):
@@ -69,11 +72,17 @@ def test_retired_is_re_admitted_through_discovered(lc):
     lc.transition("public", "t", DISCOVERED, "re-widened")
 
 
-def test_drift_review_returns_to_streaming_or_demands_a_resnapshot(lc):
+def test_drift_review_has_no_edge_back_to_streaming(lc):
+    """A run that merely sees no FURTHER drift must not clear a reported break. The only way
+    out is `resnapshot` — resnapshot_required → snapshotting → streaming (#3079 D7)."""
     lc.transition("public", "t", SNAPSHOTTING)
     lc.transition("public", "t", STREAMING)
     lc.transition("public", "t", DRIFT_REVIEW, "column dropped")
-    lc.transition("public", "t", STREAMING, "reviewed, additive only")
+    with pytest.raises(IllegalTransition):
+        lc.transition("public", "t", STREAMING, "no further drift")
+    lc.transition("public", "t", RESNAPSHOT_REQUIRED, "operator resnapshot")
+    lc.transition("public", "t", SNAPSHOTTING)
+    lc.transition("public", "t", STREAMING)
 
 
 def test_unknown_state_is_rejected(lc):

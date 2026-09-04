@@ -163,9 +163,9 @@ def cmd_generate_dbt(args) -> int:
 def _runner():
     """The runtime half (#3079 Phase 2). Contract expected here:
 
-        runner.run(manifest: Manifest, *, dev: bool) -> int
+        runner.run(manifest: Manifest, *, dev: bool, manifest_path: str) -> int
         runner.status(manifest: Manifest) -> int
-        runner.resnapshot(manifest: Manifest, *, tables: list[str] | None, yes: bool) -> int
+        runner.resnapshot(manifest: Manifest, *, tables, yes: bool, dev: bool) -> int
     """
     from . import runner  # noqa: PLC0415  # TODO(runner): owned by the runtime half
 
@@ -173,7 +173,7 @@ def _runner():
 
 
 def cmd_run(args) -> int:
-    return int(_runner().run(mf.load(args.manifest), dev=args.dev) or 0)
+    return int(_runner().run(mf.load(args.manifest), dev=args.dev, manifest_path=args.manifest) or 0)
 
 
 def cmd_status(args) -> int:
@@ -181,7 +181,8 @@ def cmd_status(args) -> int:
 
 
 def cmd_resnapshot(args) -> int:
-    return int(_runner().resnapshot(mf.load(args.manifest), tables=args.table or None, yes=args.yes) or 0)
+    return int(_runner().resnapshot(mf.load(args.manifest), tables=args.table or None,
+                                    yes=args.yes, dev=args.dev) or 0)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -213,8 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("resnapshot", help="re-baseline selected tables")
     s.add_argument("manifest")
-    s.add_argument("--table", action="append", help="schema.table (repeatable); default every relation")
+    # `--tables` is the spelling the drift remedy text prints; both names, one destination.
+    s.add_argument("--table", "--tables", dest="table", action="append",
+                   help="schema.table (repeatable); default every relation")
     s.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    s.add_argument("--dev", action="store_true", help="local destination, no control-plane writes")
     s.set_defaults(func=cmd_resnapshot)
     return p
 

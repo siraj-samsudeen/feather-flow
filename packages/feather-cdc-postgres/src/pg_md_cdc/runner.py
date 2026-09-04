@@ -4,7 +4,9 @@ Correctness invariants this file exists to hold:
   - the advisory owner session is asserted before EVERY mutating phase; losing it aborts;
   - the checkpoint is written only after every schema's load has committed, and the slot is
     advanced only to a checkpointed LSN — so an ambiguous destination outcome replays, never skips;
-  - relation identity is (schema, table) end to end, one dlt pipeline per source schema.
+  - relation identity is (schema, table) end to end, one dlt pipeline per source schema;
+  - a key-changed relation is out of the desired set for the WHOLE run (drift.scan), so the
+    drain, the reconcile counts and the probe all see the same active set.
 Contract with the compiler half: manifest.Manifest / selectors.Relation (plan Appendix B).
 """
 from __future__ import annotations
@@ -17,7 +19,7 @@ from typing import Sequence
 
 from control_plane import ControlPlane, status as cp_status
 
-from . import publication, snapshot, stream, telemetry
+from . import drift, publication, snapshot, stream, telemetry
 from .destination import Destination, DestinationSpec
 from .lifecycle import (
     CATCHING_UP, DISCOVERED, RESNAPSHOT_REQUIRED, RETIRED, SNAPSHOTTING, STREAMING, Lifecycle,
@@ -41,6 +43,7 @@ class RuntimeConfig:
     slot_loss_policy: str = "resnapshot"
     retirement_policy: str = "freeze"
     reconcile_threshold: int = telemetry.RECONCILE_MAX_ROWS
+    manifest_path: str = "<manifest>"   # only ever interpolated into operator remedy text
 
     def target_schema(self, source_schema: str) -> str:
         return self.schema_map.get(source_schema, source_schema)
@@ -159,7 +162,7 @@ def _baseline(cfg: RuntimeConfig, rel, *, run, owner, lc: Lifecycle, pipelines: 
 
 
 def _reconcile_selection(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
-                         pipelines: _Pipelines) -> tuple[list, list]:
+                         pipelines: _Pipelines, blocked: set | None = None) -> tuple[list, list]:
     owner.assert_held()
     desired = [(r.schema, r.table) for r in relations]
     by_key = {(r.schema, r.table): r for r in relations}
@@ -170,6 +173,8 @@ def _reconcile_selection(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifec
             _baseline(cfg, by_key[key], run=run, owner=owner, lc=lc, pipelines=pipelines,
                       detail="added to selection")
     for schema, table in dropped:
+        if (schema, table) in (blocked or set()):
+            continue   # out of the publication for drift, not retired from the selection
         # `freeze`: the destination copy stays as a frozen mirror — bronze never deletes history.
         lc.ensure(schema, table, RETIRED, f"dropped from selection ({cfg.retirement_policy})")
     if dropped:
@@ -234,6 +239,7 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
                   error_detail="slot lost and slot_loss_policy=pause", extra=slot)
         return {"paused": True}
 
+    blocked: set = set()
     if slot is None or lost:
         reason = "first run" if slot is None else f"slot invalidated ({slot.get('wal_status')})"
         if lost:
@@ -243,28 +249,50 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
             _drop_slot(cfg.source_dsn, cfg.slot)
         _initialize(cfg, relations, run=run, owner=owner, lc=lc, pipelines=pipelines,
                     reason=reason)
+        # A full re-baseline IS a resnapshot: the registry is rewritten with no diff, so a
+        # key change the previous signature would have blocked on is already resolved.
+        drift.record_all(cfg, relations, run=run)
+        active = relations
     else:
-        _reconcile_selection(cfg, relations, run=run, owner=owner, lc=lc, pipelines=pipelines)
+        _adopt_streaming(lc, relations,
+                         publication.published_relations(cfg.source_dsn, cfg.publication))
+        outcome = drift.scan(cfg, relations, run=run, lc=lc, owner=owner,
+                             manifest_path=cfg.manifest_path)
+        blocked = outcome.blocked
+        active = outcome.active(relations)
+        _reconcile_selection(cfg, active, run=run, owner=owner, lc=lc, pipelines=pipelines,
+                             blocked=blocked)
 
-    result = _drain(cfg, relations, run=run, owner=owner, pipelines=pipelines)
+    result = _drain(cfg, active, run=run, owner=owner, pipelines=pipelines)
+    result["drift_blocked"] = sorted(blocked)
 
     probe = telemetry.slot_probe(cfg.source_dsn, cfg.slot)
     checkpoint = cfg.destination.read_checkpoint(cfg.registration)
     published = publication.published_relations(cfg.source_dsn, cfg.publication)
     dest_tables = cfg.destination.destination_tables(
-        {cfg.target_schema(r.schema) for r in relations})
+        {cfg.target_schema(r.schema) for r in active})
     telemetry.emit_probe(run, probe, {
-        "selected_tables": len(relations),
+        "selected_tables": len(active),
         "published_tables": len(published),
         "destination_tables": len(dest_tables),
+        "drift_blocked_tables": len(blocked),
         "checkpoint_lsn": checkpoint[0] if checkpoint else None,
         "checkpoint_age_s": telemetry.checkpoint_age_s(_checkpoint_time(cfg)),
     }, pull_ms=int((time.monotonic() - t0) * 1000))
 
     telemetry.emit_reconcile(run, telemetry.reconcile_counts(
-        cfg.source_dsn, cfg.destination, [(r.schema, r.table) for r in relations],
+        cfg.source_dsn, cfg.destination, [(r.schema, r.table) for r in active],
         cfg.schema_map, threshold=cfg.reconcile_threshold))
     return result
+
+
+def _adopt_streaming(lc: Lifecycle, relations, published: set) -> None:
+    """A steady-state run over tables with no lifecycle row (a takeover from the pilot, or a
+    destination rebuilt underneath us): record what is observably true. Membership of the
+    publication is the evidence — a newly selected table is NOT adopted, it gets a baseline."""
+    for r in relations:
+        if lc.state_of(r.schema, r.table) is None and (r.schema, r.table) in published:
+            lc.ensure(r.schema, r.table, STREAMING, "adopted: already in the publication")
 
 
 def _checkpoint_time(cfg: RuntimeConfig):
@@ -359,8 +387,24 @@ def _compile(m):
 
 
 def _destination(m) -> Destination:
+    """MotherDuck unless `PG_MD_CDC_DESTINATION=duckdb:<path>` overrides it.
+
+    DEV/PROOF ONLY: it exists so `run`/`status`/`resnapshot` can be driven end to end against a
+    local duckdb file (the same dlt load path minus credentials). `PG_MD_CDC_PIPELINES_DIR`
+    likewise redirects dlt's pipeline state so a proof never writes into ~/.dlt. Unset, both are
+    inert and the destination is MotherDuck.
+    """
+    override = os.environ.get("PG_MD_CDC_DESTINATION", "")
+    pipelines_dir = os.environ.get("PG_MD_CDC_PIPELINES_DIR") or None
+    if override:
+        kind, _, path = override.partition(":")
+        if kind != "duckdb" or not path:
+            sys.exit("FATAL: PG_MD_CDC_DESTINATION must look like 'duckdb:<file path>'")
+        return Destination(DestinationSpec(kind="duckdb", database=m.destination.database,
+                                           path=path, pipelines_dir=pipelines_dir))
     return Destination(DestinationSpec(kind="motherduck", database=m.destination.database,
-                                       token_env=m.destination.token_env))
+                                       token_env=m.destination.token_env,
+                                       pipelines_dir=pipelines_dir))
 
 
 def _control_plane(m, dev: bool) -> ControlPlane:
@@ -372,9 +416,10 @@ def _control_plane(m, dev: bool) -> ControlPlane:
     return ControlPlane(m.control.extractor, dsn=None if dev else control_dsn, wal_dir=wal_dir)
 
 
-def run(manifest, *, dev: bool = False) -> int:
+def run(manifest, *, dev: bool = False, manifest_path: str = "<manifest>") -> int:
     dsn, plan = _compile(manifest)
     cfg = config_from_manifest(manifest, dsn=dsn, destination=_destination(manifest))
+    cfg.manifest_path = manifest_path
     if not plan.relations:
         _log("the compiled selection is empty — nothing to do")
         return 0
@@ -397,7 +442,8 @@ def status(manifest) -> int:
     return 0
 
 
-def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = False) -> int:
+def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = False,
+               dev: bool = False) -> int:
     """Drop the destination table(s) and retake a baseline. DESTRUCTIVE — requires `yes`
     (D6's "separately approved drop"); the retirement policy never drops on its own."""
     if not yes:
@@ -408,7 +454,7 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
     if not targets:
         sys.exit(f"no selected relation matches {sorted(wanted)}")
     cfg = config_from_manifest(manifest, dsn=dsn, destination=_destination(manifest))
-    cp = _control_plane(manifest, dev=False)
+    cp = _control_plane(manifest, dev=dev)
     with cp.run("resnapshot") as run_ctx:
         owner = OwnerSession(cfg.source_dsn, cfg.slot)
         if not owner.acquire():
@@ -436,6 +482,9 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
                     pipe.run(res)
                 _emit_table_events(run_ctx, pipe, "snapshot", {rel.table},
                                    {"reason": "operator resnapshot"})
+                # The refreshed signature is what clears a key_change block: without it the
+                # next run would diff against the pre-change key and pull the table again.
+                drift.record_signature(cfg, rel)
                 lc.ensure(rel.schema, rel.table, STREAMING, "operator resnapshot")
         finally:
             owner.release()
