@@ -6,6 +6,26 @@ PostgreSQL database into MotherDuck at bronze fidelity — no per-source extract
 
 Plan: `docs/plans/issue_3079_pg_md_cdc_runtime.md`. It generalizes the #2851 Featherbase pilot
 (`featherbase_extract/`), which keeps running until an operator flips the Railway service root.
+**Operator runbook (activation, status, pause, slot-fuse recovery, resnapshot, declaration
+changes, rollback, decommission, the Featherbase cutover and control-plane activation
+checklists): `docs/agents/deployment.md`'s `pg-md-cdc` row + `docs/agents/pg-md-cdc-runbook.md`.**
+This README covers the code; the runbook covers running it.
+
+## Deploying (one Railway service instance per registration)
+
+One image serves every registration — the instance is selected entirely by env, Root Directory
+is always `pg_md_cdc`. Env vars, matching `registrations/*.yml`:
+
+| var | set to | source |
+|---|---|---|
+| `CDC_REGISTRATION` | the registration id, e.g. `featherbase` or `control_plane` | selects `registrations/<id>.yml` |
+| `<manifest source.dsn_env>` | the source Postgres DSN (`FEATHERBASE_PG_DSN` / `CONTROL_PG_DSN`) | Railway reference var |
+| `<manifest destination.token_env>` | the MotherDuck token (`MOTHERDUCK_TOKEN` in both shipped manifests) | Railway reference var |
+| `CONTROL_PG_DSN` | the control-plane Postgres DSN | Railway reference var — hard dependency unless `--dev` |
+| `CONTROL_WAL_DIR` | a mounted (non-ephemeral) path | only needed if `control.event_durability: persistent_local_wal`; neither shipped manifest uses it |
+
+Cron: `*/5 * * * *` (`railway.json`). Details, health-check queries and the destructive-command
+confirmations live in the runbook, not here.
 
 ## Commands
 
