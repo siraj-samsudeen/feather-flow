@@ -82,8 +82,59 @@ CREATE TABLE IF NOT EXISTS control.budget_usage (
 """
 
 
-def ensure_schema(conn: psycopg.Connection) -> None:
+# Advisory-lock key serializing the DDL path across processes (#3091). An arbitrary but FIXED
+# 64-bit constant: every writer must pick the same number or the lock serializes nothing. Recorded
+# here so a future advisory lock in this repo picks a different one.
+_SCHEMA_ADVISORY_LOCK = 3_204_198_401
+
+# The shape ensure_schema guarantees. Checked as a READ before any DDL runs, because DDL on this
+# path is what deadlocked the fleet: `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` takes an
+# AccessExclusiveLock *even when the column already exists*, so running it on every startup gave
+# every pair of concurrently-starting writers a chance to deadlock (#3091).
+_REQUIRED_TABLES = ("run", "lease", "event", "budget_usage")
+_REQUIRED_COLUMNS = (("event", "extra"), ("run", "extra"))
+
+
+def _schema_is_current(conn: psycopg.Connection) -> bool:
+    """True when every table and migrated column already exists — a pure catalog read, no locks.
+
+    This is the steady state on a live control plane, so the common path of ensure_schema() must
+    reach exactly here and stop: no CREATE, no ALTER, nothing that can block another session."""
     with conn.cursor() as cur:
+        cur.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'control'")
+        tables = {r[0] for r in cur.fetchall()}
+        if not set(_REQUIRED_TABLES) <= tables:
+            return False
+        cur.execute(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = 'control' AND table_name = ANY(%s)",
+            ([t for t, _ in _REQUIRED_COLUMNS],))
+        columns = {(r[0], r[1]) for r in cur.fetchall()}
+        return set(_REQUIRED_COLUMNS) <= columns
+
+
+def ensure_schema(conn: psycopg.Connection) -> None:
+    """Create the control schema if it is not already there. Safe to call concurrently.
+
+    Called at the start of EVERY run by every writer, so its steady-state cost is the thing that
+    matters: a single catalog read and no lock at all. Before #3091 it ran `CREATE TABLE IF NOT
+    EXISTS` + two `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` unconditionally, and because the ALTER
+    takes an AccessExclusiveLock whether or not the column is missing, two writers starting in the
+    same moment deadlocked -- each holding the CREATE's weaker lock while requesting the exclusive
+    one. Postgres killed them, and under ADR 0028's hard dependency that aborts the run BEFORE it
+    reads its source: on 04-Sep-2026 two of PTP's three instances did not load at all, killed by
+    the featherbase drainer's startup 27 seconds earlier. With featherbase ticking every 5 minutes
+    that was a dice-roll at every startup, fleet-wide.
+    """
+    if _schema_is_current(conn):
+        conn.rollback()   # end the read's implicit transaction; hold no locks on the way out
+        return
+
+    with conn.cursor() as cur:
+        # First run, or a genuine migration. Serialize the DDL so concurrent first-runs queue
+        # instead of deadlocking; the lock is released with the transaction below.
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_ADVISORY_LOCK,))
         cur.execute(SCHEMA_DDL)
         # Migration for control planes created before control.event.extra existed (e.g. the
         # live GoFrugal table): CREATE TABLE IF NOT EXISTS above won't add a column to it.
