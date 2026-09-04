@@ -633,10 +633,29 @@ class ItemGenerator:
     target_batch_size: int = 1000
     include_columns: Optional[Dict[str, Sequence[str]]] = (None,)  # type: ignore[assignment]
     columns: Optional[Dict[str, TTableSchemaColumns]] = (None,)  # type: ignore[assignment]
+    # (schema, table) -> primary key columns (#3079): saves one catalog round-trip per
+    # Relation message and keeps relation identity schema-qualified.
+    keys_by_relation: Optional[Dict[Any, Sequence[str]]] = None
     last_commit_lsn: Optional[int] = field(default=None, init=False)
     generated_all: bool = False
 
-    def __iter__(self) -> Iterator[Union[TDataItem, DataItemWithMeta]]:
+    def collect(self) -> Dict[str, List[Union[TDataItem, DataItemWithMeta]]]:
+        """Consumes one batch and returns it grouped by SOURCE SCHEMA (#3079): two schemas
+        may hold the same table name, and each source schema loads through its own pipeline."""
+        consumer = self._consume()
+        grouped: Dict[str, List[Union[TDataItem, DataItemWithMeta]]] = {}
+        for rel_id, data_items in consumer.data_items.items():
+            schema = consumer.last_table_schema[rel_id]
+            table_name = schema["name"]
+            namespace = schema.get("namespace") or ""
+            if table_name.lower().startswith(DLT_NAME_PREFIX):
+                continue  # dlt internal table on the source
+            bucket = grouped.setdefault(namespace, [])
+            bucket.append(data_items[0])  # meta item with column hints only, no data
+            bucket.append(dlt.mark.with_table_name(data_items[1:], table_name))
+        return grouped
+
+    def _consume(self) -> "MessageConsumer":
         """Yields replication messages from MessageConsumer.
 
         Starts replication of messages published by the publication from the replication slot.
@@ -659,6 +678,7 @@ class ItemGenerator:
                 include_columns=self.include_columns,
                 columns=self.columns,
                 credentials=self.credentials,  # for true-PK resolution (#2851 patch)
+                keys_by_relation=self.keys_by_relation,
             )
             cur.consume_stream(consumer)
         except StopReplication:  # completed batch or reached `upto_lsn`
@@ -666,15 +686,13 @@ class ItemGenerator:
         finally:
             cur.connection.close()
         self.last_commit_lsn = consumer.last_commit_lsn
-        for rel_id, data_items in consumer.data_items.items():
-            table_name = consumer.last_table_schema[rel_id]["name"]
-            # skip dlt internal tables
-            # TODO: normalize the prefix. low prio. on postgres we should have lower case
-            if table_name.lower().startswith(DLT_NAME_PREFIX):
-                continue
-            yield data_items[0]  # meta item with column hints only, no data
-            yield dlt.mark.with_table_name(data_items[1:], table_name)
         self.generated_all = consumer.consumed_all
+        return consumer
+
+    def __iter__(self) -> Iterator[Union[TDataItem, DataItemWithMeta]]:
+        """Flat item stream for the single-schema `replication_resource` (upstream shape)."""
+        for items in self.collect().values():
+            yield from items
 
 
 class MessageConsumer:
@@ -693,7 +711,9 @@ class MessageConsumer:
         include_columns: Optional[Dict[str, Sequence[str]]] = None,
         columns: Optional[Dict[str, TTableSchemaColumns]] = None,
         credentials: Optional[ConnectionStringCredentials] = None,
+        keys_by_relation: Optional[Dict[Any, Sequence[str]]] = None,
     ) -> None:
+        self.keys_by_relation = keys_by_relation or {}
         self.upto_lsn = upto_lsn
         self.pub_ops = pub_ops
         self.target_batch_size = target_batch_size
@@ -786,8 +806,11 @@ class MessageConsumer:
         # duplicate instead of replacing. Resolve the true primary key from the catalog and
         # override; keep the flags only if the lookup fails (never silently keep a
         # whole-row key when a real PK exists).
-        pk = None
-        if self.credentials is not None:
+        # Declared key first (#3079): the compiled plan already resolved it, schema-qualified.
+        pk = self.keys_by_relation.get((decoded_msg.namespace, table_name))
+        if pk is not None:
+            pk = list(pk) if not isinstance(pk, str) else pk
+        if pk is None and self.credentials is not None:
             try:
                 conn = _get_conn(self.credentials)
                 try:
@@ -805,6 +828,7 @@ class MessageConsumer:
 
         self.last_table_schema[decoded_msg.relation_id] = {
             "name": table_name,
+            "namespace": decoded_msg.namespace,  # #3079: relation identity is (schema, table)
             "columns": columns,
         }
 
