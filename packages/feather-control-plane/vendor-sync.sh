@@ -22,6 +22,7 @@ TARGETS=(
   "featherbase_extract/src"  # Railway cron; CDC drainer (#2851)
   "ptp_extract/src"        # Railway cron; three PTP instances (#2826)
   "stylehr_bronze/src"     # Railway cron; StyleHR bronze (#2826)
+  "pg_md_cdc/src"          # Railway cron; generic PG→MD CDC runtime (#3079)
 )
 
 for dest in "${TARGETS[@]}"; do
