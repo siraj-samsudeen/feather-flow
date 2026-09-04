@@ -66,17 +66,25 @@ def drop_slot_if_exists(dsn: str, slot: str) -> bool:
 
 def temp_slot_name(slot: str) -> str:
     """The throwaway slot a consistent baseline is taken from. Ours by name; the caller holds
-    the registration's owner lock, so a leaked one (a crash mid-baseline) is safe to drop."""
+    the registration's owner lock, so a leftover (an older build's persistent one) is safe to
+    drop. Created TEMPORARY, so a crash mid-baseline leaks nothing."""
     return (slot + "_bl")[:63]
 
 
-def create_slot_with_snapshot(dsn: str, slot: str) -> ExportedSnapshot:
+def create_slot_with_snapshot(dsn: str, slot: str, *, temporary: bool = False) -> ExportedSnapshot:
     """Create `slot` with pgoutput and KEEP the replication connection open so its exported
-    snapshot stays importable. Raises if the slot already exists (the caller drops it first)."""
+    snapshot stays importable. Raises if the slot already exists (the caller drops it first).
+    `temporary`: PostgreSQL drops the slot itself when this session ends — a killed container
+    cannot leave it behind retaining WAL. Only the main slot must outlive the process."""
     conn = psycopg2.connect(dsn, connection_factory=LogicalReplicationConnection)
     try:
         cur = conn.cursor()
-        cur.create_replication_slot(slot, output_plugin="pgoutput")
+        if temporary:
+            quoted = '"' + slot.replace('"', '""') + '"'
+            cur.execute(f"CREATE_REPLICATION_SLOT {quoted} TEMPORARY LOGICAL pgoutput "
+                        "EXPORT_SNAPSHOT")
+        else:
+            cur.create_replication_slot(slot, output_plugin="pgoutput")
         _, consistent_point, snapshot_name, _ = cur.fetchone()
     except Exception:
         conn.close()
@@ -208,12 +216,13 @@ def consistent_baseline(
     transaction in flight before exporting the snapshot, and the consistent point it returns is
     the exact LSN below which every transaction is in that snapshot (the decoder's own skip
     predicate, strict `<`). The runner persists the boundary per relation and the drain drops
-    that relation's transactions with commit LSN < boundary. The slot is dropped on exit.
+    that relation's transactions with commit LSN < boundary. The slot is TEMPORARY — it dies
+    with its session, so a kill mid-baseline leaks nothing — and is dropped on exit anyway.
     """
     schema, table = relation
     temp = temp_slot_name(slot)
-    drop_slot_if_exists(dsn, temp)
-    handle = create_slot_with_snapshot(dsn, temp)
+    drop_slot_if_exists(dsn, temp)   # a persistent leftover from an older build
+    handle = create_slot_with_snapshot(dsn, temp, temporary=True)
     try:
         with snapshot_resources(dsn, handle.snapshot_name, [relation], {relation: list(keys)},
                                 key_policies={relation: key_policy}, itersize=itersize) as by_schema:

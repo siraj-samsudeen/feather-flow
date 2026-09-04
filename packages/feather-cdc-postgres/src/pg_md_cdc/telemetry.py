@@ -105,6 +105,7 @@ def reconcile_counts(dsn: str, destination, relations, schema_map,
     out: list[dict] = []
     patterns = list(exclude or [])
     keyless = set(append_only or ())
+    compared: list[tuple] = []   # (schema, table, source_rows), counted on one dest connection
     with psycopg.connect(dsn, connect_timeout=10) as conn:
         for schema, table in relations:
             if (schema, table) in keyless:
@@ -126,14 +127,20 @@ def reconcile_counts(dsn: str, destination, relations, schema_map,
                 continue
             src = conn.execute(sql.SQL("select count(*) from {}.{}").format(
                 sql.Identifier(schema), sql.Identifier(table))).fetchone()[0]
-            dest = destination.table_row_count(schema_map.get(schema, schema), table)
-            out.append({"schema": schema, "table": table, "skipped": False,
-                        "source_rows": int(src), "destination_rows": dest,
-                        "delta": None if dest is None else int(src) - int(dest),
-                        # dlt creates a table on its FIRST row, so "0 at the source, absent at
-                        # the destination" ties — reporting it as a mismatch would fire an
-                        # error every tick for every still-empty selected table.
-                        "match": (int(dest) == int(src)) if dest is not None else int(src) == 0})
+            compared.append((schema, table, int(src)))
+            out.append(None)   # placeholder keeps relation order
+    dest_counts = destination.table_row_counts(
+        [(schema_map.get(s, s), t) for s, t, _ in compared]) if compared else {}
+    for schema, table, src in compared:
+        dest = dest_counts.get((schema_map.get(schema, schema), table))
+        out[out.index(None)] = {
+            "schema": schema, "table": table, "skipped": False,
+            "source_rows": src, "destination_rows": dest,
+            "delta": None if dest is None else src - int(dest),
+            # dlt creates a table on its FIRST row, so "0 at the source, absent at the
+            # destination" ties — reporting it as a mismatch would fire an error every tick
+            # for every still-empty selected table.
+            "match": (int(dest) == src) if dest is not None else src == 0}
     return out
 
 

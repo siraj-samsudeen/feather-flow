@@ -283,3 +283,23 @@ def test_the_registry_stays_one_row_per_column_however_many_ticks_run(
         sql(fresh_db, f"update public.t set v = 'b{i}' where id = 1")
         tick(cfg, relations)
     assert n_rows() == after_first, "the registry grew with every tick"
+
+
+def test_an_unchanged_signature_is_not_rewritten_every_tick(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """Each signature write is its own MotherDuck connection: 50 unchanged relations would cost
+    50 round trips every five minutes for nothing. Only a changed signature is written."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "create table public.u (id int primary key, v text)")
+    relations = [rel("public", "t", "id"), rel("public", "u", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+    writes = []
+    real = dest.write_signature
+    monkeypatch.setattr(dest, "write_signature",
+                        lambda *a, **kw: (writes.append(a[2]), real(*a, **kw))[1])
+    tick(cfg, relations)
+    assert writes == []
+    sql(fresh_db, "alter table public.u add column w int")
+    tick(cfg, relations)
+    assert writes == ["u"]

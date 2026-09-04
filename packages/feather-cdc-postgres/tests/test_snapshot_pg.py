@@ -122,3 +122,26 @@ def test_baseline_resource_reads_a_table_added_later(seeded, names, duckdb_path,
     con = duckdb.connect(duckdb_path)
     assert con.execute("select count(*) from public.t1").fetchone() == (2,)
     con.close()
+
+
+def test_the_baseline_slot_is_temporary_and_dies_with_its_session(seeded, names, monkeypatch):
+    """A container killed between creating `<slot>_bl` and dropping it must not leave a
+    persistent slot retaining WAL on the source — nothing drops it if the table is then
+    narrowed out. TEMPORARY makes PostgreSQL drop it when the session ends, whatever we do."""
+    temp = snapshot.temp_slot_name(names["slot"])
+
+    def slot_row(column):
+        with psycopg.connect(seeded) as c:
+            return c.execute(f"select {column} from pg_replication_slots where slot_name = %s",
+                             (temp,)).fetchone()
+
+    handle = snapshot.create_slot_with_snapshot(seeded, temp, temporary=True)
+    assert slot_row("temporary") == (True,) and handle.consistent_point_lsn > 0
+    handle.close()
+    assert slot_row("1") is None, "the exporter closed — PostgreSQL dropped the slot itself"
+
+    monkeypatch.setattr(snapshot, "drop_slot_if_exists", lambda dsn, slot: False)  # the kill
+    with pytest.raises(RuntimeError):
+        with snapshot.consistent_baseline(seeded, names["slot"], ("public", "t1"), ["id"]):
+            raise RuntimeError("killed mid-baseline")
+    assert slot_row("1") is None

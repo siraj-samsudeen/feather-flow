@@ -106,7 +106,10 @@ def scan(cfg, relations, *, run, lc: Lifecycle, owner,
         old_sig = stored.get(pair)
         drifts = classify_drift(old_sig, new_sig) if old_sig is not None else []
         if not drifts:
-            cfg.destination.write_signature(cfg.registration, rel.schema, rel.table, new_sig)
+            # Identical → nothing to write: each write is a MotherDuck round trip, and fifty of
+            # them every tick for a schema that did not move is the cost of an idle registration.
+            if old_sig != new_sig:
+                cfg.destination.write_signature(cfg.registration, rel.schema, rel.table, new_sig)
             continue
 
         out.drifts[pair] = drifts

@@ -90,14 +90,14 @@ def _load_ids(info) -> list[str]:
 # --------------------------------------------------------------------------- phases
 
 
-def _baseline_kwargs(rel) -> dict:
-    """An append_only relation has no key a baseline could dedup on — its CDC key is `lsn`,
-    which a snapshot row does not carry — so re-reading it on top of the old copy DOUBLES it.
-    Re-baselining one is a replace: dlt's `drop_resources` drops the destination table and
-    forgets it, which a bare `drop table` does not (dlt then skips the CREATE and the load
-    dies "table does not exist")."""
-    from .selectors import APPEND_ONLY
-    return {"refresh": "drop_resources"} if rel.key_policy == APPEND_ONLY else {}
+# Every baseline REPLACES the destination copy — keyed relations too. A merge on top of an
+# older copy keeps every row the source deleted in between (a resumed snapshot, a slot-loss
+# re-init, a table re-widened after `retired`), and the boundary skip then drops the very
+# DELETE that used to heal it; an append_only copy has no key at all and simply doubles.
+# dlt's `drop_resources` drops the table AND forgets it, which a bare `drop table` does not
+# (dlt then skips the CREATE and the load dies "table does not exist"); it finds the table by
+# the schema's `resource` attribute, which Destination.load keeps equal to the table name.
+BASELINE_KWARGS = {"refresh": "drop_resources"}
 
 
 def _mark_resnapshot_required(lc: Lifecycle, schema: str, table: str, detail: str) -> None:
@@ -158,20 +158,10 @@ def _initialize(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
         with snapshot.snapshot_resources(cfg.source_dsn, handle.snapshot_name, desired,
                                          keys, key_policies=policies) as by_schema:
             handle.close()  # the import already happened; the exporter is no longer needed
-            by_key = {(r.schema, r.table): r for r in relations}
             for source_schema, resources in by_schema.items():
                 owner.assert_held()
                 pipe = pipelines.get(source_schema)
-                # append_only relations re-baseline as a REPLACE, so they load in their own
-                # call: `drop_resources` would otherwise drop the keyed tables beside them.
-                plain = [x for x in resources
-                         if not _baseline_kwargs(by_key[(source_schema, x.name)])]
-                replaced = [x for x in resources
-                            if _baseline_kwargs(by_key[(source_schema, x.name)])]
-                if plain:
-                    pipe.run(plain)
-                if replaced:
-                    pipe.run(replaced, refresh="drop_resources")
+                pipe.run(resources, **BASELINE_KWARGS)
                 owner.assert_held()   # the load blocked for a while; the lock may be gone
                 _emit_table_events(run, pipe, "snapshot", source_schema,
                                    {t for s, t in desired if s == source_schema},
@@ -200,7 +190,7 @@ def _take_baseline(cfg: RuntimeConfig, rel, *, run, owner, pipelines: _Pipelines
     with snapshot.consistent_baseline(cfg.source_dsn, cfg.slot, (rel.schema, rel.table),
                                       list(rel.key), key_policy=rel.key_policy) as (resource,
                                                                                     boundary):
-        pipe.run(resource, **_baseline_kwargs(rel))
+        pipe.run(resource, **BASELINE_KWARGS)
     owner.assert_held()   # the load blocked for a while; the lock may be gone
     cfg.destination.write_baseline_lsns(cfg.registration, {(rel.schema, rel.table): boundary})
     _emit_table_events(run, pipe, unit, rel.schema, {rel.table},
@@ -595,12 +585,35 @@ def _control_plane(m, dev: bool) -> ControlPlane:
 
 
 def run(manifest, *, dev: bool = False, manifest_path: str = "<manifest>") -> int:
-    dsn, plan = _compile(manifest)
+    cp = _control_plane(manifest, dev)
+    try:
+        dsn, plan = _compile(manifest)
+    except SystemExit:
+        raise   # a manifest refusal already explained itself; nothing ran
+    except Exception as exc:
+        # Discovery runs BEFORE the control-plane run opens, so a source outage here used to
+        # exit 1 with no control.run row at all — which the runbook's first trust step reads as
+        # "the cron never fired". Record it as the failed tick it is (#3079 final review).
+        _record_failed_run(cp, "_source", "discovery", exc)
+        raise
     cfg = config_from_manifest(manifest, dsn=dsn, destination=_destination(manifest))
     cfg.manifest_path = manifest_path
     if not plan.relations:
-        _refuse_empty_selection(cfg, cp=_control_plane(manifest, dev))
-    return execute(cfg, plan.relations, cp=_control_plane(manifest, dev))
+        _refuse_empty_selection(cfg, cp=cp)
+    return execute(cfg, plan.relations, cp=cp)
+
+
+def _record_failed_run(cp: ControlPlane, entity: str, unit: str, exc: BaseException) -> None:
+    """One failed control.run row + one redacted error event for a tick that died before
+    `execute` could own it. Best effort: an unreachable control plane must not mask the cause."""
+    from .manifest import redact
+    try:
+        with cp.run("cdc") as run:
+            run.event(entity=entity, status=cp_status.EV_ERROR, unit=unit,
+                      error_detail=redact(f"{type(exc).__name__}: {exc}"))
+            run.finish(cp_status.RUN_FAILED, stop_reason=cp_status.STOP_ERROR, n_err=1)
+    except Exception as cp_exc:  # noqa: BLE001
+        _log(f"could not record the failed run: {redact(f'{type(cp_exc).__name__}: {cp_exc}')}")
 
 
 def _refuse_empty_selection(cfg: RuntimeConfig, *, cp: ControlPlane) -> None:
@@ -676,20 +689,24 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
                 dropped = cfg.destination.drop_table(cfg.target_schema(rel.schema), rel.table)
                 _log(f"resnapshot {rel.qualified}: dropped {dropped}")
                 _to_snapshotting(lc, rel.schema, rel.table, "operator resnapshot")
-                # Re-admits a key-changed table drift.scan removed; a no-op otherwise.
-                publication.reconcile(cfg.source_dsn, cfg.publication,
-                                      [(r.schema, r.table) for r in plan.relations])
+                # Re-admits THIS key-changed table drift.scan removed; a no-op otherwise. Any
+                # other relation still `resnapshot_required` stays out: re-admitted for even
+                # one tick, its changes would stream under the new key into the old-keyed
+                # copy — the double-load the block exists to prevent (#3079 final review).
+                publication.reconcile(cfg.source_dsn, cfg.publication, [
+                    (r.schema, r.table) for r in plan.relations
+                    if r in targets or lc.state_of(r.schema, r.table) != RESNAPSHOT_REQUIRED])
                 pipe = pipelines.get(rel.schema)
                 with snapshot.consistent_baseline(
                         cfg.source_dsn, cfg.slot, (rel.schema, rel.table), list(rel.key),
                         key_policy=rel.key_policy) as (res, boundary):
-                    # Always `drop_resources`, even for a keyed relation: the drop above went
-                    # through OUR duckdb connection, and MotherDuck's catalog can still serve
-                    # the dropped table to dlt's own connection for tens of seconds (gotcha
+                    # `drop_resources` again here: the drop above went through OUR duckdb
+                    # connection, and MotherDuck's catalog can still serve the dropped table
+                    # to dlt's own connection for tens of seconds (gotcha
                     # `motherduck-catalog-lags-a-write`) — dlt would then skip the CREATE and
                     # the load would die. Doing the drop inside the same dlt client removes the
                     # cross-session read entirely.
-                    pipe.run(res, refresh="drop_resources")
+                    pipe.run(res, **BASELINE_KWARGS)
                 owner.assert_held()
                 cfg.destination.write_baseline_lsns(cfg.registration,
                                                     {(rel.schema, rel.table): boundary})

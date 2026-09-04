@@ -255,3 +255,38 @@ def test_a_failed_destination_drop_aborts_resnapshot_before_it_touches_the_sourc
     assert con.execute("select id from public.t order by id").fetchall() == [(1,), (2,)], \
         "untouched: the stale row is still there, visibly, rather than half-resnapshotted"
     con.close()
+
+
+def test_resnapshot_of_one_blocked_table_leaves_the_other_blocked_table_out_of_the_publication(
+        fresh_db, registration, duckdb_path):
+    """Two key-changed tables, one resnapshot: re-admitting the OTHER one to the publication
+    for even one tick streams its changes under the new key into the old-keyed table — the
+    exact double-load the block exists to prevent."""
+    sql(fresh_db,
+        "create table public.t (id int primary key, alt int not null unique, v text)",
+        "create table public.u (id int primary key, alt int not null unique, v text)",
+        "insert into public.t values (1, 100, 'a')", "insert into public.u values (1, 100, 'a')")
+    assert cli.main(["run", registration, "--dev"]) == 0
+    for name in ("t", "u"):
+        sql(fresh_db, f"alter table public.{name} drop constraint {name}_pkey",
+            f"alter table public.{name} add primary key (alt)")
+    assert cli.main(["run", registration, "--dev"]) == 0
+    m = mf.load(registration)
+    assert runner._destination(m).read_lifecycle("demo")[("public", "u")] == "resnapshot_required"
+    assert runner.resnapshot(m, tables=["public.t"], yes=True, dev=True) == 0
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        published = {r[0] for r in c.execute(
+            "select tablename from pg_publication_tables where pubname = %s",
+            (m.replication.publication,)).fetchall()}
+    assert published == {"t"}, "u is still blocked and must stay out until ITS resnapshot"
+
+
+def test_an_unreachable_source_still_leaves_a_failed_run_row(registration, tmp_path, monkeypatch):
+    """Discovery runs before the control-plane run opens, so a source outage used to exit 1
+    with NO control.run row — which the runbook's first trust step reads as "the cron never
+    fired". An outage must be a `failed` row, like every other way a tick can die."""
+    monkeypatch.setenv("DEMO_PG_DSN", "postgresql://cdc@127.0.0.1:1/nowhere?connect_timeout=1")
+    assert cli.main(["run", registration, "--dev"]) != 0
+    from test_e2e_pg import finish_record
+    rec = finish_record(str(tmp_path / "wal"), extractor="demo_cdc")
+    assert rec["status"] == "failed" and rec["stop_reason"] == "error"

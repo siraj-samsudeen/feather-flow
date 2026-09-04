@@ -85,8 +85,25 @@ class Destination:
 
     @staticmethod
     def load(pipeline: dlt.Pipeline, items, *, resource_name: str = "cdc"):
-        """Run one batch through a pipeline. The caller checkpoints only after this returns."""
-        return pipeline.run(dlt.resource(items, name=resource_name))
+        """Run one batch through a pipeline as ONE dlt resource PER TABLE, named after the
+        table. dlt records the resource that last wrote a table in the schema's `resource`
+        attribute, and `refresh="drop_resources"` finds tables by that attribute: a CDC batch
+        loaded under a resource named after the slot flipped it, and every later re-baseline
+        of that table (slot loss, re-widening) then dropped NOTHING and doubled an append_only
+        copy (#3079 final review). `resource_name` only names items carrying no table mark.
+        The caller checkpoints only after this returns."""
+        from dlt.extract.hints import HintsMeta
+        from dlt.extract.items import DataItemWithMeta, TableNameMeta
+        by_table: dict[str, list] = {}
+        for item in items:
+            name = resource_name
+            if isinstance(item, DataItemWithMeta):
+                if isinstance(item.meta, TableNameMeta):
+                    name = item.meta.table_name
+                elif isinstance(item.meta, HintsMeta):
+                    name = item.meta.hints.get("table_name") or resource_name
+            by_table.setdefault(name, []).append(item)
+        return pipeline.run([dlt.resource(v, name=k) for k, v in by_table.items()])
 
     @staticmethod
     def row_counts(pipeline: dlt.Pipeline) -> dict[str, int]:
@@ -263,6 +280,19 @@ class Destination:
                 return con.execute(f"select count(*) from {q(schema)}.{q(table)}").fetchone()[0]
         except Exception:  # noqa: BLE001 — table not there yet is not an error here
             return None
+
+    def table_row_counts(self, pairs) -> dict:
+        """{(schema, table): rows | None} on ONE connection — `reconcile_counts` asked one
+        connection per relation, fifty MotherDuck round trips every tick for Featherbase."""
+        out = {}
+        with self.connect() as con:
+            for schema, table in pairs:
+                try:
+                    out[(schema, table)] = con.execute(
+                        f"select count(*) from {q(schema)}.{q(table)}").fetchone()[0]
+                except Exception:  # noqa: BLE001 — not there yet is not an error here
+                    out[(schema, table)] = None
+        return out
 
     def _schema_exists(self, con, schema: str) -> bool:
         return con.execute(

@@ -1079,3 +1079,81 @@ def test_partition_leaves_replicate_and_a_row_routed_after_the_snapshot_lands(
         (1, "a"), (3, "c")]
     assert con.execute("select id, v from public.events_2027").fetchall() == [(2, "b2")]
     con.close()
+
+
+# --------------------------------------------------------------------------- final review: re-baselines
+# Every re-baseline lands on top of an EXISTING destination copy (resume, slot-loss re-init,
+# a table re-widened after `retired`). Two things have to hold: the copy is REPLACED — a merge
+# keeps a row the source deleted, and the boundary skip now drops the very DELETE that used to
+# heal it — and dlt's `drop_resources` must actually find the table, which it does by the
+# schema's `resource` attribute; a CDC load run under a resource named after the SLOT flips
+# that attribute, and from then on `refresh="drop_resources"` drops nothing.
+
+
+def _interrupt_after_the_snapshot_load(monkeypatch):
+    real = runner.snapshot.snapshot_resources
+
+    @contextlib.contextmanager
+    def load_then_die(*a, **kw):
+        with real(*a, **kw) as by_schema:
+            yield by_schema
+        raise RuntimeError("container killed after the snapshot load")
+
+    monkeypatch.setattr(runner.snapshot, "snapshot_resources", load_then_die)
+
+
+def test_a_cdc_load_leaves_the_table_owned_by_a_resource_of_its_own_name(
+        fresh_db, names, duckdb_path, tmp_path):
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'a')")
+    relations = [rel("public", "t", "id")]
+    cfg, _ = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+    sql(fresh_db, "insert into public.t values (2, 'b')")
+    tick(cfg, relations)
+    pipe = runner._Pipelines(cfg, ["public"]).get("public")
+    assert pipe.default_schema.tables["t"]["resource"] == "t"
+
+
+@pytest.mark.parametrize("path", ["slot_loss", "rewiden"])
+def test_an_append_only_table_re_baselined_after_cdc_traffic_is_replaced_not_doubled(
+        fresh_db, names, duckdb_path, tmp_path, path):
+    sql(fresh_db, "create table public.a (id int primary key)", "insert into public.a values (1)",
+        "create table public.events (id int, note text)",
+        "insert into public.events values (1, 'a')")
+    keyed, events = rel("public", "a", "id"), rel("public", "events", policy="append_only")
+    cfg, _ = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, [keyed, events])
+    sql(fresh_db, "insert into public.events values (2, 'b')")
+    tick(cfg, [keyed, events])                      # CDC traffic touches the table
+    if path == "slot_loss":
+        sql(fresh_db, f"select pg_drop_replication_slot('{cfg.slot}')")
+    else:
+        tick(cfg, [keyed])                          # retired ...
+    tick(cfg, [keyed, events])                      # ... and re-baselined
+    assert _versions(duckdb_path) == [(1, 1), (2, 1)]
+
+
+@pytest.mark.parametrize("path", ["resume", "slot_loss", "rewiden"])
+def test_a_keyed_re_baseline_does_not_resurrect_a_row_deleted_in_between(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch, path):
+    sql(fresh_db, "create table public.a (id int primary key)", "insert into public.a values (1)",
+        "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'a'), (2, 'doomed')")
+    keyed_a, t = rel("public", "a", "id"), rel("public", "t", "id")
+    cfg, _ = make(fresh_db, names, duckdb_path, tmp_path)
+    if path == "resume":
+        _interrupt_after_the_snapshot_load(monkeypatch)
+        with pytest.raises(RuntimeError):
+            tick(cfg, [keyed_a, t])
+        monkeypatch.undo()
+    else:
+        tick(cfg, [keyed_a, t])
+        if path == "slot_loss":
+            sql(fresh_db, f"select pg_drop_replication_slot('{cfg.slot}')")
+        else:
+            tick(cfg, [keyed_a])                    # retired
+    sql(fresh_db, "delete from public.t where id = 2")
+    tick(cfg, [keyed_a, t])
+    tick(cfg, [keyed_a, t])
+    assert [r[:2] for r in table(duckdb_path, "public.t")] == [(1, "a")]
