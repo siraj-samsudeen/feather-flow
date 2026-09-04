@@ -15,7 +15,7 @@ import psycopg
 
 from . import AdapterRelation
 
-# The catalog itself. Descriptions match scripts/generate_featherbase_sources.py, which this
+# The catalog itself. Descriptions match the retired scripts/generate_featherbase_sources.py, which this
 # adapter supersedes — the generated dbt file must not churn on the switch.
 CATALOG_TABLES: Dict[str, str] = {
     "table_def": "Featherbase catalog — one row per declared Table (the generation input for this file).",

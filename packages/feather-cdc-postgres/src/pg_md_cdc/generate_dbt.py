@@ -1,5 +1,5 @@
 """Generate dbt source declarations from a compiled plan (#3079 D3, supersedes
-scripts/generate_featherbase_sources.py).
+the retired scripts/generate_featherbase_sources.py, deleted in #3079).
 
 Constraints:
   - the dbt source NAME is the destination database when the plan lands in one target schema —
