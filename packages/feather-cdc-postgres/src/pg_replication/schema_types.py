@@ -31,18 +31,26 @@ _DUMMY_VALS: Dict[TDataType, Any] = {
 _PG_TYPES: Dict[int, str] = {
     16: "boolean",
     17: "bytea",
+    19: "text",  # name
     20: "bigint",
     21: "smallint",
     23: "integer",
+    25: "text",
+    26: "bigint",  # oid
+    114: "json",
+    700: "double precision",  # float4 widened: PostgresTypeMapper maps "real" to TEXT
     701: "double precision",
+    1042: "character",  # bpchar
     1043: "character varying",
     1082: "date",
     1083: "time without time zone",
     1114: "timestamp without time zone",
     1184: "timestamp with time zone",
+    1186: "text",  # interval — lossy, kept as its text rendering
+    1266: "text",  # timetz — lossy, kept as its text rendering
     1700: "numeric",
+    2950: "text",  # uuid — exact as text
     3802: "jsonb",
-    114: "json",
 }
 """Maps postgres type OID to type string. Only includes types present in PostgresTypeMapper."""
 
@@ -101,6 +109,14 @@ def _to_dlt_column_type(type_id: int, atttypmod: int) -> TColumnType:
     precision = _get_precision(type_id, atttypmod)
     scale = _get_scale(type_id, atttypmod)
     dlt_type = _type_mapper().from_destination_type(pg_type, precision, scale)
+
+    # Integers are pinned to plain "bigint" (no precision). dlt renders precision 32 as
+    # INTEGER and precision 64 as BIGINT on duckdb, while the snapshot path reflects every
+    # integer as BIGINT — bronze_featherbase.public.comment.position is BIGINT and its
+    # staging twin INTEGER for exactly this reason (#3079). Widening is the safe direction.
+    if type_id in (21, 23, 20, 26):
+        dlt_type.pop("precision", None)
+        dlt_type.pop("scale", None)
 
     # Set timezone flag for timestamp types
     if type_id == 1114:  # timestamp without time zone

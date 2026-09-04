@@ -1,0 +1,41 @@
+# Railway control plane (`Postgres`, control.*) -> MotherDuck bronze_control_plane (#3079 D10, #2870).
+api_version: pg-md-cdc/v1
+source_id: control_plane
+
+source:
+  dsn_env: CONTROL_PG_DSN
+  include:
+    schemas: [control]       # a stray `landing` schema exists on the same server; not ours
+  exclude:
+    tables:
+      # A heartbeat row UPDATEd every minute per extractor: no history, retires under #2845.
+      - "control.lease"
+      # Empty since the SAP migration; replicating them would create two dead bronze tables.
+      - "control.sap_run_events_legacy"
+      - "control.sap_partition_grid_legacy"
+
+destination:
+  token_env: MOTHERDUCK_TOKEN
+  database: bronze_control_plane
+  schema_mapping: preserve_source
+  retirement_policy: freeze
+
+replication:
+  slot: control_plane_cdc_slot
+  publication: control_plane_cdc_pub
+  cadence_minutes: 5
+  tables_without_key: reject
+  key_overrides:
+    # No primary key at the source and no unique index; both are append-only fact streams,
+    # so an append load is the honest contract rather than a synthetic key.
+    control.sap_reconcile: append_only
+    control.zakya_quarantine: append_only
+  replica_identity: full
+  slot_loss_policy: resnapshot
+  target_batch_size: 1000
+
+control:
+  # Distinct identity (D10): this drainer's own run rows are ordinary source changes here.
+  extractor: control_plane_cdc
+  availability_policy: pause_if_control_unreachable
+  event_durability: direct_postgres

@@ -1,0 +1,51 @@
+# Featherbase (Railway `featherbase-db-prod`) -> MotherDuck bronze_featherbase (#3079, #2851).
+api_version: pg-md-cdc/v1
+source_id: featherbase
+
+source:
+  dsn_env: FEATHERBASE_PG_DSN
+  include:
+    schemas: [public]        # Featherbase stores its tables in public; `meta` holds no relations
+  exclude:
+    tables:
+      # persist_snapshots left 50 of these in the SOURCE schema (#2874); never replicate them.
+      - "public._dlt_*"
+  deny:
+    tables:
+      # Credential/PII tables. Not catalog-declared today, so the adapter never offers them —
+      # this is the tripwire that makes a future catalog change fail validate instead of leaking.
+      - "public.access_token"
+      - "public.password_reset"
+      - "public.user_settings"
+  discovery:
+    adapter: featherbase
+    options:
+      modules: null          # null = every module; a list narrows and DROPS the rest from the pub
+
+destination:
+  token_env: MOTHERDUCK_TOKEN
+  database: bronze_featherbase
+  schema_mapping: preserve_source
+  # Pilot continuity: dlt state rides the destination under this exact name (1,614 loads).
+  # Renaming it would re-snapshot every table.
+  pipeline_name: featherbase_cdc
+  retirement_policy: freeze
+
+replication:
+  slot: featherbase_cdc_slot
+  publication: featherbase_cdc_pub
+  cadence_minutes: 5
+  tables_without_key: reject
+  # Unchanged TOASTed values only ride the WAL under FULL; without it a large unchanged column
+  # is undecodable on UPDATE. Cost: the whole old row is written on every UPDATE/DELETE.
+  replica_identity: full
+  slot_loss_policy: resnapshot
+  target_batch_size: 1000
+
+control:
+  # Deviation D-4: the pilot's extractor name is kept. Sweep 2e and 1,673 historical control.run
+  # rows key on 'featherbase'; the registration file, not the string, is the identity.
+  extractor: featherbase
+  availability_policy: pause_if_control_unreachable
+  # CONTROL_WAL_DIR on Railway is /tmp — ephemeral, so a local WAL would not survive a restart.
+  event_durability: direct_postgres
