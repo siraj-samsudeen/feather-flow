@@ -53,6 +53,7 @@ from .decoders import (
     Insert,
     Update,
     Delete,
+    Truncate,
     ColumnData,
 )
 
@@ -638,8 +639,13 @@ class ItemGenerator:
     keys_by_relation: Optional[Dict[Any, Sequence[str]]] = None
     # (schema, table) -> key policy; "append_only" turns the CDC merge key into `lsn`.
     policies_by_relation: Optional[Dict[Any, str]] = None
+    # (schema, table) -> boundary LSN of that relation's current baseline (#3079 review): a
+    # transaction with commit LSN below it is already in the baseline and is dropped here.
+    baseline_lsn_by_relation: Optional[Dict[Any, int]] = None
     last_commit_lsn: Optional[int] = field(default=None, init=False)
     generated_all: bool = False
+    # TRUNCATEs seen in this batch, in WAL order: {namespace, table, lsn, commit_ts}.
+    truncates: List[Dict[str, Any]] = field(default_factory=list, init=False)
 
     def collect(self) -> Dict[str, List[Union[TDataItem, DataItemWithMeta]]]:
         """Consumes one batch and returns it grouped by SOURCE SCHEMA (#3079): two schemas
@@ -686,6 +692,7 @@ class ItemGenerator:
                 credentials=self.credentials,  # for true-PK resolution (#2851 patch)
                 keys_by_relation=self.keys_by_relation,
                 policies_by_relation=self.policies_by_relation,
+                baseline_lsn_by_relation=self.baseline_lsn_by_relation,
             )
             cur.consume_stream(consumer)
         except StopReplication:  # completed batch or reached `upto_lsn`
@@ -695,6 +702,7 @@ class ItemGenerator:
                 cur.connection.close()
         self.last_commit_lsn = consumer.last_commit_lsn
         self.generated_all = consumer.consumed_all
+        self.truncates = consumer.truncates
         return consumer
 
     def __iter__(self) -> Iterator[Union[TDataItem, DataItemWithMeta]]:
@@ -721,10 +729,17 @@ class MessageConsumer:
         credentials: Optional[ConnectionStringCredentials] = None,
         keys_by_relation: Optional[Dict[Any, Sequence[str]]] = None,
         policies_by_relation: Optional[Dict[Any, str]] = None,
+        baseline_lsn_by_relation: Optional[Dict[Any, int]] = None,
     ) -> None:
         self.keys_by_relation = keys_by_relation or {}
         # (schema, table) -> compiled key policy (#3079 D-8). "append_only" merges on `lsn`.
         self.policies_by_relation = policies_by_relation or {}
+        self.baseline_lsn_by_relation = baseline_lsn_by_relation or {}
+        # Commit LSN of the transaction being decoded (pgoutput Begin.final_lsn): the value the
+        # baseline boundary is compared against — never the per-record LSN, which is below the
+        # boundary for a transaction that was still in flight when the baseline was taken.
+        self._txn_commit_lsn: int = 0
+        self.truncates: List[Dict[str, Any]] = []
         self.upto_lsn = upto_lsn
         self.pub_ops = pub_ops
         self.target_batch_size = target_batch_size
@@ -766,16 +781,15 @@ class MessageConsumer:
         elif op == 68:  # ASCII for 'D'
             self.process_change(Delete(msg.payload), msg.data_start)
         elif op == 66:  # ASCII for 'B'
-            self.last_commit_ts = Begin(msg.payload).commit_ts  # type: ignore[assignment]
+            begin = Begin(msg.payload)
+            self.last_commit_ts = begin.commit_ts  # type: ignore[assignment]
+            self._txn_commit_lsn = begin.lsn
         elif op == 67:  # ASCII for 'C'
             self.process_commit(msg)
         elif op == 82:  # ASCII for 'R'
             self.process_relation(Relation(msg.payload))
         elif op == 84:  # ASCII for 'T'
-            logger.warning(
-                "The truncate operation is currently not supported. "
-                "Truncate replication messages are ignored."
-            )
+            self.process_truncate(Truncate(msg.payload), msg.data_start)
         else:
             raise ValueError(f"Unknown replication op {op}")
 
@@ -899,6 +913,38 @@ class MessageConsumer:
         )
         self.data_items[decoded_msg.relation_id] = [meta_item]
 
+    def _relation_key(self, relation_id: int):
+        schema = self.last_table_schema[relation_id]
+        return schema.get("namespace") or "", schema["name"]
+
+    def _in_baseline(self, relation_id: int) -> bool:
+        """True when the current transaction is already in this relation's baseline: its commit
+        LSN is below the consistent point the baseline was taken at (strict `<`, the decoder's
+        own skip predicate). Loading it again would duplicate an append_only row."""
+        boundary = self.baseline_lsn_by_relation.get(self._relation_key(relation_id))
+        return boundary is not None and self._txn_commit_lsn < boundary
+
+    def process_truncate(self, decoded_msg: Truncate, msg_start_lsn: int) -> None:
+        """Local patch (#3079 review): a source TRUNCATE is data, not a warning. Per relation:
+        a keyed mirror must empty — the rows collected so far in this batch are discarded (the
+        truncate supersedes them) and the runner deletes the destination rows BEFORE loading
+        what follows, so batch order holds; an append_only history keeps every arrival and only
+        records the marker. Either way the runner gets a `truncates` entry to act on."""
+        for relation_id in decoded_msg.relation_ids:
+            if relation_id not in self.last_table_schema:
+                continue  # not a published relation of ours (never seen a Relation message)
+            if self._in_baseline(relation_id):
+                continue
+            namespace, table_name = self._relation_key(relation_id)
+            keyed = self.policies_by_relation.get((namespace, table_name)) != "append_only"
+            if keyed and self.data_items.get(relation_id):
+                self.data_items[relation_id] = self.data_items[relation_id][:1]  # keep the meta item
+            self.truncates.append({
+                "namespace": namespace, "table": table_name, "lsn": msg_start_lsn,
+                "commit_lsn": self._txn_commit_lsn, "commit_ts": self.last_commit_ts,
+                "applied": "delete_all" if keyed else "recorded_only",
+            })
+
     def process_change(
         self, decoded_msg: Union[Insert, Update, Delete], msg_start_lsn: int
     ) -> None:
@@ -906,6 +952,8 @@ class MessageConsumer:
 
         Adds data item for inserted/updated/deleted record to instance attribute.
         """
+        if self._in_baseline(decoded_msg.relation_id):
+            return
         table_name = self.last_table_schema[decoded_msg.relation_id]["name"]
         if isinstance(decoded_msg, (Insert, Update)):
             column_data = decoded_msg.new_tuple.column_data

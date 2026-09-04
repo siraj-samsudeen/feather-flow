@@ -39,8 +39,11 @@ python -m pg_md_cdc run|status|resnapshot registrations/featherbase.yml
 `validate` and `plan` **mutate nothing** — they open read-only connections and print. `plan` is
 safe to run against production; `tests/test_cli_plan_pg.py` fingerprints the source catalog
 before and after to keep that claim true. `--json` on any command gives machine output.
+`run`/`status`/`resnapshot` apply the same static validation first and refuse — before opening
+any connection — on an error-severity problem (an unknown `api_version`, say).
 
-Exit codes: `0` clean, `1` at least one error-severity problem, `2` a malformed manifest.
+Exit codes: `0` clean, `1` at least one error-severity problem or an unexpected failure (printed
+redacted, never as a raw traceback), `2` a malformed manifest.
 
 ## What a registration declares
 
@@ -70,9 +73,12 @@ carrying a value is rejected, and no environment value is ever printed or writte
 ## Key policy (D6)
 
 Primary key → merge. Otherwise a **NOT NULL** non-partial, non-expression unique index → merge on
-it (`NULL = NULL` is never true, so a nullable key would insert a duplicate on every load).
+its **key** columns (`INCLUDE` columns carry no uniqueness and are never part of the key;
+`NULL = NULL` is never true, so a nullable key would insert a duplicate on every load).
 Otherwise `replication.tables_without_key`: `reject` (default, an error naming the table) or
-`append_only`. `key_overrides` can force `append_only` or `full_row` per table.
+`append_only`. `key_overrides` can force `append_only` per table. `full_row` is **rejected**
+(`full_row_unsupported`): an all-column merge key cannot mirror an UPDATE — pgoutput emits only
+the new tuple, so the old row is never matched and both versions would stay.
 
 `append_only` is a load contract, not "no key": on the CDC path the relation **merges on `lsn`**
 (unique per WAL record), so a batch replayed after a crash lands exactly once. An UPDATE lands as
@@ -80,10 +86,31 @@ an additional row version and a DELETE record removes nothing — updates and de
 as arrivals, not applied. A re-baseline (resnapshot, a resumed interrupted snapshot, a slot-loss
 re-init) therefore REPLACES the destination copy: a snapshot row has no `lsn` to dedup on.
 
+**Every baseline has a boundary.** The initial snapshot reads the slot's exported snapshot, so
+nothing below its consistent point is ever streamed. Every later baseline — a table added
+mid-life, a resumed snapshot, a resnapshot — reads a table the publication already carries, so
+it overlaps the WAL; `snapshot.consistent_baseline` takes it from a throwaway slot `<slot>_bl`
+whose consistent point PG guarantees matches its snapshot ("in the snapshot" ⟺ "commit LSN <
+boundary", with in-flight transactions waited out), stores that boundary per relation in
+`_cdc_runtime.baseline`, and the drain drops that relation's transactions below it. That is what
+makes the overlap exact for `append_only`, where no key could dedup it.
+
+**`TRUNCATE`** is published and applied: a keyed mirror is emptied before the rows that followed
+the truncate load (batch order preserved); an `append_only` history keeps every arrival. Both
+emit a `truncate` control event. **Partitioned tables** replicate as their partitions (`relkind
+'r'`); the parent is a named `partitioned_parent_skipped` warning, never a relation.
+
+**Run outcome**: `control.run.status` is `ok` only when every selected relation drained with no
+error-class event; `partial` when a table is drift-blocked or a reconcile count did not tie;
+`failed` when nothing drained (slot lost under `slot_loss_policy: pause`, or a selection that
+compiled to nothing — which `run` refuses rather than leaving an undrained slot behind).
+
 `control.reconcile_exclude` names `schema.table` globs the reconcile counts skip — for relations
-this drainer writes while it runs (`control.run`, `control.event`), which can never tie
-source-now against destination-now. They still emit a `reconcile` event with `skipped`/`excluded`
-and a reason, so the gap is visible.
+this drainer writes while it runs (`control.run`, `control.event`, `control.budget_usage`), which
+can never tie source-now against destination-now. `append_only` relations are skipped too
+(`extra.append_only`): their destination keeps every row version, so a count can never tie once
+the source is edited. Both still emit a `reconcile` event with `skipped` and a reason, so the gap
+is visible rather than silently passed.
 
 Merging on a unique index needs the source to publish those columns on DELETE — set
 `replica_identity: full` or `ALTER TABLE ... REPLICA IDENTITY USING INDEX`. The compiler warns

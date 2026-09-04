@@ -76,3 +76,18 @@ def test_drop_publication_is_idempotent(fresh_db, names):
     publication.reconcile(fresh_db, names["publication"], [])
     publication.drop_publication(fresh_db, names["publication"])
     assert not publication.publication_exists(fresh_db, names["publication"])
+
+
+def test_replica_identity_default_leaves_a_source_table_alone(two_schemas, names):
+    """`replica_identity: default` is the manifest saying "do not touch my source tables".
+    Applying FULL anyway would take an ACCESS EXCLUSIVE lock on a live table and multiply its
+    UPDATE/DELETE WAL volume — the two costs `plan` exists to show before a run."""
+    rels = [("a", "t"), ("b", "t")]
+    assert publication.ensure_replica_identity(two_schemas, rels, "default") == []
+    publication.ensure_replica_identity(two_schemas, rels, "full")
+    # and back: `default` on a FULL table is the one ALTER this mode does propose
+    assert publication.ensure_replica_identity(two_schemas, rels, "default") == rels
+    with psycopg.connect(two_schemas, autocommit=True) as c:
+        assert [r[0] for r in c.execute(
+            "select relreplident from pg_class c join pg_namespace n on n.oid=c.relnamespace "
+            "where n.nspname in ('a','b') and c.relname='t'").fetchall()] == ["d", "d"]

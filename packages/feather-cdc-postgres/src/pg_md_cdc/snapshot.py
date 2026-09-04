@@ -7,6 +7,10 @@ replication connection is still open (it fails "snapshot does not exist" otherwi
 import succeeds the exporter may close and the read continues.
 Convergence: the publication is reconciled BEFORE the slot exists, so any concurrent change is
 also in the stream and the merge write-disposition dedups on the declared key.
+A baseline taken LATER (a table added mid-life, a resumed snapshot, an operator resnapshot) is
+`consistent_baseline`: a throwaway slot hands us PG's own consistent point + exported snapshot,
+so "visible in the baseline" ⟺ "commit LSN < boundary" by construction, and the drain drops
+what the baseline already saw. That is what makes an append_only overlap exact (#3079 review).
 """
 from __future__ import annotations
 
@@ -49,6 +53,21 @@ class ExportedSnapshot:
 
     def __iter__(self):  # so `lsn, name = handle` reads naturally at call sites
         return iter((self.consistent_point_lsn, self.snapshot_name))
+
+
+def drop_slot_if_exists(dsn: str, slot: str) -> bool:
+    with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn:
+        row = conn.execute("select 1 from pg_replication_slots where slot_name = %s",
+                           (slot,)).fetchone()
+        if row:
+            conn.execute("select pg_drop_replication_slot(%s)", (slot,))
+    return bool(row)
+
+
+def temp_slot_name(slot: str) -> str:
+    """The throwaway slot a consistent baseline is taken from. Ours by name; the caller holds
+    the registration's owner lock, so a leaked one (a crash mid-baseline) is safe to drop."""
+    return (slot + "_bl")[:63]
 
 
 def create_slot_with_snapshot(dsn: str, slot: str) -> ExportedSnapshot:
@@ -171,6 +190,42 @@ def snapshot_resources(
 
 
 @contextlib.contextmanager
+def consistent_baseline(
+    dsn: str,
+    slot: str,
+    relation: Relation,
+    keys: Sequence[str],
+    *,
+    key_policy: str = "merge",
+    itersize: int = 5000,
+) -> Iterator[tuple[object, int]]:
+    """Yields (resource, boundary_lsn) for ONE relation that is already published.
+
+    The publication add happened before this, so the table's changes are in the main slot's
+    WAL from that moment — and a plain snapshot read overlaps that WAL by however long the
+    read takes. A keyed merge hides the overlap; an append_only row has no key and lands twice.
+    A throwaway slot `<slot>_bl` gives the two things a plain read cannot: PG waits for every
+    transaction in flight before exporting the snapshot, and the consistent point it returns is
+    the exact LSN below which every transaction is in that snapshot (the decoder's own skip
+    predicate, strict `<`). The runner persists the boundary per relation and the drain drops
+    that relation's transactions with commit LSN < boundary. The slot is dropped on exit.
+    """
+    schema, table = relation
+    temp = temp_slot_name(slot)
+    drop_slot_if_exists(dsn, temp)
+    handle = create_slot_with_snapshot(dsn, temp)
+    try:
+        with snapshot_resources(dsn, handle.snapshot_name, [relation], {relation: list(keys)},
+                                key_policies={relation: key_policy}, itersize=itersize) as by_schema:
+            handle.close()  # the import already happened; the exporter is no longer needed
+            (resource,) = by_schema[schema]
+            yield resource, handle.consistent_point_lsn
+    finally:
+        handle.close()
+        drop_slot_if_exists(dsn, temp)
+
+
+@contextlib.contextmanager
 def baseline_resource(
     dsn: str,
     relation: Relation,
@@ -179,8 +234,9 @@ def baseline_resource(
     key_policy: str = "merge",
     itersize: int = 5000,
 ) -> Iterator[object]:
-    """Full read of one table just ADDED to the publication (pilot's backfill_table). The
-    pub-add happens first, so concurrent changes also arrive via CDC and merge dedups them."""
+    """Plain REPEATABLE READ read of one table — a reader for tests and telemetry. The runtime
+    never baselines with it: a row committed between the publication add and this read would
+    land from both paths (see `consistent_baseline`)."""
     schema, table = relation
     conn = psycopg.connect(dsn, connect_timeout=10)
     try:

@@ -68,3 +68,20 @@ def test_release_frees_the_lock_for_the_next_run(fresh_db, names):
 def test_assert_held_raises_before_acquire(fresh_db, names):
     with pytest.raises(OwnershipLost):
         OwnerSession(fresh_db, names["slot"]).assert_held()
+
+
+def test_holding_some_OTHER_advisory_lock_is_not_holding_ours(fresh_db, names):
+    """`assert_held` must key on THIS registration's lock, not merely on "this session holds an
+    advisory lock". Counting any granted advisory lock would let a session that had released the
+    slot's lock — while another drainer picks it up — carry on writing, believing it still owns
+    the slot."""
+    owner = OwnerSession(fresh_db, names["slot"])
+    assert owner.acquire() is True
+    try:
+        owner._conn.execute("select pg_advisory_lock(hashtext('pg_md_cdc:someone_else')::bigint)")
+        owner.assert_held()  # still ours: the real lock is still held
+        owner._conn.execute("select pg_advisory_unlock(hashtext(%s)::bigint)", (owner.key,))
+        with pytest.raises(OwnershipLost):
+            owner.assert_held()
+    finally:
+        owner.release()

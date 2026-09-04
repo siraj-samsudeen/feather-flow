@@ -161,3 +161,97 @@ def test_resnapshot_still_refuses_without_yes(registration):
         cli.main(["resnapshot", registration, "--tables", "public.t", "--dev"])
     assert "--yes" in str(exc.value)
     assert pathlib.Path(registration).exists()
+
+
+# --------------------------------------------------------------------------- review: gates
+
+
+def _slot_and_publication(dsn, m):
+    with psycopg.connect(dsn, autocommit=True) as c:
+        slot = c.execute("select 1 from pg_replication_slots where slot_name = %s",
+                         (m.replication.slot,)).fetchone()
+        pub = {r[0] for r in c.execute(
+            "select tablename from pg_publication_tables where pubname = %s",
+            (m.replication.publication,)).fetchall()} if c.execute(
+            "select 1 from pg_publication where pubname = %s",
+            (m.replication.publication,)).fetchone() else None
+    return slot is not None, pub
+
+
+@pytest.mark.parametrize("command", [["run", "--dev"], ["status"], ["resnapshot", "--yes", "--dev"]])
+def test_a_manifest_that_fails_static_validation_never_touches_anything(
+        fresh_db, registration, duckdb_path, capsys, command):
+    """`validate` rejecting `api_version: v999` means nothing if `run` executes it anyway. The
+    mutating entry points must refuse BEFORE discovery, the publication, the slot and the
+    destination — and say why on stderr."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)")
+    text = pathlib.Path(registration).read_text(encoding="utf-8")
+    pathlib.Path(registration).write_text(
+        text.replace("api_version: pg-md-cdc/v1", "api_version: pg-md-cdc/v999"), encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        cli.main([command[0], registration, *command[1:]])
+    assert exc.value.code not in (0, None)
+    assert "api_version" in capsys.readouterr().err
+    m = mf.load(registration)
+    assert _slot_and_publication(fresh_db, m) == (False, None)
+    assert not pathlib.Path(duckdb_path).exists()
+
+
+def test_an_empty_compiled_selection_fails_closed_and_records_the_run(
+        fresh_db, registration, duckdb_path, tmp_path):
+    """A declaration that now compiles to nothing is either a mistake or a decommission. Doing
+    nothing and exiting 0 left the publication and the slot alive with no consumer — WAL
+    retained until the fuse — and wrote no control.run row to say so."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'a')")
+    assert cli.main(["run", registration, "--dev"]) == 0
+    text = pathlib.Path(registration).read_text(encoding="utf-8")
+    pathlib.Path(registration).write_text(
+        text.replace("schemas: [public]", "schemas: [nowhere]"), encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["run", registration, "--dev"])
+    assert exc.value.code not in (0, None)
+    assert "decommission" in str(exc.value)
+    m = mf.load(registration)
+    assert _slot_and_publication(fresh_db, m) == (True, {"t"}), "nothing was touched"
+
+    import json
+    records = []
+    for path in sorted((tmp_path / "wal" / "demo_cdc").glob("*.jsonl")):
+        records += [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()]
+    finishes = [r for r in records if r.get("kind") == "run_finish"]
+    assert finishes[-1]["status"] == "failed" and finishes[-1]["n_err"] == 1
+    assert any(r.get("kind") == "event" and r.get("entity") == "_selection"
+               and r.get("status") == "error" for r in records)
+
+
+def test_a_failed_destination_drop_aborts_resnapshot_before_it_touches_the_source(
+        fresh_db, registration, duckdb_path, monkeypatch):
+    """The drop is the first destructive act of a resnapshot. If it fails, the table must stay
+    `resnapshot_required`, untouched at the destination, still published, with no snapshot
+    taken — a merge into the undropped table would resurrect rows the source deleted."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'a'), (2, 'gone later')")
+    assert cli.main(["run", registration, "--dev"]) == 0
+    sql(fresh_db, "delete from public.t where id = 2")
+    m = mf.load(registration)
+    dest = runner._destination(m)
+    dest.write_lifecycle("demo", "public", "t", "resnapshot_required", "hand-set")
+    signature_before = dest.read_signatures("demo")[("public", "t")]
+
+    from pg_md_cdc.destination import Destination
+
+    def refused(self, schema, table):
+        raise RuntimeError("permission denied for table t")
+
+    monkeypatch.setattr(Destination, "drop_table", refused)
+    with pytest.raises(RuntimeError):
+        runner.resnapshot(m, tables=["public.t"], yes=True, dev=True)
+
+    assert dest.read_lifecycle("demo")[("public", "t")] == "resnapshot_required"
+    assert dest.read_signatures("demo")[("public", "t")] == signature_before
+    assert _slot_and_publication(fresh_db, m)[1] == {"t"}, "the publication was not touched"
+    con = duckdb.connect(duckdb_path)
+    assert con.execute("select id from public.t order by id").fetchall() == [(1,), (2,)], \
+        "untouched: the stale row is still there, visibly, rather than half-resnapshotted"
+    con.close()

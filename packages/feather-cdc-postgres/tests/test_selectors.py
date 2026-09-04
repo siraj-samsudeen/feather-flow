@@ -123,12 +123,14 @@ def test_tables_without_key_append_only_keeps_the_table():
     assert "no_key_append_only" in codes(plan, "warning")
 
 
-def test_key_overrides_full_row_warns_about_cost():
+def test_key_overrides_full_row_is_rejected_not_merely_expensive():
+    """An all-column merge key cannot mirror an UPDATE: the decoder emits only the new tuple,
+    so the old row is never matched and both versions stay (#3079 review). Rejected outright;
+    the honest contracts are a real key or append_only."""
     r = rel("public", "t", pk=["id"])
     plan = sel.compile(_m(replication={"key_overrides": {"public.t": "full_row"}}), [r])
-    assert plan.relations[0].key_policy == sel.FULL_ROW
-    assert plan.relations[0].key == ("id", "payload")
-    assert "full_row_key_cost" in codes(plan, "warning")
+    assert plan.relations == []
+    assert "full_row_unsupported" in codes(plan, "error")
 
 
 def test_publication_diff_and_replica_identity_alters():

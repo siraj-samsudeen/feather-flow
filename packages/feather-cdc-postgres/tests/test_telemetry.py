@@ -208,3 +208,35 @@ def test_reconcile_counts_quotes_an_embedded_double_quote_in_a_table_name(
                      "source_rows": 2, "destination_rows": 2, "delta": 0, "match": True}]
     assert 'public.we"ird' in dest.drop_table("public", 'we"ird')
     assert dest.table_row_count("public", 'we"ird') is None
+
+
+def test_an_append_only_relation_is_skipped_rather_than_failed_forever(
+        fresh_db, duckdb_path, tmp_path):
+    """append_only keeps EVERY row version at the destination (an UPDATE adds one, a DELETE
+    removes none), so a row count can never tie once the source is edited. Comparing it emits
+    an EV_ERROR that no later tick can clear — Sweep 2's recovery join needs a later OK on the
+    same entity/unit — i.e. a permanently open red for a table behaving exactly as declared."""
+    dest = Destination(DestinationSpec(kind="duckdb", database="t", path=duckdb_path,
+                                       pipelines_dir=str(tmp_path / "dlt")))
+    dest.ensure_runtime_tables()
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.events (v text)")
+        c.execute("insert into public.events values ('a'), ('b')")
+    with dest.connect() as con:
+        con.execute('create schema if not exists "public"')
+        con.execute('create table "public"."events" (v varchar, lsn bigint)')
+        # two versions of 'a' — one insert and one update, exactly as the CDC path lands them
+        con.execute("insert into \"public\".\"events\" values ('a', 1), ('b', 2), ('a2', 3)")
+
+    compared, = telemetry.reconcile_counts(fresh_db, dest, [("public", "events")], {})
+    assert compared["match"] is False, "positive control: comparing it really does mismatch"
+
+    skipped, = telemetry.reconcile_counts(fresh_db, dest, [("public", "events")], {},
+                                          append_only={("public", "events")})
+    assert skipped == {"schema": "public", "table": "events", "skipped": True,
+                       "append_only": True, "reason": telemetry.APPEND_ONLY_REASON}
+    run = FakeRun()
+    telemetry.emit_reconcile(run, [skipped])
+    (event,) = run.events
+    assert event["status"] == "zero_rows"
+    assert event["extra"]["append_only"] is True

@@ -133,3 +133,10 @@ def test_the_control_plane_registration_excludes_the_tables_it_writes_while_runn
     m = mf.load(str(REGISTRATIONS / "control_plane.yml"))
     assert set(m.control.reconcile_exclude) == {"control.run", "control.event",
                                                 "control.budget_usage"}
+
+
+def test_key_override_full_row_is_a_static_error():
+    problems = mf.validate_static(_m(replication={"key_overrides": {"public.t": "full_row"}}))
+    assert "full_row_unsupported" in _codes(problems, "error")
+    assert _codes(mf.validate_static(
+        _m(replication={"key_overrides": {"public.t": "append_only"}})), "error") == set()

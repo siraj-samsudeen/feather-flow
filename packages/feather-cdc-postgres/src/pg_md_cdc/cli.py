@@ -230,3 +230,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     except mf.ManifestError as exc:
         print(f"[error] {mf.redact(str(exc))}", file=sys.stderr)
         return 2
+    except Exception as exc:  # noqa: BLE001
+        # Anything else — an unreachable source, a bad adapter, a duckdb error. A raw traceback
+        # would print psycopg's `connection to server at ...` line (and dlt's config exceptions
+        # echo the value they resolved) straight into Railway's log; redact() is the only thing
+        # standing between that and a DSN in a log line. SystemExit/KeyboardInterrupt are not
+        # Exception, so `sys.exit("FATAL: …")` from the runtime still propagates untouched.
+        message = mf.redact(f"{type(exc).__name__}: {exc}")
+        print(f"[error] {message}", file=sys.stderr)
+        if getattr(args, "json", False):
+            print(json.dumps({"error": type(exc).__name__, "message": message}, indent=2))
+        return 1

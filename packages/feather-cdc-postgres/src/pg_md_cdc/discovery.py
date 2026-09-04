@@ -45,6 +45,8 @@ class SourceRelation:
     unique_indexes: Tuple[UniqueIndex, ...] = ()
     replica_identity: str = "d"  # d default | n nothing | f full | i index
     row_estimate: float = 0.0
+    kind: str = "r"              # relkind: r plain/leaf table | p partitioned parent
+    parent: Optional[str] = None  # "schema.table" of the partitioned parent, for a leaf
 
     @property
     def qualified(self) -> str:
@@ -58,9 +60,13 @@ class SourceRelation:
 
 
 _REL_SQL = """
-select c.oid, n.nspname, c.relname, c.relreplident, c.reltuples
+select c.oid, n.nspname, c.relname, c.relreplident, c.reltuples, c.relkind,
+       pn.nspname || '.' || pc.relname as parent
 from pg_class c
 join pg_namespace n on n.oid = c.relnamespace
+left join pg_inherits i on i.inhrelid = c.oid
+left join pg_class pc on pc.oid = i.inhparent and pc.relkind = 'p'
+left join pg_namespace pn on pn.oid = pc.relnamespace
 where c.relkind in ('r', 'p')
   and n.nspname not in ('pg_catalog', 'information_schema', 'pg_toast')
   and n.nspname not like 'pg\\_temp%%' and n.nspname not like 'pg\\_toast%%'
@@ -81,7 +87,9 @@ order by a.attrelid, a.attnum
 """
 
 # Non-partial (indpred is null) and non-expression (indexprs is null): a partial unique index
-# does not guarantee global uniqueness, so it is not a merge key.
+# does not guarantee global uniqueness, so it is not a merge key. `k.ord <= i.indnkeyatts` drops
+# INCLUDE columns: they sit in indkey but carry no uniqueness, and merging on one turns every
+# UPDATE of it into a duplicate row.
 _IDX_SQL = """
 select i.indrelid, ic.relname, i.indisprimary, k.ord, a.attname
 from pg_index i
@@ -92,6 +100,7 @@ cross join lateral unnest(i.indkey::smallint[]) with ordinality as k(attnum, ord
 join pg_attribute a on a.attrelid = i.indrelid and a.attnum = k.attnum
 where i.indisunique and i.indisvalid and i.indislive
   and i.indpred is null and i.indexprs is null
+  and k.ord <= i.indnkeyatts
   and c.relkind in ('r', 'p')
   and n.nspname not in ('pg_catalog', 'information_schema', 'pg_toast')
 order by i.indrelid, ic.relname, k.ord
@@ -130,7 +139,7 @@ def discover(dsn: str, *, connect_timeout: int = 10) -> List[SourceRelation]:
             uniq.setdefault(indrelid, {}).setdefault(indname, []).append(attname)
 
     out: List[SourceRelation] = []
-    for oid, schema, table, relreplident, reltuples in rels:
+    for oid, schema, table, relreplident, reltuples, relkind, parent in rels:
         out.append(
             SourceRelation(
                 schema=schema,
@@ -143,6 +152,8 @@ def discover(dsn: str, *, connect_timeout: int = 10) -> List[SourceRelation]:
                 ),
                 replica_identity=relreplident,
                 row_estimate=float(reltuples or 0.0),
+                kind=relkind,
+                parent=parent,
             )
         )
     return sorted(out, key=lambda r: (r.schema, r.table))

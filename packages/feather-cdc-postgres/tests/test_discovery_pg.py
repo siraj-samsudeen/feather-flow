@@ -177,3 +177,45 @@ def test_featherbase_adapter_reproduces_the_pilot_catalog_rules(fresh_db):
     core_only = select(fresh_db, {"modules": ["Core"]})
     # the catalog itself rides along whatever the allow-list says
     assert [r.table for r in core_only] == ["access_log", "column_def", "comment", "table_def"]
+
+
+def test_a_covering_unique_index_keys_on_its_KEY_columns_only(fresh_db):
+    """`unique (a) include (payload)` stores both attnums in pg_index.indkey; only the first
+    `indnkeyatts` are the key. Taking all of them would merge on (a, payload), and every UPDATE
+    of `payload` would then INSERT a duplicate instead of replacing the row (#3079 review)."""
+    _ddl(
+        fresh_db,
+        "create table public.t (a int not null, payload text not null, v text)",
+        "create unique index t_a_uq on public.t (a) include (payload)",
+    )
+    (rel,) = discovery.discover(fresh_db)
+    assert [idx.columns for idx in rel.unique_indexes] == [("a",)]
+    plan = sel.compile(_m(replication={"replica_identity": "full"}), [rel])
+    assert plan.relations[0].key == ("a",)
+    assert plan.relations[0].key_policy == sel.UNIQUE_INDEX
+
+
+def test_a_partitioned_parent_is_reported_and_its_leaves_are_selected(fresh_db):
+    """`pg_publication_tables` expands a partitioned parent to its leaves and pgoutput emits
+    leaf identity, so a parent in the desired set is re-added every tick and the parent's
+    destination copy would stop receiving rows. Leaves only; the parent is a named warning."""
+    _ddl(
+        fresh_db,
+        "create table public.events (id int, day date, v text, primary key (id, day)) "
+        "partition by range (day)",
+        "create table public.events_2026 partition of public.events "
+        "for values from ('2026-01-01') to ('2027-01-01')",
+        "create table public.events_2027 partition of public.events "
+        "for values from ('2027-01-01') to ('2028-01-01')",
+        "create table public.plain (id int primary key)",
+    )
+    rels = discovery.discover(fresh_db)
+    kinds = {r.table: (r.kind, r.parent) for r in rels}
+    assert kinds == {"events": ("p", None), "events_2026": ("r", "public.events"),
+                     "events_2027": ("r", "public.events"), "plain": ("r", None)}
+    plan = sel.compile(_m(), rels)
+    assert [r.table for r in plan.relations] == ["events_2026", "events_2027", "plain"]
+    (warning,) = [p for p in plan.problems if p.code == "partitioned_parent_skipped"]
+    assert warning.severity == "warning"
+    assert "public.events_2026" in warning.message and "public.events_2027" in warning.message
+    assert plan.relations[0].key == ("id", "day")

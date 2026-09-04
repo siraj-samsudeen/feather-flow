@@ -323,8 +323,14 @@ def test_a_table_added_mid_life_gets_one_baseline_and_later_changes_exactly_once
         "insert into public.b values (1, 'pre-existing'), (2, 'also')")
     widened = first + [rel("public", "b", "id")]
     run, _ = tick(cfg, widened)
-    assert [e["entity"] for e in run.units("backfill")] == ["b"]
+    assert [e["entity"] for e in run.units("backfill")] == ["public.b"]
     assert table(duckdb_path, "public.b", "id") and len(table(duckdb_path, "public.b")) == 2
+    # A newcomer is never ADOPTED as streaming: adoption is only for a relation the publication
+    # already carries (evidence that some earlier drainer baselined it). Claiming `streaming`
+    # for one that has never been read makes the lifecycle trail — an operator's only record of
+    # whether a table was ever baselined — say the opposite of what happened.
+    trail = [e["extra"]["to"] for e in run.units("lifecycle") if e["entity"] == "public.b"]
+    assert trail[0] == "snapshotting" and trail[-1] == STREAMING
 
     sql(fresh_db, "update public.b set v = 'changed' where id = 1",
         "insert into public.b values (3, 'new')")
@@ -498,7 +504,7 @@ def test_slot_loss_policy_pause_stops_instead_of_re_snapshotting(
     _report_lost_once(monkeypatch)
     run, result = tick(cfg, relations)
 
-    assert result == {"paused": True}
+    assert result["paused"] is True and result["outcome"]["status"] == "failed"
     assert dest.read_lifecycle(cfg.registration)[("public", "t")] == "resnapshot_required"
     assert dest.read_checkpoint(cfg.registration) == before
     assert run.units("cdc") == [] and run.units("snapshot") == []
@@ -655,3 +661,421 @@ def test_resuming_an_interrupted_append_only_snapshot_replaces_the_baseline(
         (1, "pre"), (2, "also")]
     con.close()
     assert dest.read_lifecycle(cfg.registration) == {("public", "events"): STREAMING}
+
+
+def test_a_crash_between_the_publication_add_and_the_baseline_still_gets_its_baseline(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """The same silent-loss window as the snapshot crash, one phase later: the table is IN the
+    publication but never baselined. The next tick sees nothing to add, and a relation with no
+    lifecycle row that is already published is ADOPTED as `streaming` — so its pre-add rows are
+    in no WAL record and no phase would ever read them."""
+    sql(fresh_db, "create table public.a (id int primary key, v text)",
+        "insert into public.a values (1, 'a')")
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    first = [rel("public", "a", "id")]
+    tick(cfg, first)
+
+    sql(fresh_db, "create table public.b (id int primary key, v text)",
+        "insert into public.b values (1, 'pre-existing'), (2, 'also')")
+    widened = first + [rel("public", "b", "id")]
+    monkeypatch.setattr(runner.snapshot, "consistent_baseline",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("container killed")))
+    with pytest.raises(RuntimeError):
+        tick(cfg, widened)
+    monkeypatch.undo()
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        published = {r[0] for r in c.execute(
+            "select tablename from pg_publication_tables where pubname = %s",
+            (cfg.publication,)).fetchall()}
+    assert published == {"a", "b"}, "the pub-add landed before the crash — that is the window"
+
+    sql(fresh_db, "insert into public.b values (3, 'after')")
+    tick(cfg, widened)
+    con = duckdb.connect(duckdb_path)
+    assert con.execute("select id, v from public.b order by id").fetchall() == [
+        (1, "pre-existing"), (2, "also"), (3, "after")]
+    assert con.execute("select count(*) - count(distinct id) from public.b").fetchone() == (0,)
+    con.close()
+
+
+def test_a_checkpoint_ahead_of_the_slot_is_re_asserted_instead_of_replayed(
+        fresh_db, names, duckdb_path, tmp_path):
+    """The crash window between "the load committed and the checkpoint was written" and "the slot
+    was advanced": the slot still holds work whose rows are already durable at the destination.
+    The next tick must push the slot up to the checkpoint rather than re-reading — replaying is
+    survivable under merge, but on a busy slot it is unbounded repeated work every tick."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'a')")
+    relations = [rel("public", "t", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+
+    sql(fresh_db, "insert into public.t values (2, 'b')")
+    ahead = stream.max_lsn(fresh_db, cfg.slot, cfg.publication)
+    dest.write_checkpoint(cfg.registration, cfg.slot, ahead)   # committed, never advanced
+    assert confirmed_flush(fresh_db, cfg.slot) < ahead
+
+    run, result = tick(cfg, relations)
+    assert confirmed_flush(fresh_db, cfg.slot) >= ahead, "the slot was left behind the checkpoint"
+    assert result["start_lsn"] == ahead
+    con = duckdb.connect(duckdb_path)
+    assert con.execute("select count(*) - count(distinct id) from public.t").fetchone() == (0,)
+    con.close()
+
+
+# --------------------------------------------------------------------------- review: baselines
+# A baseline taken while the table is already published overlaps the WAL: a row committed
+# after the publication add and before the snapshot is in BOTH. Merge hides that for a keyed
+# table; an append_only row carries no key, so it lands twice. Every non-initial baseline must
+# therefore come with a boundary LSN, and the drain must drop what the baseline already saw.
+
+
+def _insert_between(monkeypatch, dsn, statement):
+    """Commit `statement` after the publication add and BEFORE the baseline reads — the
+    reviewer's reproduction, made deterministic."""
+    real = runner.snapshot.consistent_baseline
+
+    @contextlib.contextmanager
+    def race(*a, **kw):
+        sql(dsn, statement)
+        with real(*a, **kw) as got:
+            yield got
+
+    monkeypatch.setattr(runner.snapshot, "consistent_baseline", race)
+
+
+def _versions(duckdb_path, qualified="public.events"):
+    con = duckdb.connect(duckdb_path)
+    try:
+        return con.execute(f"select id, count(*) from {qualified} group by id order by id").fetchall()
+    finally:
+        con.close()
+
+
+def test_an_append_only_table_added_mid_life_lands_a_concurrent_insert_once(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    sql(fresh_db, "create table public.a (id int primary key, v text)",
+        "insert into public.a values (1, 'a')")
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, [rel("public", "a", "id")])
+
+    sql(fresh_db, "create table public.events (id int, note text)",
+        "insert into public.events values (1, 'pre')")
+    widened = [rel("public", "a", "id"), rel("public", "events", policy="append_only")]
+    _insert_between(monkeypatch, fresh_db, "insert into public.events values (2, 'between')")
+    tick(cfg, widened)
+    sql(fresh_db, "insert into public.events values (3, 'after')")
+    tick(cfg, widened)
+    assert _versions(duckdb_path) == [(1, 1), (2, 1), (3, 1)]
+    assert dest.read_baseline_lsns(cfg.registration)[("public", "events")] > 0
+
+
+def test_a_resumed_append_only_snapshot_lands_a_concurrent_insert_once(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """The interrupted-snapshot path: the slot exists, the publication carries the table, and
+    the retaken baseline overlaps everything that entered the WAL since the crash."""
+    sql(fresh_db, "create table public.events (id int, note text)",
+        "insert into public.events values (1, 'pre')")
+    relations = [rel("public", "events", policy="append_only")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    monkeypatch.setattr(runner.snapshot, "snapshot_resources",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("container killed")))
+    with pytest.raises(RuntimeError):
+        tick(cfg, relations)
+    monkeypatch.undo()
+    assert dest.read_lifecycle(cfg.registration) == {("public", "events"): "snapshotting"}
+
+    sql(fresh_db, "insert into public.events values (2, 'since the crash')")
+    _insert_between(monkeypatch, fresh_db, "insert into public.events values (3, 'between')")
+    tick(cfg, relations)
+    sql(fresh_db, "insert into public.events values (4, 'after')")
+    tick(cfg, relations)
+    assert _versions(duckdb_path) == [(1, 1), (2, 1), (3, 1), (4, 1)]
+
+
+def test_a_baseline_waits_for_a_transaction_in_flight_at_the_snapshot(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """PG's consistent point is reached only once every transaction in flight has finished,
+    so a row committed while the baseline is being taken is in the snapshot — and its commit
+    LSN is below the boundary, so the drain drops the WAL copy. Once, and the baseline waited."""
+    sql(fresh_db, "create table public.a (id int primary key, v text)",
+        "insert into public.a values (1, 'a')")
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, [rel("public", "a", "id")])
+    sql(fresh_db, "create table public.events (id int, note text)",
+        "insert into public.events values (1, 'pre')")
+    widened = [rel("public", "a", "id"), rel("public", "events", policy="append_only")]
+
+    real = runner.snapshot.consistent_baseline
+    timing = {}
+
+    @contextlib.contextmanager
+    def commit_late(*a, **kw):
+        import time as _t
+        inflight = psycopg.connect(fresh_db)   # after the publication add and the ALTERs
+        inflight.execute("insert into public.events values (2, 'in flight')")
+
+        def later():
+            _t.sleep(1.5)
+            inflight.commit()
+            timing["committed"] = _t.monotonic()
+            inflight.close()
+
+        threading.Thread(target=later).start()
+        with real(*a, **kw) as got:
+            timing["snapshot_ready"] = _t.monotonic()
+            yield got
+
+    monkeypatch.setattr(runner.snapshot, "consistent_baseline", commit_late)
+    tick(cfg, widened)
+    assert timing["snapshot_ready"] >= timing["committed"], "the baseline did not wait"
+    tick(cfg, widened)
+    assert _versions(duckdb_path) == [(1, 1), (2, 1)]
+
+
+# --------------------------------------------------------------------------- review: ownership
+
+
+def _terminate_owner(dsn, owner_conn):
+    with psycopg.connect(dsn, autocommit=True) as c:
+        for (pid,) in c.execute(
+                "select pid from pg_locks where locktype = 'advisory' and granted "
+                "and pid <> pg_backend_pid()").fetchall():
+            c.execute("select pg_terminate_backend(%s)", (pid,))
+
+
+def test_losing_the_owner_during_a_load_stops_the_checkpoint_and_the_slot_advance(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """The lock is released by Postgres the moment the owner backend dies — from then on a
+    peer may own or rebuild the slot. A load that committed in that window must stay
+    REPLAYABLE: no checkpoint write, no slot advance, OwnershipLost out of the run."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)")
+    relations = [rel("public", "t", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+    before = (dest.read_checkpoint(cfg.registration), confirmed_flush(fresh_db, cfg.slot))
+    sql(fresh_db, "insert into public.t values (1, 'a')")
+
+    real_load = Destination.load
+
+    def load_then_lose_the_lock(pipeline, items, **kw):
+        info = real_load(pipeline, items, **kw)
+        _terminate_owner(fresh_db, None)
+        return info
+
+    monkeypatch.setattr(Destination, "load", staticmethod(load_then_lose_the_lock))
+    with pytest.raises(OwnershipLost):
+        tick(cfg, relations)
+    assert (dest.read_checkpoint(cfg.registration), confirmed_flush(fresh_db, cfg.slot)) == before
+    assert len(table(duckdb_path, "public.t")) == 1, "the committed load stays — and replays"
+
+    monkeypatch.undo()
+    tick(cfg, relations)
+    con = duckdb.connect(duckdb_path)
+    assert con.execute("select count(*) - count(distinct id) from public.t").fetchone() == (0,)
+    con.close()
+    assert dest.read_checkpoint(cfg.registration) != before[0]
+
+
+# --------------------------------------------------------------------------- review: truncate
+
+
+def test_a_source_truncate_reaches_the_destination(fresh_db, names, duckdb_path, tmp_path):
+    """A keyed mirror empties with its source; an append_only history keeps every arrival and
+    records the truncate as an event. Rows inserted after the TRUNCATE in the same drain land
+    exactly once, after the delete — batch order is preserved."""
+    sql(fresh_db,
+        "create table public.keyed (id int primary key, v text)",
+        "create table public.events (id int, note text)",
+        "insert into public.keyed values (1, 'old'), (2, 'old')",
+        "insert into public.events values (1, 'old')")
+    relations = [rel("public", "keyed", "id"), rel("public", "events", policy="append_only")]
+    cfg, _ = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+
+    sql(fresh_db,
+        "insert into public.keyed values (3, 'doomed')",
+        "truncate public.keyed, public.events",
+        "insert into public.keyed values (4, 'new')",
+        "insert into public.events values (2, 'new')")
+    run, _ = tick(cfg, relations)
+
+    con = duckdb.connect(duckdb_path)
+    assert con.execute("select id, v from public.keyed order by id").fetchall() == [(4, "new")]
+    assert con.execute("select id from public.events order by id").fetchall() == [(1,), (2,)]
+    con.close()
+    truncated = {e["entity"] for e in run.units("truncate")}
+    assert truncated == {"public.keyed", "public.events"}
+
+
+def test_an_existing_publication_is_upgraded_to_publish_truncate(fresh_db, names, duckdb_path,
+                                                                 tmp_path):
+    """The pilot's publication was created with `publish = insert, update, delete`; reconcile
+    must ALTER it, not inherit the gap."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        f"create publication {names['publication']} for table public.t "
+        "with (publish = 'insert, update, delete')")
+    relations = [rel("public", "t", "id")]
+    cfg, _ = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        assert c.execute("select pubtruncate from pg_publication where pubname = %s",
+                         (cfg.publication,)).fetchone() == (True,)
+
+
+# --------------------------------------------------------------------------- review: identity
+
+
+def test_load_events_carry_the_schema_qualified_entity(fresh_db, names, duckdb_path, tmp_path):
+    """Two schemas, one table name: a bare `person` in control.event cannot say which one
+    loaded. Lifecycle and reconcile already say `schema.table`; the load events must too."""
+    sql(fresh_db,
+        "create schema sales", "create schema hr",
+        "create table sales.person (id int primary key, v text)",
+        "create table hr.person (id int primary key, v text)",
+        "insert into sales.person values (1, 'customer')",
+        "insert into hr.person values (1, 'employee')")
+    relations = [rel("sales", "person", "id"), rel("hr", "person", "id")]
+    cfg, _ = make(fresh_db, names, duckdb_path, tmp_path)
+    run1, _ = tick(cfg, relations)
+    assert {e["entity"] for e in run1.units("snapshot")} == {"sales.person", "hr.person"}
+    sql(fresh_db, "insert into hr.person values (2, 'employee2')")
+    run2, _ = tick(cfg, relations)
+    assert [e["entity"] for e in run2.units("cdc")] == ["hr.person"]
+
+
+# --------------------------------------------------------------------------- review: outcome
+
+
+def finish_record(wal_dir, extractor="test_cdc"):
+    """The `run_finish` record a WAL-only ControlPlane wrote — what control.run would hold."""
+    import json
+    import pathlib
+    records = []
+    for path in sorted(pathlib.Path(wal_dir, extractor).glob("*.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            rec = json.loads(line)
+            if rec.get("kind") == "run_finish":
+                records.append(rec)
+    return records[-1]
+
+
+def test_a_paused_registration_does_not_finish_its_run_ok(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """`control.run` is the first thing the runbook tells an operator to trust. A slot lost
+    under `slot_loss_policy: pause` drains nothing — recording that as `ok` with every
+    relation counted in n_ok is a green light on a stopped pipe."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'a')")
+    relations = [rel("public", "t", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path, slot_loss_policy="pause")
+    tick(cfg, relations)
+    _report_lost_once(monkeypatch)
+    wal = str(tmp_path / "wal")
+    assert runner.execute(cfg, relations, cp=ControlPlane("test_cdc", dsn=None, wal_dir=wal)) != 0
+    rec = finish_record(wal)
+    assert rec["status"] == "failed" and rec["stop_reason"] == "error"
+    assert (rec["n_ok"], rec["n_err"], rec["n_skipped"]) == (0, 1, 1)
+
+
+def test_a_drift_blocked_table_makes_the_run_partial_with_honest_counts(
+        fresh_db, names, duckdb_path, tmp_path):
+    sql(fresh_db,
+        "create table public.t (id int primary key, alt int not null unique, v text)",
+        "create table public.other (id int primary key, v text)",
+        "insert into public.t values (1, 100, 'a')", "insert into public.other values (1, 'x')")
+    relations = [rel("public", "t", "id"), rel("public", "other", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    wal = str(tmp_path / "wal")
+    assert runner.execute(cfg, relations,
+                          cp=ControlPlane("test_cdc", dsn=None, wal_dir=wal)) == 0
+    assert finish_record(wal)["status"] == "ok"
+
+    sql(fresh_db, "alter table public.t drop constraint t_pkey",
+        "alter table public.t add primary key (alt)")
+    recompiled = [rel("public", "t", "alt"), rel("public", "other", "id")]  # what `run` compiles
+    rc = runner.execute(cfg, recompiled, cp=ControlPlane("test_cdc", dsn=None, wal_dir=wal))
+    rec = finish_record(wal)
+    assert rec["status"] == "partial" and rc == 0, "partial is a finished run, not a crash"
+    assert (rec["n_ok"], rec["n_err"], rec["n_skipped"]) == (1, 1, 1)
+
+
+def test_a_reconcile_mismatch_makes_the_run_partial(fresh_db, names, duckdb_path, tmp_path):
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'a')")
+    relations = [rel("public", "t", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+    con = duckdb.connect(duckdb_path)
+    con.execute("insert into public.t (id, v, _dlt_load_id, _dlt_id) "
+                "values (99, 'not at the source', 'hand', 'hand')")
+    con.close()
+    wal = str(tmp_path / "wal")
+    runner.execute(cfg, relations, cp=ControlPlane("test_cdc", dsn=None, wal_dir=wal))
+    rec = finish_record(wal)
+    assert rec["status"] == "partial"
+    assert (rec["n_ok"], rec["n_err"], rec["n_skipped"]) == (0, 1, 0)
+
+
+def test_an_append_only_relation_reconciles_as_skipped_end_to_end(
+        fresh_db, names, duckdb_path, tmp_path):
+    sql(fresh_db, "create table public.events (id int, note text)",
+        "insert into public.events values (1, 'first')")
+    relations = [rel("public", "events", policy="append_only")]
+    cfg, _ = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+    sql(fresh_db, "update public.events set note = 'second' where id = 1")
+    run, result = tick(cfg, relations)
+    (event,) = [e for e in run.units("reconcile") if e["entity"] == "public.events"]
+    assert event["status"] == "zero_rows" and event["extra"]["append_only"] is True
+    assert result["outcome"]["status"] == "ok"
+
+
+# --------------------------------------------------------------------------- review: drop_table
+
+
+def test_drop_table_raises_on_anything_but_a_missing_staging_schema(
+        fresh_db, names, duckdb_path, tmp_path):
+    """A view in the way stands in for a permission failure or a MotherDuck error: the drop
+    must raise, not report the table as gone."""
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    dest.ensure_runtime_tables()
+    con = duckdb.connect(duckdb_path)
+    con.execute("create schema public")
+    con.execute("create table public.real (id int)")
+    con.execute("create view public.v as select 1 as id")
+    con.close()
+    assert dest.drop_table("public", "real") == ["public.real"], "no staging schema: tolerated"
+    with pytest.raises(duckdb.Error):
+        dest.drop_table("public", "v")
+
+
+# --------------------------------------------------------------------------- review: partitions
+
+
+def test_partition_leaves_replicate_and_a_row_routed_after_the_snapshot_lands(
+        fresh_db, names, duckdb_path, tmp_path):
+    """Leaves only (relkind 'r'): pgoutput emits leaf identity by default, so the leaf tables
+    are what both the publication and the destination must name. Two ticks; the second sees
+    a row inserted THROUGH the parent."""
+    sql(fresh_db,
+        "create table public.events (id int, day date, v text, primary key (id, day)) "
+        "partition by range (day)",
+        "create table public.events_2026 partition of public.events "
+        "for values from ('2026-01-01') to ('2027-01-01')",
+        "create table public.events_2027 partition of public.events "
+        "for values from ('2027-01-01') to ('2028-01-01')",
+        "insert into public.events values (1, '2026-05-01', 'a'), (2, '2027-05-01', 'b')")
+    relations = [rel("public", "events_2026", "id", "day"), rel("public", "events_2027", "id", "day")]
+    cfg, _ = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+    sql(fresh_db, "insert into public.events values (3, '2026-06-01', 'c')",
+        "update public.events set v = 'b2' where id = 2")
+    run, _ = tick(cfg, relations)
+    assert publication.published_relations(fresh_db, cfg.publication) == {
+        ("public", "events_2026"), ("public", "events_2027")}
+    con = duckdb.connect(duckdb_path)
+    assert con.execute("select id, v from public.events_2026 order by id").fetchall() == [
+        (1, "a"), (3, "c")]
+    assert con.execute("select id, v from public.events_2027").fetchall() == [(2, "b2")]
+    con.close()

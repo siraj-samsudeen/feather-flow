@@ -29,7 +29,8 @@ replication:
     # No primary key at the source and no unique index; both are append-only fact streams.
     # append_only means the CDC path merges on `lsn` (unique per WAL record) so a replayed
     # batch is exact, an UPDATE lands as an additional row version, and a DELETE removes
-    # nothing. Re-baselining one REPLACES the destination copy (see the runbook).
+    # nothing. Re-baselining one REPLACES the destination copy at a consistent point whose
+    # boundary the drain honours, so the overlap with the WAL lands once (runbook §c).
     control.sap_reconcile: append_only
     control.zakya_quarantine: append_only
   replica_identity: full

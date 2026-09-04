@@ -101,3 +101,23 @@ def test_two_schemas_with_the_same_table_name_have_separate_states(lc):
     lc.transition("b", "t", DISCOVERED)
     assert lc.state_of("a", "t") == SNAPSHOTTING
     assert lc.state_of("b", "t") == DISCOVERED
+
+
+# --- the states runner._to_snapshotting must be able to leave from (#3079 review) ------------
+
+
+@pytest.mark.parametrize("current", [STREAMING, CATCHING_UP, DISCOVERED, DRIFT_REVIEW,
+                                     RESNAPSHOT_REQUIRED, RETIRED, None])
+def test_every_live_state_can_be_re_baselined(lc, current):
+    """A vanished slot re-baselines EVERY selected relation, whatever state it was in — and an
+    operator `resnapshot` runs on a registration whose lifecycle table may still be empty.
+    `drift_review` and `None` both used to raise IllegalTransition and abort the whole tick."""
+    from pg_md_cdc.runner import _to_snapshotting
+    if current is not None:
+        for step in {CATCHING_UP: [DISCOVERED, CATCHING_UP],
+                     DRIFT_REVIEW: [SNAPSHOTTING, CATCHING_UP, DRIFT_REVIEW],
+                     RESNAPSHOT_REQUIRED: [STREAMING, RESNAPSHOT_REQUIRED],
+                     RETIRED: [DISCOVERED, RETIRED]}.get(current, [current]):
+            lc.transition("public", "t", step)
+    _to_snapshotting(lc, "public", "t", "slot vanished")
+    assert lc.state_of("public", "t") == SNAPSHOTTING

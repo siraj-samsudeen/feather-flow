@@ -90,7 +90,7 @@ class Replication:
     replica_identity: str = "default"  # full | default
     slot_loss_policy: str = "resnapshot"  # resnapshot | pause
     target_batch_size: int = 1000
-    key_overrides: Dict[str, str] = field(default_factory=dict)  # "schema.table" -> append_only|full_row
+    key_overrides: Dict[str, str] = field(default_factory=dict)  # "schema.table" -> append_only
 
 
 @dataclass(frozen=True)
@@ -340,7 +340,15 @@ def validate_static(m: Manifest) -> List[Problem]:
     for rel, policy in sorted(m.replication.key_overrides.items()):
         if not _QUALIFIED.match(rel):
             err("key_override_name", f"key_overrides key {rel!r} must be 'schema.table'")
-        _check_enum(p, f"replication.key_overrides[{rel}]", policy, ("append_only", "full_row"))
+        if policy == "full_row":
+            err(
+                "full_row_unsupported",
+                f"replication.key_overrides[{rel}]=full_row cannot mirror an UPDATE: pgoutput emits "
+                "only the new tuple, so an all-column merge key never matches the old row and both "
+                "versions stay — declare append_only for a history, or give the table a key",
+            )
+        else:
+            _check_enum(p, f"replication.key_overrides[{rel}]", policy, ("append_only",))
 
     for label, sel in (("include", m.source.include), ("exclude", m.source.exclude), ("deny", m.source.deny)):
         for t in sel.tables:

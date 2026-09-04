@@ -139,3 +139,35 @@ def test_a_deny_hit_fails_validate(tmp_path, env_dsn, names, capsys):
     rc = cli.main(["validate", _manifest(tmp_path, names, extra=extra)])
     assert rc == 1
     assert "deny_hit" in capsys.readouterr().out
+
+
+def test_an_unreachable_source_exits_1_with_a_redacted_message_and_no_traceback(
+        tmp_path, names, monkeypatch, capsys):
+    """Only ManifestError used to be caught, so every OTHER failure — an unreachable source
+    being the common one on Railway — printed a raw traceback whose psycopg message carries the
+    DSN. Exit 1, one `[error] <type>: <message>` line, the password gone, and `--json` still
+    emits parseable JSON on stdout so a scripted caller does not choke on an empty document."""
+    monkeypatch.setenv("DEMO_PG_DSN",
+                       "postgresql://cdc:hunter2secret@127.0.0.1:1/nope?connect_timeout=1")
+    manifest = _manifest(tmp_path, names)
+
+    assert cli.main(["validate", manifest]) == 1
+    captured = capsys.readouterr()
+    assert captured.err.startswith("[error] OperationalError:")
+    assert "Traceback" not in captured.err
+    assert "hunter2secret" not in captured.err + captured.out
+
+    # positive control for the redaction: an exception that really does carry the DSN (dlt's
+    # config errors echo the value they resolved), through the --json path.
+    from pg_md_cdc import discovery
+
+    def _leak(dsn, **kw):
+        raise RuntimeError(f"could not read the catalog of {dsn}")
+
+    monkeypatch.setattr(discovery, "discover", _leak)
+    assert cli.main(["--json", "plan", manifest]) == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["error"] == "RuntimeError"
+    assert "hunter2secret" not in json.dumps(payload) + captured.err
+    assert "redacted" in payload["message"]

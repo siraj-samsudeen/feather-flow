@@ -21,6 +21,8 @@ from .manifest import Manifest, Problem, Selection
 PRIMARY_KEY = "primary_key"
 UNIQUE_INDEX = "unique_index"
 APPEND_ONLY = "append_only"
+# Rejected, never compiled: an all-column merge key cannot mirror an UPDATE — pgoutput emits
+# only the new tuple, so the old row is never matched and both versions stay (#3079 review).
 FULL_ROW = "full_row"
 
 # Featherbase's own platform tables. Physical-schema-faithful bronze keeps them where they are;
@@ -110,13 +112,13 @@ def _key_for(
     if override == FULL_ROW:
         problems.append(
             Problem(
-                "full_row_key_cost",
-                "warning",
-                f"{rel.qualified}: full_row identity merges on every column — the merge join and the "
-                "WAL volume both scale with row width; use it only where a real key cannot exist",
+                "full_row_unsupported",
+                "error",
+                f"{rel.qualified}: full_row cannot mirror an UPDATE (the old row is never matched, "
+                "so both versions would stay) — declare append_only for a history, or add a key",
             )
         )
-        return tuple(c.name for c in rel.columns), FULL_ROW, None, True
+        return (), FULL_ROW, None, False
 
     if rel.primary_key:
         return tuple(rel.primary_key), PRIMARY_KEY, None, True
@@ -183,6 +185,10 @@ def compile(
 
     denied: List[str] = []
     candidates: List[SourceRelation] = []
+    leaves_of: Dict[str, List[str]] = {}
+    for rel in discovered:
+        if rel.parent:
+            leaves_of.setdefault(rel.parent, []).append(rel.qualified)
     for rel in sorted(discovered, key=lambda r: (r.schema, r.table)):
         q = rel.qualified
         if not _included(q, rel.schema, m.source.include):
@@ -190,6 +196,22 @@ def compile(
         if _matches(q, rel.schema, m.source.exclude):
             continue
         if adapter_allowed is not None and q not in adapter_allowed:
+            continue
+        if rel.kind == "p":
+            # Leaves only: `pg_publication_tables` expands a parent to its leaves (so a parent
+            # in the desired set is "added" again every tick), and pgoutput emits leaf
+            # identity by default (so a parent's destination copy would stop receiving rows).
+            # The leaves are selected by the same globs; the parent is named so the operator
+            # can see what was skipped (#3079 review).
+            problems.append(
+                Problem(
+                    "partitioned_parent_skipped",
+                    "warning",
+                    f"{q}: partitioned parent — not replicated as one relation; its partitions "
+                    f"{', '.join(sorted(leaves_of.get(q, []))) or '(none yet)'} are selected "
+                    "individually when the include globs match them",
+                )
+            )
             continue
         # Deny last, on what selection actually produced: a deny rule is a tripwire, so it must
         # fire only when something really would have been replicated (D12).

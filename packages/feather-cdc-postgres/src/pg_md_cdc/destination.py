@@ -116,6 +116,11 @@ class Destination:
             con.execute(f'''create table if not exists "{RUNTIME_SCHEMA}".signature (
                 registration varchar, "schema" varchar, "table" varchar,
                 signature_json varchar, seen_at timestamptz)''')
+            # The consistent point each relation's CURRENT baseline was taken at: the drain
+            # drops that relation's transactions with commit LSN below it (snapshot.py).
+            con.execute(f'''create table if not exists "{RUNTIME_SCHEMA}".baseline (
+                registration varchar, "schema" varchar, "table" varchar,
+                boundary_lsn bigint, taken_at timestamptz)''')
         self._ensured = True
 
     def read_checkpoint(self, registration: str) -> tuple[int, str | None] | None:
@@ -135,6 +140,35 @@ class Destination:
                         [registration])
             con.execute(f'insert into "{RUNTIME_SCHEMA}".checkpoint values (?, ?, ?, ?, ?)',
                         [registration, slot, int(lsn), ids, _dt.datetime.now(_dt.timezone.utc)])
+
+    def write_baseline_lsns(self, registration: str, boundaries: dict) -> None:
+        """{(schema, table): boundary_lsn} — one row per relation, replaced in place, one
+        transaction (a MotherDuck round trip per relation would make a 50-table init slow)."""
+        if not boundaries:
+            return
+        self.ensure_runtime_tables()
+        now = _dt.datetime.now(_dt.timezone.utc)
+        with self.connect() as con:
+            con.execute("begin transaction")
+            try:
+                for (schema, table), lsn in sorted(boundaries.items()):
+                    con.execute(f'delete from "{RUNTIME_SCHEMA}".baseline '
+                                'where registration = ? and "schema" = ? and "table" = ?',
+                                [registration, schema, table])
+                    con.execute(f'insert into "{RUNTIME_SCHEMA}".baseline values (?, ?, ?, ?, ?)',
+                                [registration, schema, table, int(lsn), now])
+                con.execute("commit")
+            except Exception:
+                con.execute("rollback")
+                raise
+
+    def read_baseline_lsns(self, registration: str) -> dict[tuple[str, str], int]:
+        self.ensure_runtime_tables()
+        with self.connect() as con:
+            rows = con.execute(
+                f'select "schema", "table", boundary_lsn from "{RUNTIME_SCHEMA}".baseline '
+                "where registration = ?", [registration]).fetchall()
+        return {(r[0], r[1]): int(r[2]) for r in rows if r[2] is not None}
 
     def write_lifecycle(self, registration: str, schema: str, table: str, state: str,
                         detail: str | None = None) -> None:
@@ -157,19 +191,35 @@ class Destination:
 
     def write_registry_rows(self, rows: Sequence[dict]) -> int:
         """Called by schema_registry.py. Keys: registration, schema, table, column, type_oid,
-        typmod, not_null, key_role, dest_type, mapping (seen_at is stamped here)."""
+        typmod, not_null, key_role, dest_type, mapping (seen_at is stamped here).
+
+        REPLACES each named relation's rows — the registry is current state, like `lifecycle`
+        and `signature` beside it; the history of what CHANGED lives in `control.event`. Appending
+        instead would add one row per column per tick: ~500 rows every 5 minutes for Featherbase,
+        50M a year, in a table nothing prunes. One transaction, so a MotherDuck load pays one
+        round trip rather than one per column."""
         if not rows:
             return 0
         self.ensure_runtime_tables()
         now = _dt.datetime.now(_dt.timezone.utc)
+        pairs = sorted({(r["registration"], r["schema"], r["table"]) for r in rows})
         with self.connect() as con:
-            for r in rows:
-                con.execute(
+            con.execute("begin transaction")
+            try:
+                for registration, schema, table in pairs:
+                    con.execute(f'delete from "{RUNTIME_SCHEMA}".schema_registry '
+                                'where registration = ? and "schema" = ? and "table" = ?',
+                                [registration, schema, table])
+                con.executemany(
                     f'insert into "{RUNTIME_SCHEMA}".schema_registry values (?,?,?,?,?,?,?,?,?,?,?)',
-                    [r["registration"], r["schema"], r["table"], r["column"],
-                     r.get("type_oid"), r.get("typmod"), r.get("not_null"),
-                     r.get("key_role"), r.get("dest_type"), r.get("mapping"),
-                     r.get("seen_at") or now])
+                    [[r["registration"], r["schema"], r["table"], r["column"],
+                      r.get("type_oid"), r.get("typmod"), r.get("not_null"),
+                      r.get("key_role"), r.get("dest_type"), r.get("mapping"),
+                      r.get("seen_at") or now] for r in rows])
+                con.execute("commit")
+            except Exception:
+                con.execute("rollback")
+                raise
         return len(rows)
 
     def write_signature(self, registration: str, schema: str, table: str, signature: dict) -> None:
@@ -195,10 +245,16 @@ class Destination:
         return {(r[0], r[1]): json.loads(r[2]) for r in rows if r[2]}
 
     def destination_tables(self, schemas: Iterable[str]) -> set[tuple[str, str]]:
+        """Tables in THIS database only. `md:<db>` attaches every MotherDuck database the token
+        can see and `information_schema` spans all of them (probed live 04-Sep-2026: connected to
+        bronze_featherbase it also lists bronze_sap.control, bronze_gofrugal.landing …), so an
+        unfiltered count inflates the `_slot` probe's `destination_tables` with someone else's
+        same-named schema. `current_database()` is the same predicate on a duckdb file."""
         with self.connect() as con:
             rows = con.execute(
                 "select table_schema, table_name from information_schema.tables "
-                "where table_schema = any(?)", [list(schemas)]).fetchall()
+                "where table_catalog = current_database() and table_schema = any(?)",
+                [list(schemas)]).fetchall()
         return {(r[0], r[1]) for r in rows if not r[1].startswith("_dlt")}
 
     def table_row_count(self, schema: str, table: str) -> int | None:
@@ -208,15 +264,39 @@ class Destination:
         except Exception:  # noqa: BLE001 — table not there yet is not an error here
             return None
 
+    def _schema_exists(self, con, schema: str) -> bool:
+        return con.execute(
+            "select 1 from information_schema.schemata "
+            "where catalog_name = current_database() and schema_name = ?", [schema]
+        ).fetchone() is not None
+
+    def delete_all_rows(self, schema: str, table: str) -> bool:
+        """A source TRUNCATE applied to a keyed mirror. False when the destination table does
+        not exist yet (an empty-at-snapshot source table has no destination table until its
+        first row, so there is nothing to empty)."""
+        with self.connect() as con:
+            if not self._schema_exists(con, schema):
+                return False
+            exists = con.execute(
+                "select 1 from information_schema.tables where table_catalog = current_database() "
+                "and table_schema = ? and table_name = ?", [schema, table]).fetchone()
+            if exists is None:
+                return False
+            con.execute(f"delete from {q(schema)}.{q(table)}")
+        return True
+
     def drop_table(self, schema: str, table: str) -> list[str]:
         """Resnapshot needs the destination table AND its dlt merge-staging twin gone —
-        a stale staging table replays into the fresh one on the next merge."""
+        a stale staging table replays into the fresh one on the next merge. The ONE
+        tolerated absence is a schema that was never created (a table dlt never merged has
+        no `_staging` twin); every other failure — permissions, a MotherDuck error, a view in
+        the way — propagates, because a resnapshot that then merges into the undropped table
+        keeps rows the source deleted (#3079 review)."""
         dropped = []
         with self.connect() as con:
             for sch in (schema, f"{schema}_staging"):
-                try:
-                    con.execute(f"drop table if exists {q(sch)}.{q(table)}")
-                    dropped.append(f"{sch}.{table}")
-                except Exception:  # noqa: BLE001 — missing schema is fine
-                    pass
+                if not self._schema_exists(con, sch):
+                    continue
+                con.execute(f"drop table if exists {q(sch)}.{q(table)}")
+                dropped.append(f"{sch}.{table}")
         return dropped

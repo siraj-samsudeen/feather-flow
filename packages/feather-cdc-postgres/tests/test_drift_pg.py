@@ -255,3 +255,31 @@ def test_a_key_change_removes_only_that_table_from_the_publication(
     run2, result2 = tick(cfg, after)
     assert result2["drift_blocked"] == [("public", "t")]
     assert publication.published_relations(fresh_db, cfg.publication) == {("public", "other")}
+
+
+def test_the_registry_stays_one_row_per_column_however_many_ticks_run(
+        fresh_db, names, duckdb_path, tmp_path):
+    """The registry is CURRENT state (like `lifecycle` and `signature`); what changed is in
+    control.event. Appending a fresh set every tick would grow it by one row per column per
+    5 minutes — for Featherbase's 50 tables, tens of millions of rows a year in a bronze table
+    nothing prunes, and one MotherDuck insert round trip per column per tick."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'a')")
+    relations = [rel("public", "t", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+
+    def n_rows():
+        con = duckdb.connect(duckdb_path)
+        try:
+            return con.execute('select count(*) from "_cdc_runtime".schema_registry '
+                               "where registration = ?", [cfg.registration]).fetchone()[0]
+        finally:
+            con.close()
+
+    after_first = n_rows()
+    assert after_first == 2, "one row per SOURCE column: id, v"
+    for i in range(3):
+        sql(fresh_db, f"update public.t set v = 'b{i}' where id = 1")
+        tick(cfg, relations)
+    assert n_rows() == after_first, "the registry grew with every tick"

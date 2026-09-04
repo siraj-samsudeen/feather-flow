@@ -6,10 +6,13 @@ destination load commits. A transaction larger than `target_batch_size` still la
 (pgoutput never splits a commit). Kept from the #2851 pilot via the vendored consumer: true-PK
 override, unchanged-TOAST splice, `lsn` dedup_sort desc, `deleted_ts` hard_delete. An
 `append_only` relation merges on `lsn` instead (no key of its own), so a replay is exact.
+Two review additions (#3079): a relation's transactions below its baseline boundary are dropped
+(the baseline already holds them), and a TRUNCATE arrives on `Batch.truncates` for the runner
+to apply BEFORE the batch's rows.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterator, Mapping, Sequence
 
 from dlt.sources.credentials import ConnectionStringCredentials
@@ -26,10 +29,14 @@ class Batch:
     items_by_namespace: dict[str, list]
     last_commit_lsn: int
     consumed_all: bool
+    # TRUNCATEs in WAL order: {namespace, table, lsn, commit_lsn, commit_ts, applied}. Any rows
+    # of a keyed relation that preceded its truncate in this batch are already gone from
+    # `items_by_namespace`, so "delete, then load the batch" reproduces the source order.
+    truncates: list = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
-        return not any(self.items_by_namespace.values())
+        return not any(self.items_by_namespace.values()) and not self.truncates
 
 
 def credentials(dsn: str) -> ConnectionStringCredentials:
@@ -55,6 +62,7 @@ def drain(
     target_batch_size: int = 1000,
     keys_by_relation: Mapping[Relation, Sequence[str]] | None = None,
     policies_by_relation: Mapping[Relation, str] | None = None,
+    baseline_lsn_by_relation: Mapping[Relation, int] | None = None,
 ) -> Iterator[Batch]:
     """Iterate committed batches from `start_lsn` up to the slot's current max LSN.
 
@@ -80,9 +88,11 @@ def drain(
             columns=None,
             keys_by_relation=dict(keys_by_relation or {}),
             policies_by_relation=dict(policies_by_relation or {}),
+            baseline_lsn_by_relation=dict(baseline_lsn_by_relation or {}),
         )
         grouped = gen.collect()
-        yield Batch(grouped, gen.last_commit_lsn or cursor_lsn, gen.generated_all)
+        yield Batch(grouped, gen.last_commit_lsn or cursor_lsn, gen.generated_all,
+                    truncates=list(gen.truncates))
         if gen.generated_all:
             return
         cursor_lsn = gen.last_commit_lsn

@@ -87,18 +87,30 @@ def checkpoint_age_s(committed_at) -> float | None:
 EXCLUDED_REASON = "excluded by manifest: self-written by this drainer"
 
 
+APPEND_ONLY_REASON = ("append_only: the destination keeps every row version, so a row count "
+                      "cannot tie against the source's current rows")
+
+
 def reconcile_counts(dsn: str, destination, relations, schema_map,
                      *, threshold: int = RECONCILE_MAX_ROWS,
-                     exclude: "list[str] | None" = None) -> list[dict]:
+                     exclude: "list[str] | None" = None,
+                     append_only: "set | None" = None) -> list[dict]:
     """Source vs destination row counts, per relation. A table whose source count exceeds
-    `threshold`, or which the manifest excludes, is reported as skipped with a reason — never
-    as a silent pass. `exclude` exists because a relation this drainer WRITES DURING THE RUN
-    (its own `control.run`/`control.event`) can never tie "now" against "now".
+    `threshold`, which the manifest excludes, or which loads `append_only`, is reported as
+    skipped with a reason — never as a silent pass. `exclude` exists because a relation this
+    drainer WRITES DURING THE RUN (its own `control.run`/`control.event`) can never tie "now"
+    against "now"; `append_only` because one source UPDATE leaves two destination row versions,
+    which would pin that table to EV_ERROR for the rest of its life.
     """
     out: list[dict] = []
     patterns = list(exclude or [])
+    keyless = set(append_only or ())
     with psycopg.connect(dsn, connect_timeout=10) as conn:
         for schema, table in relations:
+            if (schema, table) in keyless:
+                out.append({"schema": schema, "table": table, "skipped": True,
+                            "append_only": True, "reason": APPEND_ONLY_REASON})
+                continue
             if any(fnmatch.fnmatchcase(f"{schema}.{table}", pat) for pat in patterns):
                 out.append({"schema": schema, "table": table, "skipped": True,
                             "excluded": True, "reason": EXCLUDED_REASON})
@@ -132,6 +144,8 @@ def emit_reconcile(run, per_table_rows) -> None:
             extra = {"skipped": True, "reason": row.get("reason")}
             if row.get("excluded"):
                 extra["excluded"] = True
+            if row.get("append_only"):
+                extra["append_only"] = True
             run.event(entity=entity, status=cp_status.EV_ZERO_ROWS, unit="reconcile",
                       extra=extra)
         else:

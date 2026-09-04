@@ -4,6 +4,9 @@ The publication is an EXPLICIT table list reconciled to the desired set every ru
 `FOR TABLES IN SCHEMA`, because a table that auto-joins gets no baseline from us. Relation
 identity is `(schema, table)` throughout: two schemas may legally hold the same table name.
 Replica-identity ALTERs are diff-based (they take a brief exclusive lock) and plannable.
+The publish list is `insert, update, delete, truncate`: a mirror that silently kept every row
+of a truncated source table would be stale bronze with no event to say so (#3079 review). An
+existing publication with a narrower list (the pilot's) is ALTERed up, never inherited.
 """
 from __future__ import annotations
 
@@ -42,20 +45,36 @@ def drop_publication(dsn: str, publication: str) -> None:
         conn.execute(sql.SQL("drop publication if exists {}").format(sql.Identifier(publication)))
 
 
+PUBLISH = "insert, update, delete, truncate"
+
+_PUB_FLAGS = {"insert": "pubinsert", "update": "pubupdate", "delete": "pubdelete",
+              "truncate": "pubtruncate"}
+
+
 def reconcile(
     dsn: str,
     publication: str,
     desired: Iterable[Relation],
     *,
-    publish: str = "insert, update, delete",
+    publish: str = PUBLISH,
     plan_only: bool = False,
 ) -> tuple[list[Relation], list[Relation]]:
-    """Bring `publication` to exactly `desired`. Returns (added, dropped), both sorted."""
+    """Bring `publication` to exactly `desired` (membership AND publish list). Returns
+    (added, dropped), both sorted."""
     desired_set = {(s, t) for s, t in desired}
+    wanted_ops = {op.strip() for op in publish.split(",") if op.strip()}
     with _connect(dsn) as conn:
-        exists = conn.execute(
-            "select 1 from pg_publication where pubname = %s", (publication,)
-        ).fetchone() is not None
+        flags = conn.execute(
+            "select pubinsert, pubupdate, pubdelete, pubtruncate from pg_publication "
+            "where pubname = %s", (publication,)
+        ).fetchone()
+        exists = flags is not None
+        if exists and not plan_only:
+            current_ops = {op for op, col in _PUB_FLAGS.items()
+                           if flags[list(_PUB_FLAGS).index(op)]}
+            if current_ops != wanted_ops:
+                conn.execute(sql.SQL("alter publication {} set (publish = {})").format(
+                    sql.Identifier(publication), sql.Literal(publish)))
         current: set[Relation] = set()
         if exists:
             current = {
