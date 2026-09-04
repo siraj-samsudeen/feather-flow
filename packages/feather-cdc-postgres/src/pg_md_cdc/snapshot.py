@@ -15,6 +15,7 @@ what the baseline already saw. That is what makes an append_only overlap exact (
 from __future__ import annotations
 
 import contextlib
+import threading
 from dataclasses import dataclass, field
 from typing import Iterator, Sequence
 
@@ -28,6 +29,15 @@ from pg_replication.decoders import ColumnType
 from pg_replication.schema_types import _PG_TYPES, _to_dlt_column_schema
 
 Relation = tuple[str, str]
+
+BASELINE_WAIT_S_DEFAULT = 300
+
+
+class BaselineBlocked(RuntimeError):
+    """CREATE_REPLICATION_SLOT ... EXPORT_SNAPSHOT did not complete within `baseline_wait_s`
+    because it is waiting for every in-flight source transaction to finish. See
+    `create_slot_with_snapshot` for why `statement_timeout` cannot be used here, and
+    docs/agents/pg-md-cdc-runbook.md §c for the remedy."""
 
 
 def lsn_hex_to_int(lsn: str) -> int:
@@ -71,24 +81,83 @@ def temp_slot_name(slot: str) -> str:
     return (slot + "_bl")[:63]
 
 
-def create_slot_with_snapshot(dsn: str, slot: str, *, temporary: bool = False) -> ExportedSnapshot:
+def _describe_blocker(dsn: str, waiting_pid: int) -> str:
+    """Best-effort context for `BaselineBlocked`: the oldest session `pg_blocking_pids` names
+    as blocking `waiting_pid`, read on a plain connection (the stuck replication connection is
+    still busy). Never raises — a failure to identify the blocker must not hide the timeout."""
+    try:
+        with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as c:
+            rows = c.execute(
+                "select pid, state, xact_start, query from pg_stat_activity "
+                "where pid = any(pg_blocking_pids(%s)) order by xact_start asc nulls last",
+                (waiting_pid,)).fetchall()
+    except Exception as exc:  # noqa: BLE001 — context only, the timeout itself is the finding
+        return f"could not identify the blocking session: {type(exc).__name__}: {exc}"
+    if not rows:
+        return "no blocking session found in pg_stat_activity (it may have just ended)"
+    pid, state, xact_start, query = rows[0]
+    return f"oldest blocker pid={pid} state={state!r} xact_start={xact_start} query={query!r}"
+
+
+def create_slot_with_snapshot(dsn: str, slot: str, *, temporary: bool = False,
+                              baseline_wait_s: float = BASELINE_WAIT_S_DEFAULT) -> ExportedSnapshot:
     """Create `slot` with pgoutput and KEEP the replication connection open so its exported
     snapshot stays importable. Raises if the slot already exists (the caller drops it first).
     `temporary`: PostgreSQL drops the slot itself when this session ends — a killed container
-    cannot leave it behind retaining WAL. Only the main slot must outlive the process."""
+    cannot leave it behind retaining WAL. Only the main slot must outlive the process.
+
+    `CREATE_REPLICATION_SLOT ... EXPORT_SNAPSHOT` blocks until every transaction in flight on
+    the source ends (pg_stat_activity shows it waiting `Lock`/`transactionid`) — a long-running
+    or idle-in-transaction session can block it indefinitely. `statement_timeout` does NOT
+    bound this: verified empirically on PG 17 + psycopg2's `LogicalReplicationConnection`,
+    04-Sep-2026 — neither `SET statement_timeout` on the replication cursor nor
+    `options=-c statement_timeout=...` in the DSN cancels a blocked CREATE_REPLICATION_SLOT,
+    even though the session's own `SHOW statement_timeout` confirms the GUC took. Replication
+    protocol commands run through PostgreSQL's `exec_replication_command()` path, not the
+    ordinary simple-query path that arms the statement timer, so the GUC is simply never
+    consulted there. The bound is therefore enforced from the CLIENT instead: the call runs on
+    a background thread and, if it has not returned within `baseline_wait_s`, this function
+    looks up the blocking session with `pg_blocking_pids()`, cancels the stuck backend with
+    `pg_cancel_backend()` (proven to unblock it), and raises `BaselineBlocked` naming the
+    oldest blocker's pid/state/xact_start — see docs/agents/pg-md-cdc-runbook.md §c for the
+    remedy (end that session; the next tick retries from `snapshotting`)."""
     conn = psycopg2.connect(dsn, connection_factory=LogicalReplicationConnection)
-    try:
-        cur = conn.cursor()
-        if temporary:
-            quoted = '"' + slot.replace('"', '""') + '"'
-            cur.execute(f"CREATE_REPLICATION_SLOT {quoted} TEMPORARY LOGICAL pgoutput "
-                        "EXPORT_SNAPSHOT")
-        else:
-            cur.create_replication_slot(slot, output_plugin="pgoutput")
-        _, consistent_point, snapshot_name, _ = cur.fetchone()
-    except Exception:
+    pid = conn.get_backend_pid()
+    outcome: dict = {}
+
+    def _create() -> None:
+        try:
+            cur = conn.cursor()
+            if temporary:
+                quoted = '"' + slot.replace('"', '""') + '"'
+                cur.execute(f"CREATE_REPLICATION_SLOT {quoted} TEMPORARY LOGICAL pgoutput "
+                            "EXPORT_SNAPSHOT")
+            else:
+                cur.create_replication_slot(slot, output_plugin="pgoutput")
+            outcome["row"] = cur.fetchone()
+        except BaseException as exc:  # noqa: BLE001 — re-raised on the calling thread below
+            outcome["exc"] = exc
+
+    worker = threading.Thread(target=_create, daemon=True)
+    worker.start()
+    worker.join(timeout=baseline_wait_s)
+    if worker.is_alive():
+        blocker = _describe_blocker(dsn, pid)
+        with contextlib.suppress(Exception):
+            with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as c:
+                c.execute("select pg_cancel_backend(%s)", (pid,))
+        worker.join(timeout=10)  # let the cancelled thread unwind before we close its connection
+        with contextlib.suppress(Exception):
+            conn.close()
+        raise BaselineBlocked(
+            f"CREATE_REPLICATION_SLOT for slot {slot!r} did not complete within "
+            f"{baseline_wait_s:g}s: {blocker}. Remedy: end the blocking session "
+            "(docs/agents/pg-md-cdc-runbook.md §c) — the table stays `snapshotting` and "
+            "the next tick retries.")
+    if "exc" in outcome:
         conn.close()
-        raise
+        raise outcome["exc"]
+    _, consistent_point, snapshot_name, _ = outcome["row"]
     return ExportedSnapshot(slot, lsn_hex_to_int(consistent_point), snapshot_name, conn)
 
 
@@ -206,6 +275,7 @@ def consistent_baseline(
     *,
     key_policy: str = "merge",
     itersize: int = 5000,
+    baseline_wait_s: float = BASELINE_WAIT_S_DEFAULT,
 ) -> Iterator[tuple[object, int]]:
     """Yields (resource, boundary_lsn) for ONE relation that is already published.
 
@@ -222,7 +292,8 @@ def consistent_baseline(
     schema, table = relation
     temp = temp_slot_name(slot)
     drop_slot_if_exists(dsn, temp)   # a persistent leftover from an older build
-    handle = create_slot_with_snapshot(dsn, temp, temporary=True)
+    handle = create_slot_with_snapshot(dsn, temp, temporary=True,
+                                       baseline_wait_s=baseline_wait_s)
     try:
         with snapshot_resources(dsn, handle.snapshot_name, [relation], {relation: list(keys)},
                                 key_policies={relation: key_policy}, itersize=itersize) as by_schema:

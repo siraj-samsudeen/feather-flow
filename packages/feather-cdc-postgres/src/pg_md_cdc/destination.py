@@ -140,12 +140,40 @@ class Destination:
                 boundary_lsn bigint, taken_at timestamptz)''')
         self._ensured = True
 
+    def _read_metadata_with_retry(self, read_fn, *, max_wait_s: float = 40.0,
+                                  backoff_s: float = 2.0):
+        """Retry a `_cdc_runtime` metadata READ against MotherDuck's catalog lag
+        (docs/agents/gotchas/motherduck-catalog-lags-a-write.md): a table created on one
+        connection can be invisible to a fresh connection for ~25s. Retries ONLY a
+        `duckdb.CatalogException` whose message names `_cdc_runtime` or "does not exist" —
+        every other exception (e.g. `duckdb.BinderException`) propagates immediately, and
+        WRITES never call this. Logs one line per retry."""
+        import time
+        deadline = time.monotonic() + max_wait_s
+        attempt = 0
+        while True:
+            try:
+                return read_fn()
+            except duckdb.CatalogException as exc:
+                msg = str(exc)
+                if RUNTIME_SCHEMA not in msg and "does not exist" not in msg.lower():
+                    raise
+                if time.monotonic() >= deadline:
+                    raise
+                attempt += 1
+                print(f"[pg_md_cdc] _cdc_runtime metadata read retry {attempt} "
+                      f"(motherduck-catalog-lags-a-write): {msg}")
+                time.sleep(backoff_s)
+
     def read_checkpoint(self, registration: str) -> tuple[int, str | None] | None:
         self.ensure_runtime_tables()
-        with self.connect() as con:
-            row = con.execute(
-                f'select last_commit_lsn, load_ids from "{RUNTIME_SCHEMA}".checkpoint '
-                "where registration = ?", [registration]).fetchone()
+
+        def _read():
+            with self.connect() as con:
+                return con.execute(
+                    f'select last_commit_lsn, load_ids from "{RUNTIME_SCHEMA}".checkpoint '
+                    "where registration = ?", [registration]).fetchone()
+        row = self._read_metadata_with_retry(_read)
         return (int(row[0]), row[1]) if row and row[0] is not None else None
 
     def write_checkpoint(self, registration: str, slot: str, lsn: int,
@@ -181,10 +209,13 @@ class Destination:
 
     def read_baseline_lsns(self, registration: str) -> dict[tuple[str, str], int]:
         self.ensure_runtime_tables()
-        with self.connect() as con:
-            rows = con.execute(
-                f'select "schema", "table", boundary_lsn from "{RUNTIME_SCHEMA}".baseline '
-                "where registration = ?", [registration]).fetchall()
+
+        def _read():
+            with self.connect() as con:
+                return con.execute(
+                    f'select "schema", "table", boundary_lsn from "{RUNTIME_SCHEMA}".baseline '
+                    "where registration = ?", [registration]).fetchall()
+        rows = self._read_metadata_with_retry(_read)
         return {(r[0], r[1]): int(r[2]) for r in rows if r[2] is not None}
 
     def write_lifecycle(self, registration: str, schema: str, table: str, state: str,
@@ -200,10 +231,13 @@ class Destination:
 
     def read_lifecycle(self, registration: str) -> dict[tuple[str, str], str]:
         self.ensure_runtime_tables()
-        with self.connect() as con:
-            rows = con.execute(
-                f'select "schema", "table", state from "{RUNTIME_SCHEMA}".lifecycle '
-                "where registration = ?", [registration]).fetchall()
+
+        def _read():
+            with self.connect() as con:
+                return con.execute(
+                    f'select "schema", "table", state from "{RUNTIME_SCHEMA}".lifecycle '
+                    "where registration = ?", [registration]).fetchall()
+        rows = self._read_metadata_with_retry(_read)
         return {(r[0], r[1]): r[2] for r in rows}
 
     def write_registry_rows(self, rows: Sequence[dict]) -> int:
@@ -255,10 +289,13 @@ class Destination:
     def read_signatures(self, registration: str) -> dict[tuple[str, str], dict]:
         import json
         self.ensure_runtime_tables()
-        with self.connect() as con:
-            rows = con.execute(
-                f'select "schema", "table", signature_json from "{RUNTIME_SCHEMA}".signature '
-                "where registration = ?", [registration]).fetchall()
+
+        def _read():
+            with self.connect() as con:
+                return con.execute(
+                    f'select "schema", "table", signature_json from "{RUNTIME_SCHEMA}".signature '
+                    "where registration = ?", [registration]).fetchall()
+        rows = self._read_metadata_with_retry(_read)
         return {(r[0], r[1]): json.loads(r[2]) for r in rows if r[2]}
 
     def destination_tables(self, schemas: Iterable[str]) -> set[tuple[str, str]]:

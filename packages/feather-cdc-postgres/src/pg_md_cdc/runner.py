@@ -50,6 +50,10 @@ class RuntimeConfig:
     reconcile_threshold: int = telemetry.RECONCILE_MAX_ROWS
     reconcile_exclude: list = field(default_factory=list)
     manifest_path: str = "<manifest>"   # only ever interpolated into operator remedy text
+    # Bounds CREATE_REPLICATION_SLOT ... EXPORT_SNAPSHOT (snapshot.create_slot_with_snapshot):
+    # a long-running source transaction blocks it, and statement_timeout cannot cancel that
+    # command (see the docstring there) — so the client enforces this deadline itself.
+    baseline_wait_s: float = snapshot.BASELINE_WAIT_S_DEFAULT
 
     def target_schema(self, source_schema: str) -> str:
         return self.schema_map.get(source_schema, source_schema)
@@ -151,7 +155,8 @@ def _initialize(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
         _to_snapshotting(lc, r.schema, r.table, reason)
 
     owner.assert_held()
-    handle = snapshot.create_slot_with_snapshot(cfg.source_dsn, cfg.slot)
+    handle = snapshot.create_slot_with_snapshot(cfg.source_dsn, cfg.slot,
+                                                baseline_wait_s=cfg.baseline_wait_s)
     keys = {(r.schema, r.table): list(r.key) for r in relations}
     policies = {(r.schema, r.table): r.key_policy for r in relations}
     try:
@@ -188,8 +193,9 @@ def _take_baseline(cfg: RuntimeConfig, rel, *, run, owner, pipelines: _Pipelines
     would let the drain re-land what it just read."""
     pipe = pipelines.get(rel.schema)
     with snapshot.consistent_baseline(cfg.source_dsn, cfg.slot, (rel.schema, rel.table),
-                                      list(rel.key), key_policy=rel.key_policy) as (resource,
-                                                                                    boundary):
+                                      list(rel.key), key_policy=rel.key_policy,
+                                      baseline_wait_s=cfg.baseline_wait_s) as (resource,
+                                                                                boundary):
         pipe.run(resource, **BASELINE_KWARGS)
     owner.assert_held()   # the load blocked for a while; the lock may be gone
     cfg.destination.write_baseline_lsns(cfg.registration, {(rel.schema, rel.table): boundary})
@@ -484,6 +490,14 @@ def execute(cfg: RuntimeConfig, relations, *, cp: ControlPlane) -> int:
                       error_detail=redact(str(exc)))
             run.finish(cp_status.RUN_FAILED, stop_reason=cp_status.STOP_ERROR, n_err=1)
             raise
+        except snapshot.BaselineBlocked as exc:
+            # The relation(s) mid-baseline stay `snapshotting` (never advanced past it) — the
+            # next tick's _resume_interrupted_snapshots retakes them once the blocker clears.
+            from .manifest import redact
+            run.event(entity="_snapshot", status=cp_status.EV_ERROR, unit="snapshot",
+                      error_detail=redact(str(exc)))
+            run.finish(cp_status.RUN_FAILED, stop_reason=cp_status.STOP_ERROR, n_err=1)
+            raise
         finally:
             owner.release()
         outcome = result["outcome"]
@@ -699,7 +713,8 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
                 pipe = pipelines.get(rel.schema)
                 with snapshot.consistent_baseline(
                         cfg.source_dsn, cfg.slot, (rel.schema, rel.table), list(rel.key),
-                        key_policy=rel.key_policy) as (res, boundary):
+                        key_policy=rel.key_policy,
+                        baseline_wait_s=cfg.baseline_wait_s) as (res, boundary):
                     # `drop_resources` again here: the drop above went through OUR duckdb
                     # connection, and MotherDuck's catalog can still serve the dropped table
                     # to dlt's own connection for tens of seconds (gotcha
