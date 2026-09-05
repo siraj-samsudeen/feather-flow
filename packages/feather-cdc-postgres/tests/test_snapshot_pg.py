@@ -49,7 +49,7 @@ def test_the_source_gains_no_staging_tables(seeded, names, duckdb_path, tmp_path
     keys = {r: ["id"] for r in rels}
     with snapshot.snapshot_resources(seeded, handle.snapshot_name, rels, keys) as by:
         handle.close()
-        dest.pipeline_for_schema("public", "public").run(by["public"])
+        dest.pipeline_for_target("public").run(by["public"])
     with psycopg.connect(seeded) as c:
         assert c.execute("select count(*) from pg_tables where schemaname='public' "
                          "and tablename like '\\_dlt%'").fetchone()[0] == 0
@@ -74,12 +74,12 @@ def test_snapshot_excludes_rows_written_after_the_slot_and_the_stream_carries_th
             c.execute("update public.t2 set v = 'changed' where id = 1")
             c.execute("delete from public.t3 where id = 2")
         snapshot_rows = {t: list(res) for t, res in zip(("t1", "t2", "t3"), by["public"])}
-        dest.pipeline_for_schema("public", "public").run(by["public"])
+        dest.pipeline_for_target("public").run(by["public"])
 
     assert 3 not in {r["id"] for r in snapshot_rows["t1"]}, "snapshot leaked a post-slot insert"
     assert {r["v"] for r in snapshot_rows["t2"] if r["id"] == 1} == {"t2-a"}
 
-    pipe = dest.pipeline_for_schema("public", "public")
+    pipe = dest.pipeline_for_target("public")
     for batch in stream.drain(seeded, slot, pub, 0, keys_by_relation=keys):
         Destination.load(pipe, batch.items_by_namespace["public"], resource_name=slot)
 
@@ -118,7 +118,7 @@ def test_column_types_come_from_the_catalog_not_from_the_values(seeded, names):
 def test_baseline_resource_reads_a_table_added_later(seeded, names, duckdb_path, tmp_path):
     dest = _dest(duckdb_path, tmp_path)
     with snapshot.baseline_resource(seeded, ("public", "t1"), ["id"]) as res:
-        dest.pipeline_for_schema("public", "public").run(res)
+        dest.pipeline_for_target("public").run(res)
     con = duckdb.connect(duckdb_path)
     assert con.execute("select count(*) from public.t1").fetchone() == (2,)
     con.close()

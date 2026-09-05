@@ -9,6 +9,7 @@ Constraints this file enforces and callers rely on:
 """
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 from dataclasses import dataclass, field, replace
@@ -66,14 +67,30 @@ class Source:
 
 
 @dataclass(frozen=True)
+class TableSchema:
+    """One per-table routing rule: relations matching `match` land in target `schema`."""
+
+    match: str  # "schema.table" fnmatch glob
+    schema: str
+
+
+@dataclass(frozen=True)
 class Destination:
     token_env: str
     database: str
     schema_mapping: Union[str, Dict[str, str]] = "preserve_source"
+    # Per-table target schemas, first match wins; a relation no rule matches falls back to
+    # `schema_mapping`. Lets one source schema fan out into several bronze schemas (D-13).
+    table_schemas: List[TableSchema] = field(default_factory=list)
     pipeline_name: Optional[str] = None
     retirement_policy: str = "freeze"  # freeze | archive
 
-    def target_schema(self, source_schema: str) -> str:
+    def target_schema(self, source_schema: str, table: Optional[str] = None) -> str:
+        if table is not None:
+            qualified = f"{source_schema}.{table}"
+            for rule in self.table_schemas:
+                if fnmatch.fnmatchcase(qualified, rule.match):
+                    return rule.schema
         if self.schema_mapping == "preserve_source":
             return source_schema
         if isinstance(self.schema_mapping, dict):
@@ -172,8 +189,16 @@ def parse(raw: Dict[str, Any], *, path: Optional[str] = None) -> Manifest:
 
     dest = raw.get("destination") or {}
     _reject_unknown(
-        dest, {"token_env", "database", "schema_mapping", "pipeline_name", "retirement_policy"}, "destination"
+        dest,
+        {"token_env", "database", "schema_mapping", "table_schemas", "pipeline_name", "retirement_policy"},
+        "destination",
     )
+    table_schemas = []
+    for entry in dest.get("table_schemas") or []:
+        if not isinstance(entry, dict):
+            raise ManifestError("destination.table_schemas entries must be mappings {match, schema}")
+        _reject_unknown(entry, {"match", "schema"}, "destination.table_schemas[]")
+        table_schemas.append(TableSchema(match=str(entry.get("match", "")), schema=str(entry.get("schema", ""))))
     rep = raw.get("replication") or {}
     _reject_unknown(
         rep,
@@ -213,6 +238,7 @@ def parse(raw: Dict[str, Any], *, path: Optional[str] = None) -> Manifest:
             token_env=str(dest.get("token_env", "")),
             database=str(dest.get("database", "")),
             schema_mapping=dest.get("schema_mapping", "preserve_source"),
+            table_schemas=table_schemas,
             pipeline_name=dest.get("pipeline_name"),
             retirement_policy=str(dest.get("retirement_policy", "freeze")),
         ),
@@ -245,12 +271,12 @@ def load(path: str) -> Manifest:
     return parse(raw, path=str(path))
 
 
-def pipeline_name(m: Manifest, source_schema: str) -> str:
-    """dlt pipeline name for one source schema. An explicit `pipeline_name` pins the whole
-    registration to one pipeline (Featherbase pilot continuity — its state already exists)."""
+def pipeline_name(m: Manifest, target_schema: str) -> str:
+    """dlt pipeline name for one TARGET schema (= one dlt dataset). An explicit `pipeline_name`
+    pins the whole registration to one pipeline — only unambiguous with a single target schema."""
     if m.destination.pipeline_name:
         return m.destination.pipeline_name
-    return f"{m.source_id}_cdc__{source_schema}"
+    return f"{m.source_id}_cdc__{target_schema}"
 
 
 # --------------------------------------------------------------------------- redaction
@@ -329,6 +355,19 @@ def validate_static(m: Manifest) -> List[Problem]:
                         f"schemas {seen[tgt]!r} and {src_schema!r} both map to target schema {tgt!r}",
                     )
                 seen[tgt] = src_schema
+                _check_target_schema(p, f"destination.schema_mapping[{src_schema}]", tgt)
+    for i, rule in enumerate(m.destination.table_schemas):
+        if not _QUALIFIED.match(rule.match):
+            err("table_schema_match", f"destination.table_schemas[{i}].match {rule.match!r} must be a 'schema.table' glob")
+        _check_target_schema(p, f"destination.table_schemas[{i}].schema", rule.schema)
+    if m.destination.table_schemas and m.destination.pipeline_name:
+        n_targets = len({r.schema for r in m.destination.table_schemas})
+        if n_targets > 1:
+            err(
+                "pipeline_name_ambiguous",
+                "destination.pipeline_name pins ONE dlt pipeline, but table_schemas name "
+                f"{n_targets} target schemas — one pipeline cannot load several datasets",
+            )
 
     _check_enum(p, "replication.tables_without_key", m.replication.tables_without_key, ("reject", "append_only"))
     _check_enum(p, "replication.replica_identity", m.replication.replica_identity, ("full", "default"))
@@ -395,6 +434,20 @@ def validate_static(m: Manifest) -> List[Problem]:
             "takes a brief ACCESS EXCLUSIVE lock per ALTER — `plan` lists the ALTERs before any run",
         )
     return redact_problems(p)
+
+
+RESERVED_TARGET_SCHEMAS = ("_cdc_runtime",)
+
+
+def _check_target_schema(p: List[Problem], label: str, name: str) -> None:
+    """A target schema is a dlt dataset name AND a MotherDuck schema: an unquoted identifier,
+    and never the runtime's own metadata schema."""
+    if not _PG_IDENT.match(name or "") or len(name) > 63:
+        p.append(Problem("target_schema_identifier", "error",
+                         f"{label}={name!r} is not a valid unquoted schema identifier"))
+    elif name in RESERVED_TARGET_SCHEMAS or name.endswith("_staging"):
+        p.append(Problem("target_schema_reserved", "error",
+                         f"{label}={name!r} is reserved (runtime metadata / dlt merge staging)"))
 
 
 def _check_enum(p: List[Problem], label: str, value: str, allowed: tuple) -> None:

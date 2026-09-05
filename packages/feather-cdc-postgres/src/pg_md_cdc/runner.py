@@ -8,7 +8,8 @@ Correctness invariants this file exists to hold:
     advanced only to a checkpointed LSN — so an ambiguous destination outcome replays, never skips;
   - every baseline records the consistent point it was taken at; the drain drops a relation's
     transactions below that boundary (they are in the baseline), so no row lands twice;
-  - relation identity is (schema, table) end to end, one dlt pipeline per source schema;
+  - relation identity is (schema, table) end to end; the destination side is the relation's
+    compiled `target_schema` (D-13), one dlt pipeline per TARGET schema, never the source's;
   - a key-changed relation is out of the desired set for the WHOLE run (drift.scan), so the
     drain, the reconcile counts and the probe all see the same active set.
 Contract with the compiler half: manifest.Manifest / selectors.Relation (plan Appendix B).
@@ -42,6 +43,7 @@ class RuntimeConfig:
     extractor: str
     destination: Destination
     schema_map: dict = field(default_factory=dict)   # source schema -> target schema
+    table_schemas: list = field(default_factory=list)  # [("schema.table" glob, target schema)]
     pipeline_name: str | None = None
     target_batch_size: int = 1000
     replica_identity: str = "full"
@@ -55,7 +57,15 @@ class RuntimeConfig:
     # command (see the docstring there) — so the client enforces this deadline itself.
     baseline_wait_s: float = snapshot.BASELINE_WAIT_S_DEFAULT
 
-    def target_schema(self, source_schema: str) -> str:
+    def target_schema(self, source_schema: str, table: str | None = None) -> str:
+        """Manifest rules only — the runtime prefers a compiled Relation's own `target_schema`
+        (`_Targets`); this is the fallback for a relation outside the current set."""
+        if table is not None:
+            import fnmatch
+            qualified = f"{source_schema}.{table}"
+            for pattern, target in self.table_schemas:
+                if fnmatch.fnmatchcase(qualified, pattern):
+                    return target
         return self.schema_map.get(source_schema, source_schema)
 
 
@@ -66,22 +76,44 @@ def _log(msg: str) -> None:
 # --------------------------------------------------------------------------- pipelines
 
 
-class _Pipelines:
-    """One dlt pipeline per SOURCE schema, created lazily and reused across batches."""
+class _Targets:
+    """(source schema, table) -> target schema for one run's relation set. The compiled
+    Relation carries the answer; anything outside the set (a truncate for a table that was
+    narrowed out mid-batch, say) falls back to the manifest rules."""
 
-    def __init__(self, cfg: RuntimeConfig, source_schemas: Sequence[str]) -> None:
+    def __init__(self, cfg: RuntimeConfig, relations) -> None:
+        self.cfg = cfg
+        self.of: dict[tuple[str, str], str] = {
+            (r.schema, r.table): (r.target_schema or cfg.target_schema(r.schema, r.table))
+            for r in relations}
+
+    def __call__(self, schema: str, table: str) -> str:
+        return self.of.get((schema, table)) or self.cfg.target_schema(schema, table)
+
+    def all(self) -> set[str]:
+        return set(self.of.values())
+
+    def source_of(self, target: str) -> dict[str, str]:
+        """table -> source schema within one target dataset (table names are unique there:
+        selectors.compile refuses a (target_schema, table) collision)."""
+        return {t: s for (s, t), tgt in self.of.items() if tgt == target}
+
+
+class _Pipelines:
+    """One dlt pipeline per TARGET schema (= dlt dataset), created lazily, reused across batches."""
+
+    def __init__(self, cfg: RuntimeConfig, target_schemas) -> None:
         self.cfg = cfg
         self._cache: dict[str, object] = {}
         # An explicit pipeline_name pins ONE pipeline; that is only unambiguous for a
-        # single-schema registration (Featherbase's `featherbase_cdc`).
-        self._pin = cfg.pipeline_name if len(set(source_schemas)) <= 1 else None
+        # single-dataset registration.
+        self._pin = cfg.pipeline_name if len(set(target_schemas)) <= 1 else None
 
-    def get(self, source_schema: str):
-        if source_schema not in self._cache:
-            self._cache[source_schema] = self.cfg.destination.pipeline_for_schema(
-                source_schema, self.cfg.target_schema(source_schema),
-                self._pin, source_id=self.cfg.source_id)
-        return self._cache[source_schema]
+    def get(self, target_schema: str):
+        if target_schema not in self._cache:
+            self._cache[target_schema] = self.cfg.destination.pipeline_for_target(
+                target_schema, self._pin, source_id=self.cfg.source_id)
+        return self._cache[target_schema]
 
 
 def _load_ids(info) -> list[str]:
@@ -126,23 +158,24 @@ def _to_snapshotting(lc: Lifecycle, schema: str, table: str, detail: str) -> Non
     lc.ensure(schema, table, SNAPSHOTTING, detail)
 
 
-def _emit_table_events(run, pipeline, unit: str, source_schema: str, tables: set[str],
+def _emit_table_events(run, pipeline, unit: str, source_of: dict[str, str], tables: set[str],
                        extra: dict | None = None) -> int:
-    """One event per loaded table, entity `schema.table` — two source schemas may hold the same
-    table name, and lifecycle/reconcile already key on the qualified name (#3079 review)."""
+    """One event per loaded table, entity `<source schema>.table` — the SOURCE identity, which
+    lifecycle/reconcile key on; `source_of` maps the dataset's table names back to it, since
+    one target dataset may carry tables from several source schemas (#3079 review, D-13)."""
     counts = Destination.row_counts(pipeline)
     n = 0
     for table, rows in counts.items():
         if tables and table not in tables:
             continue
-        run.event(entity=f"{source_schema}.{table}", status=cp_status.EV_OK, unit=unit,
-                  rows=rows, extra=extra)
+        entity = f"{source_of[table]}.{table}" if table in source_of else table
+        run.event(entity=entity, status=cp_status.EV_OK, unit=unit, rows=rows, extra=extra)
         n += 1
     return n
 
 
 def _initialize(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
-                pipelines: _Pipelines, reason: str) -> int:
+                pipelines: _Pipelines, targets: _Targets, reason: str) -> int:
     """Slot missing or lost: reconcile the publication FIRST, then create the slot with an
     exported snapshot, then stream the baseline out of that snapshot (no source-side staging)."""
     owner.assert_held()
@@ -163,13 +196,17 @@ def _initialize(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
         with snapshot.snapshot_resources(cfg.source_dsn, handle.snapshot_name, desired,
                                          keys, key_policies=policies) as by_schema:
             handle.close()  # the import already happened; the exporter is no longer needed
+            by_target: dict[str, list] = {}   # a snapshot resource is named after its table
             for source_schema, resources in by_schema.items():
+                for res in resources:
+                    by_target.setdefault(targets(source_schema, res.name), []).append(res)
+            for target, resources in sorted(by_target.items()):
                 owner.assert_held()
-                pipe = pipelines.get(source_schema)
+                pipe = pipelines.get(target)
                 pipe.run(resources, **BASELINE_KWARGS)
                 owner.assert_held()   # the load blocked for a while; the lock may be gone
-                _emit_table_events(run, pipe, "snapshot", source_schema,
-                                   {t for s, t in desired if s == source_schema},
+                _emit_table_events(run, pipe, "snapshot", targets.source_of(target),
+                                   {t for s, t in desired if targets(s, t) == target},
                                    {"reinit_reason": reason})
     finally:
         handle.close()
@@ -186,12 +223,12 @@ def _initialize(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
     return handle.consistent_point_lsn
 
 
-def _take_baseline(cfg: RuntimeConfig, rel, *, run, owner, pipelines: _Pipelines, unit: str,
-                   extra: dict) -> int:
+def _take_baseline(cfg: RuntimeConfig, rel, *, run, owner, pipelines: _Pipelines,
+                   targets: _Targets, unit: str, extra: dict) -> int:
     """One consistent baseline of a table the publication ALREADY carries. Returns the boundary
     LSN, persisted before the lifecycle moves on: a baseline whose boundary was not recorded
     would let the drain re-land what it just read."""
-    pipe = pipelines.get(rel.schema)
+    pipe = pipelines.get(targets(rel.schema, rel.table))
     with snapshot.consistent_baseline(cfg.source_dsn, cfg.slot, (rel.schema, rel.table),
                                       list(rel.key), key_policy=rel.key_policy,
                                       baseline_wait_s=cfg.baseline_wait_s) as (resource,
@@ -199,13 +236,13 @@ def _take_baseline(cfg: RuntimeConfig, rel, *, run, owner, pipelines: _Pipelines
         pipe.run(resource, **BASELINE_KWARGS)
     owner.assert_held()   # the load blocked for a while; the lock may be gone
     cfg.destination.write_baseline_lsns(cfg.registration, {(rel.schema, rel.table): boundary})
-    _emit_table_events(run, pipe, unit, rel.schema, {rel.table},
+    _emit_table_events(run, pipe, unit, {rel.table: rel.schema}, {rel.table},
                        {**extra, "boundary_lsn": boundary})
     return boundary
 
 
 def _baseline(cfg: RuntimeConfig, rel, *, run, owner, lc: Lifecycle, pipelines: _Pipelines,
-              detail: str) -> None:
+              targets: _Targets, detail: str) -> None:
     """Full read of a table just ADDED to the publication, at a consistent point — the drain
     drops this relation's transactions below it, so the overlap with the WAL lands once."""
     owner.assert_held()
@@ -213,14 +250,15 @@ def _baseline(cfg: RuntimeConfig, rel, *, run, owner, lc: Lifecycle, pipelines: 
     # _resume_interrupted_snapshots retakes a baseline from (idempotent — the caller already
     # marked it before the publication add).
     _to_snapshotting(lc, rel.schema, rel.table, detail)
-    _take_baseline(cfg, rel, run=run, owner=owner, pipelines=pipelines, unit="backfill",
-                   extra={"detail": detail})
+    _take_baseline(cfg, rel, run=run, owner=owner, pipelines=pipelines, targets=targets,
+                   unit="backfill", extra={"detail": detail})
     lc.ensure(rel.schema, rel.table, CATCHING_UP, detail)
     lc.ensure(rel.schema, rel.table, STREAMING, detail)
 
 
 def _resume_interrupted_snapshots(cfg: RuntimeConfig, relations, *, run, owner,
-                                  lc: Lifecycle, pipelines: _Pipelines) -> list:
+                                  lc: Lifecycle, pipelines: _Pipelines,
+                                  targets: _Targets) -> list:
     """A run killed between `create_slot_with_snapshot` and the snapshot load leaves relations
     in `snapshotting` — and because the SLOT now exists, the next run goes straight to steady
     state and would never take that baseline: the pre-slot rows are lost silently (the CDC
@@ -231,8 +269,8 @@ def _resume_interrupted_snapshots(cfg: RuntimeConfig, relations, *, run, owner,
         if lc.state_of(r.schema, r.table) != SNAPSHOTTING:
             continue
         owner.assert_held()
-        _take_baseline(cfg, r, run=run, owner=owner, pipelines=pipelines, unit="snapshot",
-                       extra={"detail": "resumed an interrupted snapshot"})
+        _take_baseline(cfg, r, run=run, owner=owner, pipelines=pipelines, targets=targets,
+                       unit="snapshot", extra={"detail": "resumed an interrupted snapshot"})
         lc.ensure(r.schema, r.table, CATCHING_UP, "resumed an interrupted snapshot")
         lc.ensure(r.schema, r.table, STREAMING, "resumed an interrupted snapshot")
         resumed.append((r.schema, r.table))
@@ -242,7 +280,8 @@ def _resume_interrupted_snapshots(cfg: RuntimeConfig, relations, *, run, owner,
 
 
 def _reconcile_selection(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
-                         pipelines: _Pipelines, blocked: set | None = None) -> tuple[list, list]:
+                         pipelines: _Pipelines, targets: _Targets,
+                         blocked: set | None = None) -> tuple[list, list]:
     owner.assert_held()
     desired = [(r.schema, r.table) for r in relations]
     by_key = {(r.schema, r.table): r for r in relations}
@@ -260,10 +299,15 @@ def _reconcile_selection(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifec
         publication.ensure_replica_identity(cfg.source_dsn, added, cfg.replica_identity)
         for key in added:
             _baseline(cfg, by_key[key], run=run, owner=owner, lc=lc, pipelines=pipelines,
-                      detail="added to selection")
+                      targets=targets, detail="added to selection")
     for schema, table in dropped:
         if (schema, table) in (blocked or set()):
             continue   # out of the publication for drift, not retired from the selection
+        if lc.state_of(schema, table) is None:
+            # Published by an earlier drainer (the pilot's 50) and never selected here: its
+            # membership of the publication is the same evidence _adopt_streaming reads, and a
+            # `retired` row with no history would say the table was never live at all.
+            lc.transition(schema, table, STREAMING, "adopted: already in the publication")
         # `freeze`: the destination copy stays as a frozen mirror — bronze never deletes history.
         lc.ensure(schema, table, RETIRED, f"dropped from selection ({cfg.retirement_policy})")
     if dropped:
@@ -272,9 +316,11 @@ def _reconcile_selection(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifec
     return added, dropped
 
 
-def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines) -> dict:
-    """Batch loop. The checkpoint moves only after every namespace in the batch committed;
-    the slot is advanced only to a checkpointed LSN."""
+def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines,
+           targets: _Targets) -> dict:
+    """Batch loop. The slot hands over items grouped by SOURCE schema; they are regrouped by
+    TARGET schema here (one dlt pipeline per dataset). The checkpoint moves only after every
+    dataset in the batch committed; the slot is advanced only to a checkpointed LSN."""
     from .selectors import APPEND_ONLY
     keys = {(r.schema, r.table): list(r.key) for r in relations}
     policies = {(r.schema, r.table): r.key_policy for r in relations}
@@ -303,7 +349,7 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines) 
             keyed = policies.get((t["namespace"], t["table"])) != APPEND_ONLY
             applied = False
             if keyed:
-                applied = cfg.destination.delete_all_rows(cfg.target_schema(t["namespace"]),
+                applied = cfg.destination.delete_all_rows(targets(t["namespace"], t["table"]),
                                                           t["table"])
             run.event(entity=f"{t['namespace']}.{t['table']}", status=cp_status.EV_OK,
                       unit="truncate",
@@ -311,10 +357,15 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines) 
                              "applied": "delete_all" if keyed else "recorded_only",
                              "destination_table_existed": applied})
         load_ids: list[str] = []
+        by_target: dict[str, list] = {}
         for source_schema, items in batch.items_by_namespace.items():
-            if not items:
-                continue
-            pipe = pipelines.get(source_schema)
+            for item in items:
+                table = Destination.table_of(item)
+                target = (targets(source_schema, table) if table
+                          else cfg.target_schema(source_schema))
+                by_target.setdefault(target, []).append(item)
+        for target, items in sorted(by_target.items()):
+            pipe = pipelines.get(target)
             info = Destination.load(pipe, items, resource_name=cfg.slot)
             # The load is the one long blocking call per batch: Postgres may have reaped the
             # owner backend meanwhile, freeing the lock to a peer. Checkpointing or advancing
@@ -323,7 +374,7 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines) 
             owner.assert_held()
             load_ids += _load_ids(info)
             rows += sum(Destination.row_counts(pipe).values())
-            _emit_table_events(run, pipe, "cdc", source_schema, set())
+            _emit_table_events(run, pipe, "cdc", targets.source_of(target), set())
         if batch.last_commit_lsn:
             owner.assert_held()
             cfg.destination.write_checkpoint(cfg.registration, cfg.slot,
@@ -379,7 +430,8 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
     run = _Tally(run)
     cfg.destination.ensure_runtime_tables()
     lc = Lifecycle(cfg.destination, cfg.registration, run)
-    pipelines = _Pipelines(cfg, [r.schema for r in relations])
+    targets = _Targets(cfg, relations)
+    pipelines = _Pipelines(cfg, targets.all())
 
     slot = telemetry.slot_probe(cfg.source_dsn, cfg.slot)
     lost = slot is not None and slot.get("wal_status") == "lost"
@@ -404,7 +456,7 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
             publication.drop_publication(cfg.source_dsn, cfg.publication)
             snapshot.drop_slot_if_exists(cfg.source_dsn, cfg.slot)
         _initialize(cfg, relations, run=run, owner=owner, lc=lc, pipelines=pipelines,
-                    reason=reason)
+                    targets=targets, reason=reason)
         # A full re-baseline IS a resnapshot: the registry is rewritten with no diff, so a
         # key change the previous signature would have blocked on is already resolved.
         drift.record_all(cfg, relations, run=run)
@@ -417,18 +469,18 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
         blocked = outcome.blocked
         active = outcome.active(relations)
         _reconcile_selection(cfg, active, run=run, owner=owner, lc=lc, pipelines=pipelines,
-                             blocked=blocked)
+                             targets=targets, blocked=blocked)
         _resume_interrupted_snapshots(cfg, active, run=run, owner=owner, lc=lc,
-                                      pipelines=pipelines)
+                                      pipelines=pipelines, targets=targets)
 
-    result = _drain(cfg, active, run=run, owner=owner, pipelines=pipelines)
+    result = _drain(cfg, active, run=run, owner=owner, pipelines=pipelines, targets=targets)
     result["drift_blocked"] = sorted(blocked)
 
     probe = telemetry.slot_probe(cfg.source_dsn, cfg.slot)
     checkpoint = cfg.destination.read_checkpoint(cfg.registration)
     published = publication.published_relations(cfg.source_dsn, cfg.publication)
     dest_tables = cfg.destination.destination_tables(
-        {cfg.target_schema(r.schema) for r in active})
+        {targets(r.schema, r.table) for r in active})
     telemetry.emit_probe(run, probe, {
         "selected_tables": len(active),
         "published_tables": len(published),
@@ -441,7 +493,7 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
     from .selectors import APPEND_ONLY
     telemetry.emit_reconcile(run, telemetry.reconcile_counts(
         cfg.source_dsn, cfg.destination, [(r.schema, r.table) for r in active],
-        cfg.schema_map, threshold=cfg.reconcile_threshold,
+        targets.of, threshold=cfg.reconcile_threshold,
         exclude=list(cfg.reconcile_exclude),
         append_only={(r.schema, r.table) for r in active
                      if r.key_policy == APPEND_ONLY}))
@@ -524,6 +576,7 @@ def config_from_manifest(m, *, dsn: str, destination: Destination,
         extractor=m.control.extractor,
         destination=destination,
         schema_map=schema_map,
+        table_schemas=[(r.match, r.schema) for r in m.destination.table_schemas],
         pipeline_name=m.destination.pipeline_name,
         target_batch_size=m.replication.target_batch_size,
         replica_identity=m.replication.replica_identity,
@@ -666,7 +719,8 @@ def status(manifest) -> int:
     print(f"checkpoint: {checkpoint[0] if checkpoint else 'none'}")
     states = dest.read_lifecycle(manifest.source_id)
     for (schema, table), state in sorted(states.items()):
-        print(f"  {schema}.{table:<40} {state}")
+        target = manifest.destination.target_schema(schema, table)
+        print(f"  {schema}.{table:<40} -> {target}.{table:<40} {state}")
     return 0
 
 
@@ -678,8 +732,8 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
         sys.exit("resnapshot DROPS destination tables — re-run with --yes to confirm")
     dsn, plan = _compile(manifest)
     wanted = set(tables or [])
-    targets = [r for r in plan.relations if not wanted or r.qualified in wanted]
-    if not targets:
+    wanted_relations = [r for r in plan.relations if not wanted or r.qualified in wanted]
+    if not wanted_relations:
         sys.exit(f"no selected relation matches {sorted(wanted)}")
     cfg = config_from_manifest(manifest, dsn=dsn, destination=_destination(manifest))
     cp = _control_plane(manifest, dev=dev)
@@ -691,8 +745,9 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
         try:
             cfg.destination.ensure_runtime_tables()
             lc = Lifecycle(cfg.destination, cfg.registration, run_ctx)
-            pipelines = _Pipelines(cfg, [r.schema for r in plan.relations])
-            for rel in targets:
+            targets = _Targets(cfg, plan.relations)
+            pipelines = _Pipelines(cfg, targets.all())
+            for rel in wanted_relations:
                 owner.assert_held()
                 # Drop FIRST, in `resnapshot_required`. A drop that fails must leave the
                 # table exactly where a failed resnapshot belongs — not `snapshotting`, which
@@ -700,7 +755,7 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
                 # copy, resurrecting rows the source deleted (#3079 review). The publication
                 # is only touched once the destination copy is really gone.
                 _mark_resnapshot_required(lc, rel.schema, rel.table, "operator resnapshot")
-                dropped = cfg.destination.drop_table(cfg.target_schema(rel.schema), rel.table)
+                dropped = cfg.destination.drop_table(targets(rel.schema, rel.table), rel.table)
                 _log(f"resnapshot {rel.qualified}: dropped {dropped}")
                 _to_snapshotting(lc, rel.schema, rel.table, "operator resnapshot")
                 # Re-admits THIS key-changed table drift.scan removed; a no-op otherwise. Any
@@ -709,8 +764,9 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
                 # copy — the double-load the block exists to prevent (#3079 final review).
                 publication.reconcile(cfg.source_dsn, cfg.publication, [
                     (r.schema, r.table) for r in plan.relations
-                    if r in targets or lc.state_of(r.schema, r.table) != RESNAPSHOT_REQUIRED])
-                pipe = pipelines.get(rel.schema)
+                    if r in wanted_relations
+                    or lc.state_of(r.schema, r.table) != RESNAPSHOT_REQUIRED])
+                pipe = pipelines.get(targets(rel.schema, rel.table))
                 with snapshot.consistent_baseline(
                         cfg.source_dsn, cfg.slot, (rel.schema, rel.table), list(rel.key),
                         key_policy=rel.key_policy,
@@ -725,7 +781,7 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
                 owner.assert_held()
                 cfg.destination.write_baseline_lsns(cfg.registration,
                                                     {(rel.schema, rel.table): boundary})
-                _emit_table_events(run_ctx, pipe, "snapshot", rel.schema, {rel.table},
+                _emit_table_events(run_ctx, pipe, "snapshot", {rel.table: rel.schema}, {rel.table},
                                    {"reason": "operator resnapshot", "boundary_lsn": boundary})
                 # The refreshed signature is what clears a key_change block: without it the
                 # next run would diff against the pre-change key and pull the table again.
@@ -739,5 +795,5 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
             raise
         finally:
             owner.release()
-        run_ctx.finish(cp_status.RUN_OK, stop_reason=cp_status.STOP_CLEAN, n_ok=len(targets))
+        run_ctx.finish(cp_status.RUN_OK, stop_reason=cp_status.STOP_CLEAN, n_ok=len(wanted_relations))
     return 0

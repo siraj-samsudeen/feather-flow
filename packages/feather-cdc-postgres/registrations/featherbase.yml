@@ -21,14 +21,41 @@ source:
     adapter: featherbase
     options:
       modules: null          # null = every module; a list narrows and DROPS the rest from the pub
+      # Two-way rule (Siraj, 05-Sep-2026): every user-created table (`table_def."system" = false`)
+      # flows with no edit here; Featherbase's own tables flow ONLY when named below.
+      # Navigation (home_page*), scheduler (background_job, job_execution) and `version` are
+      # deliberately out. Adding a name later is safe: a newly selected table gets a full baseline.
+      system_tables:
+        - table_def
+        - column_def
+        - user
+        - role
+        - has_role
+        - permission
+        - data_scope
+        - share
+        - activity_log
+        - user_event
+        - comment
 
 destination:
   token_env: MOTHERDUCK_TOKEN
   database: bronze_featherbase
-  schema_mapping: preserve_source
-  # Pilot continuity: dlt state rides the destination under this exact name (1,614 loads).
-  # Renaming it would re-snapshot every table.
-  pipeline_name: featherbase_cdc
+  # Fallback for anything table_schemas does not name — i.e. every user-created table.
+  schema_mapping: {public: application}
+  # Per-table bronze schemas, first match wins; the source schema is `public` for all of them.
+  table_schemas:
+    - {match: "public.table_def", schema: catalog}
+    - {match: "public.column_def", schema: catalog}
+    - {match: "public.user", schema: access}
+    - {match: "public.role", schema: access}
+    - {match: "public.has_role", schema: access}
+    - {match: "public.permission", schema: access}
+    - {match: "public.data_scope", schema: access}
+    - {match: "public.share", schema: access}
+    - {match: "public.activity_log", schema: activity}
+    - {match: "public.user_event", schema: activity}
+    - {match: "public.comment", schema: activity}
   retirement_policy: freeze
 
 replication:

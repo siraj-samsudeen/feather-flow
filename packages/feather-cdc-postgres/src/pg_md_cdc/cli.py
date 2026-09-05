@@ -87,9 +87,10 @@ def _relation_lines(plan: CompiledPlan) -> List[str]:
     for r in plan.relations:
         key = ",".join(r.key) or "-"
         idx = f" via {r.key_index}" if r.key_index else ""
+        origin = f"  origin={r.origin}" if r.origin else ""
         out.append(
             f"  {r.qualified:<{width}}  -> {r.target:<{width}}  {r.key_policy:<12} key={key}{idx}  "
-            f"class={r.table_class}"
+            f"class={r.table_class}{origin}"
         )
     return out
 

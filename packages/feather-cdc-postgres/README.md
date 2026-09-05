@@ -50,7 +50,7 @@ redacted, never as a raw traceback), `2` a malformed manifest.
 | Block | Decides |
 |---|---|
 | `source` | which relations: `include`/`exclude`/`deny` globs on `schema.table`, plus an optional catalog `discovery.adapter` |
-| `destination` | MotherDuck database, schema mapping (default: source schemas preserved), dlt pipeline name, retirement policy |
+| `destination` | MotherDuck database, `schema_mapping` (default: source schemas preserved), **`table_schemas`** (per-table target schema, `[{match: "schema.table" glob, schema: target}]`, first match wins, unmatched → `schema_mapping`; D-13), dlt pipeline name (only with a single target schema), retirement policy |
 | `replication` | slot, publication, cadence, key policy for unkeyed tables, replica identity, batch size |
 | `control` | the extractor identity, control-plane availability policy, event durability, `reconcile_exclude` |
 | `classification` | optional first-match rules overriding the default `table_class` |
@@ -66,7 +66,15 @@ carrying a value is rejected, and no environment value is ever printed or writte
 - **`deny` is evaluated on the compiled set**, after the adapter narrows it — a deny rule is a
   tripwire that fires only when something really would have been replicated.
 - A discovery adapter supplies policy only ("which relations, and what does the source call
-  them"). It never supplies types, keys or load behaviour.
+  them"). It never supplies types, keys or load behaviour. The Featherbase adapter's
+  `options.system_tables` switches on the **two-way rule**: a `table_def."system" = true` table
+  (Featherbase's own) is offered only when named there, a `"system" = false` (user-created)
+  table always is — so a new user table flows with no manifest edit. `plan` prints each
+  relation's `origin=` (`user_created` / `named_system`); user-created relations classify as
+  `application` whatever they are called. Absent, the adapter offers everything (legacy).
+- One dlt pipeline per **target** schema (`<source_id>_cdc__<target_schema>`), never per
+  source schema: `_cdc_runtime.*`, lifecycle and `control.event` entities keep the **source**
+  identity `schema.table`; the destination side is the relation's compiled `target_schema`.
 - `selection_hash` covers the relation set **and** each table's key policy, so a table that
   silently dropped from merge to append-only changes the hash.
 

@@ -10,13 +10,22 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, NamedTuple
 
 
+# How an adapter came to offer a relation. `user_created` = the source's own users declared
+# it (always application data); `named_system` = one of the source's platform tables the
+# manifest names explicitly. None = the adapter applied no such distinction.
+USER_CREATED = "user_created"
+NAMED_SYSTEM = "named_system"
+
+
 class AdapterRelation(NamedTuple):
-    """(schema, table, module) — plus a description the source itself owns, when it has one."""
+    """(schema, table, module) — plus a description the source itself owns, when it has one,
+    and the `origin` the adapter selected it under (see USER_CREATED / NAMED_SYSTEM)."""
 
     schema: str
     table: str
     module: str | None = None
     description: str | None = None
+    origin: str | None = None
 
 
 AdapterFn = Callable[[str, Dict[str, Any]], List[AdapterRelation]]

@@ -140,3 +140,63 @@ def test_key_override_full_row_is_a_static_error():
     assert "full_row_unsupported" in _codes(problems, "error")
     assert _codes(mf.validate_static(
         _m(replication={"key_overrides": {"public.t": "append_only"}})), "error") == set()
+
+
+# --------------------------------------------------------------------------- D-13 · table_schemas
+
+
+def test_table_schemas_first_match_wins_then_schema_mapping():
+    m = _m(destination={"schema_mapping": {"public": "application"},
+                        "table_schemas": [{"match": "public.table_def", "schema": "catalog"},
+                                          {"match": "public.*", "schema": "everything_else"}]})
+    assert _codes(mf.validate_static(m), "error") == set()
+    assert m.destination.target_schema("public", "table_def") == "catalog"
+    assert m.destination.target_schema("public", "comment") == "everything_else"
+    assert m.destination.target_schema("other", "comment") == "other"
+    assert m.destination.target_schema("public") == "application"   # no table: mapping only
+    assert mf.pipeline_name(m, "catalog") == "demo_cdc__catalog"
+
+
+def test_table_schemas_targets_must_be_identifiers_and_never_the_runtime_schema():
+    bad = mf.validate_static(_m(destination={"table_schemas": [
+        {"match": "public.a", "schema": "_cdc_runtime"},
+        {"match": "public.b", "schema": "public_staging"},
+        {"match": "public.c", "schema": "Bad Name"},
+        {"match": "bare", "schema": "ok"},
+    ]}))
+    assert {"target_schema_reserved", "target_schema_identifier", "table_schema_match"} <= _codes(bad, "error")
+    also_bad = mf.validate_static(_m(destination={"schema_mapping": {"public": "_cdc_runtime"}}))
+    assert "target_schema_reserved" in _codes(also_bad, "error")
+
+
+def test_table_schemas_entries_must_be_match_plus_schema():
+    with pytest.raises(mf.ManifestError):
+        mf.parse({**BASE, "destination": {**BASE["destination"], "table_schemas": [{"match": "a.b", "target": "x"}]}})
+    with pytest.raises(mf.ManifestError):
+        mf.parse({**BASE, "destination": {**BASE["destination"], "table_schemas": ["a.b"]}})
+
+
+def test_a_pinned_pipeline_name_cannot_serve_several_target_schemas():
+    problems = mf.validate_static(_m(destination={
+        "pipeline_name": "one", "table_schemas": [{"match": "public.a", "schema": "x"},
+                                                  {"match": "public.b", "schema": "y"}]}))
+    assert "pipeline_name_ambiguous" in _codes(problems, "error")
+
+
+def test_the_featherbase_registration_is_a_clean_run_with_per_table_targets():
+    """The pilot's `pipeline_name: featherbase_cdc` pin is gone (the cutover is a clean run and
+    there are several datasets now); the three named groups route to their own schemas and
+    everything else — every user-created table — falls back to `application`."""
+    m = mf.load(str(REGISTRATIONS / "featherbase.yml"))
+    assert m.destination.pipeline_name is None
+    assert m.destination.schema_mapping == {"public": "application"}
+    assert m.source.discovery.options["system_tables"] == [
+        "table_def", "column_def", "user", "role", "has_role", "permission", "data_scope",
+        "share", "activity_log", "user_event", "comment"]
+    routed = {r.match.split(".", 1)[1]: r.schema for r in m.destination.table_schemas}
+    assert routed == {"table_def": "catalog", "column_def": "catalog", "user": "access",
+                      "role": "access", "has_role": "access", "permission": "access",
+                      "data_scope": "access", "share": "access", "activity_log": "activity",
+                      "user_event": "activity", "comment": "activity"}
+    assert set(routed) == set(m.source.discovery.options["system_tables"])
+    assert m.destination.target_schema("public", "anything_a_user_made") == "application"

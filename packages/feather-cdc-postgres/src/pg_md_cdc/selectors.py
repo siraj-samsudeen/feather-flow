@@ -4,7 +4,8 @@ Constraints:
   - deny is evaluated on the COMPILED set, not on the include list — an adapter or a wildcard
     must not be able to smuggle a denied relation in (#3079 D12).
   - ordering is sorted everywhere, so `selection_hash` is a function of the selection alone.
-  - a relation is always (schema, table); the target schema is derived, never assumed equal.
+  - a relation is always (schema, table); the target schema is derived per TABLE
+    (`destination.table_schemas`, then `schema_mapping`), never assumed equal (D-13).
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from .adapters import AdapterRelation
+from .adapters import USER_CREATED, AdapterRelation
 from .discovery import SourceRelation
 from .manifest import Manifest, Problem, Selection
 
@@ -47,6 +48,7 @@ class Relation:
     target_schema: str = ""
     key_index: Optional[str] = None  # the unique index a UNIQUE_INDEX key came from
     description: Optional[str] = None
+    origin: Optional[str] = None  # adapters.USER_CREATED | NAMED_SYSTEM | None
 
     @property
     def qualified(self) -> str:
@@ -84,15 +86,19 @@ def _included(qualified: str, schema: str, sel: Selection) -> bool:
     return table_ok if not sel.schemas else (schema_ok and table_ok)
 
 
-def table_class(m: Manifest, schema: str, table: str) -> str:
+def table_class(m: Manifest, schema: str, table: str, origin: Optional[str] = None) -> str:
     """First matching manifest rule wins; otherwise the defaults below. Loader-internal is
-    checked first so a broad application rule cannot claim `_dlt_loads`."""
+    checked first so a broad application rule cannot claim `_dlt_loads`. A relation the
+    adapter offered as USER_CREATED is application data whatever it is called — a user's
+    table named `share` is not the platform's `share`."""
     qualified = f"{schema}.{table}"
     for rule in m.classification.rules:
         if fnmatch.fnmatchcase(qualified, rule.match):
             return rule.table_class
     if table.startswith("_dlt_") or schema == "_cdc_runtime":
         return "loader_internal"
+    if origin == USER_CREATED:
+        return "application"
     if m.source_id == "control_plane" and schema == "control":
         return "warehouse_control"
     if table in _SOURCE_OPERATIONAL:
@@ -237,11 +243,12 @@ def compile(
                 table=rel.table,
                 key=key,
                 key_policy=policy,
-                table_class=table_class(m, rel.schema, rel.table),
+                table_class=table_class(m, rel.schema, rel.table, meta.origin if meta else None),
                 module=meta.module if meta else None,
-                target_schema=m.destination.target_schema(rel.schema),
+                target_schema=m.destination.target_schema(rel.schema, rel.table),
                 key_index=idx_name,
                 description=meta.description if meta else None,
+                origin=meta.origin if meta else None,
             )
         )
 

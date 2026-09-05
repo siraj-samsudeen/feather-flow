@@ -1,7 +1,8 @@
 """MotherDuck / duckdb load contract + runtime metadata (#3079 Deviation D-2).
 
-One dlt pipeline PER SOURCE SCHEMA (dataset = the mapped target schema), so two source
-schemas holding the same table name never collide. Checkpoint, lifecycle and schema registry
+One dlt pipeline PER TARGET SCHEMA (= one dlt dataset; a relation's target comes from
+`destination.table_schemas`, then `schema_mapping`), so two source schemas holding the same
+table name never collide and one source schema can fan out into several bronze schemas (D-13). Checkpoint, lifecycle and schema registry
 live in `<database>._cdc_runtime` written through a PLAIN duckdb connection — no DDL on the
 shared control plane (#3091 deadlock) and no dependence on opaque dlt state.
 duckdb and MotherDuck differ only by the credentials string.
@@ -74,14 +75,27 @@ class Destination:
                               config={"motherduck_token": self._token()})
 
     # --- pipelines ---
-    def pipeline_for_schema(self, source_schema: str, target_schema: str,
-                            pipeline_name: str | None = None, *, source_id: str = "pg") -> dlt.Pipeline:
-        name = pipeline_name or f"{source_id}_cdc__{source_schema}"
+    def pipeline_for_target(self, target_schema: str, pipeline_name: str | None = None, *,
+                            source_id: str = "pg") -> dlt.Pipeline:
+        """The pipeline whose dataset is `target_schema`; named after it unless pinned."""
+        name = pipeline_name or f"{source_id}_cdc__{target_schema}"
         kwargs = {}
         if self.spec.pipelines_dir:
             kwargs["pipelines_dir"] = self.spec.pipelines_dir
         return dlt.pipeline(pipeline_name=name, destination=self._dlt_destination(),
                             dataset_name=target_schema, **kwargs)
+
+    @staticmethod
+    def table_of(item) -> str | None:
+        """The table a marked item is bound for (TableNameMeta / HintsMeta), else None."""
+        from dlt.extract.hints import HintsMeta
+        from dlt.extract.items import DataItemWithMeta, TableNameMeta
+        if isinstance(item, DataItemWithMeta):
+            if isinstance(item.meta, TableNameMeta):
+                return item.meta.table_name
+            if isinstance(item.meta, HintsMeta):
+                return item.meta.hints.get("table_name")
+        return None
 
     @staticmethod
     def load(pipeline: dlt.Pipeline, items, *, resource_name: str = "cdc"):
@@ -92,17 +106,9 @@ class Destination:
         of that table (slot loss, re-widening) then dropped NOTHING and doubled an append_only
         copy (#3079 final review). `resource_name` only names items carrying no table mark.
         The caller checkpoints only after this returns."""
-        from dlt.extract.hints import HintsMeta
-        from dlt.extract.items import DataItemWithMeta, TableNameMeta
         by_table: dict[str, list] = {}
         for item in items:
-            name = resource_name
-            if isinstance(item, DataItemWithMeta):
-                if isinstance(item.meta, TableNameMeta):
-                    name = item.meta.table_name
-                elif isinstance(item.meta, HintsMeta):
-                    name = item.meta.hints.get("table_name") or resource_name
-            by_table.setdefault(name, []).append(item)
+            by_table.setdefault(Destination.table_of(item) or resource_name, []).append(item)
         return pipeline.run([dlt.resource(v, name=k) for k, v in by_table.items()])
 
     @staticmethod

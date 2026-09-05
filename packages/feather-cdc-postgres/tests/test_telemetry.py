@@ -72,7 +72,7 @@ def test_reconcile_compares_counts_and_skips_the_big_ones(fresh_db, names, duckd
         c.execute("insert into public.big select generate_series(1, 100)")
         c.execute("analyze")
     with snapshot.baseline_resource(fresh_db, ("public", "small"), ["id"]) as res:
-        dest.pipeline_for_schema("public", "public").run(res)
+        dest.pipeline_for_target("public").run(res)
 
     rows = telemetry.reconcile_counts(fresh_db, dest, [("public", "small"), ("public", "big")],
                                       {}, threshold=50)
@@ -111,7 +111,7 @@ def test_a_forced_count_mismatch_is_an_error_event_not_an_ok_with_a_delta(
         c.execute("create table public.drifted (id int primary key)")
         c.execute("insert into public.drifted select generate_series(1, 5)")
     with snapshot.baseline_resource(fresh_db, ("public", "drifted"), ["id"]) as res:
-        dest.pipeline_for_schema("public", "public").run(res)
+        dest.pipeline_for_target("public").run(res)
 
     con = duckdb.connect(duckdb_path)
     # a row the source never had (_dlt_load_id/_dlt_id are NOT NULL at the destination)

@@ -290,3 +290,128 @@ def test_an_unreachable_source_still_leaves_a_failed_run_row(registration, tmp_p
     from test_e2e_pg import finish_record
     rec = finish_record(str(tmp_path / "wal"), extractor="demo_cdc")
     assert rec["status"] == "failed" and rec["stop_reason"] == "error"
+
+
+# --------------------------------------------------------------------------- f · per-table target schemas (D-13)
+
+ROUTED_MANIFEST = """\
+api_version: pg-md-cdc/v1
+source_id: demo
+source:
+  dsn_env: DEMO_PG_DSN
+  include:
+    schemas: [public]
+destination:
+  token_env: DEMO_MD_TOKEN
+  database: bronze_demo
+  schema_mapping: {{public: application}}
+  table_schemas:
+    - {{match: "public.table_def", schema: catalog}}
+    - {{match: "public.user", schema: access}}
+replication:
+  slot: {slot}
+  publication: {publication}
+  replica_identity: full
+control:
+  extractor: demo_cdc
+  wal_dir: {wal_dir}
+"""
+
+
+@pytest.fixture
+def routed_registration(tmp_path, names, fresh_db, duckdb_path, monkeypatch):
+    path = tmp_path / "routed.yml"
+    path.write_text(ROUTED_MANIFEST.format(slot=names["slot"], publication=names["publication"],
+                                           wal_dir=str(tmp_path / "wal")), encoding="utf-8")
+    monkeypatch.setenv("DEMO_PG_DSN", fresh_db)
+    monkeypatch.setenv("PG_MD_CDC_DESTINATION", f"duckdb:{duckdb_path}")
+    monkeypatch.setenv("PG_MD_CDC_PIPELINES_DIR", str(tmp_path / "dlt"))
+    monkeypatch.delenv("CONTROL_PG_DSN", raising=False)
+    return str(path)
+
+
+def _datasets(duckdb_path) -> dict:
+    con = duckdb.connect(duckdb_path)
+    try:
+        rows = con.execute(
+            "select table_schema, table_name from information_schema.tables "
+            "where table_schema not like '%_staging' and table_schema not in ('_cdc_runtime') "
+            "and table_name not like '\\_dlt\\_%' escape '\\' order by 1, 2").fetchall()
+    finally:
+        con.close()
+    out: dict = {}
+    for schema, table in rows:
+        out.setdefault(schema, []).append(table)
+    return out
+
+
+def _rows(duckdb_path, qualified, cols="id, v"):
+    con = duckdb.connect(duckdb_path)
+    try:
+        return con.execute(f"select {cols} from {qualified} order by 1").fetchall()
+    finally:
+        con.close()
+
+
+def test_two_tables_of_one_source_schema_land_in_their_own_target_schemas_end_to_end(
+        fresh_db, routed_registration, duckdb_path, tmp_path, capsys):
+    """Snapshot, CDC and resnapshot all honour `table_schemas`: `public.table_def` → catalog,
+    `public.user` → access, and the unmapped `public.test` falls back to `schema_mapping`
+    (application). Nothing lands under `public`."""
+    sql(fresh_db,
+        "create table public.table_def (id int primary key, v text)",
+        'create table public."user" (id int primary key, v text)',
+        "create table public.test (id int primary key, v text)",
+        "insert into public.table_def values (1, 'Table')",
+        'insert into public."user" values (1, \'admin\')',
+        "insert into public.test values (1, 'one')")
+
+    # plan prints the routing before anything runs
+    assert cli.main(["plan", routed_registration]) == 0
+    out = capsys.readouterr().out
+    assert "public.table_def" in out and "-> catalog.table_def" in out
+    assert "-> access.user" in out and "-> application.test" in out
+
+    assert cli.main(["run", routed_registration, "--dev"]) == 0          # first-run snapshot
+    assert _datasets(duckdb_path) == {"access": ["user"], "application": ["test"],
+                                      "catalog": ["table_def"]}
+    m = mf.load(routed_registration)
+    dest = runner._destination(m)
+    assert set(dest.read_lifecycle("demo")) == {("public", "table_def"), ("public", "user"),
+                                                ("public", "test")}, "runtime metadata keys on the SOURCE identity"
+
+    sql(fresh_db,
+        "insert into public.table_def values (2, 'Column')",
+        'update public."user" set v = \'root\' where id = 1',
+        "delete from public.test where id = 1",
+        "insert into public.test values (2, 'two')")
+    assert cli.main(["run", routed_registration, "--dev"]) == 0          # CDC drain
+    assert _rows(duckdb_path, "catalog.table_def") == [(1, "Table"), (2, "Column")]
+    assert _rows(duckdb_path, "access.user") == [(1, "root")]
+    assert _rows(duckdb_path, "application.test") == [(2, "two")]
+    assert "public" not in _datasets(duckdb_path)
+
+    # the pipelines are named after the TARGET schema, one dlt state per dataset
+    con = duckdb.connect(duckdb_path)
+    names = {schema: con.execute(f"select distinct pipeline_name from {schema}._dlt_pipeline_state"
+                                 ).fetchall() for schema in ("catalog", "access", "application")}
+    con.close()
+    assert names == {"catalog": [("demo_cdc__catalog",)], "access": [("demo_cdc__access",)],
+                     "application": [("demo_cdc__application",)]}
+
+    # resnapshot drops and rebuilds in the TARGET dataset, and the drain afterwards still lands there
+    sql(fresh_db, "insert into public.table_def values (3, 'Share')")
+    assert runner.resnapshot(m, tables=["public.table_def"], yes=True, dev=True) == 0
+    capsys.readouterr()
+    assert _rows(duckdb_path, "catalog.table_def") == [(1, "Table"), (2, "Column"), (3, "Share")]
+    assert dest.read_lifecycle("demo")[("public", "table_def")] == "streaming"
+    sql(fresh_db, "update public.table_def set v = 'Share!' where id = 3")
+    assert cli.main(["run", routed_registration, "--dev"]) == 0
+    assert _rows(duckdb_path, "catalog.table_def") == [(1, "Table"), (2, "Column"), (3, "Share!")]
+    assert _datasets(duckdb_path) == {"access": ["user"], "application": ["test"],
+                                      "catalog": ["table_def"]}
+
+    # the reconcile counts looked in the right dataset: every relation tied, none errored
+    assert cli.main(["status", routed_registration]) == 0
+    status_out = capsys.readouterr().out
+    assert "public.table_def" in status_out and "-> catalog.table_def" in status_out

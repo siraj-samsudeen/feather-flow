@@ -97,13 +97,23 @@ def test_the_pilot_hands_its_slot_and_destination_to_the_runtime_without_re_snap
     src_role = q(dsn, "select count(*) from public.role")[0][0]
     src_comment = q(dsn, "select count(*) from public.comment")[0][0]
 
-    # --- the takeover, built from the shipped registration ---
+    # --- the takeover, built from the shipped registration overridden back to pilot
+    # continuity. The shipped file is a CLEAN-RUN registration since D-13 (05-Sep-2026): no
+    # `pipeline_name` pin and four target schemas. This test is the ROLLBACK proof (runbook
+    # §h) — that the runtime can adopt the pilot's slot, publication and `featherbase_cdc`
+    # state when told to — so it restores the pin and the single `public` dataset here.
     m = mf.load(str(MANIFEST))
-    m = dataclasses.replace(m, replication=dataclasses.replace(
-        m.replication, slot=slot, publication=pub))
+    m = dataclasses.replace(
+        m,
+        replication=dataclasses.replace(m.replication, slot=slot, publication=pub),
+        destination=dataclasses.replace(m.destination, pipeline_name="featherbase_cdc",
+                                        schema_mapping="preserve_source", table_schemas=[]))
     _, plan = runner._compile(m)
     assert [p for p in plan.problems if p.severity == "error"] == []
-    assert len(plan.relations) == 50, "the compiled desired set is the live Featherbase shape"
+    # the two-way rule narrows the pilot's 50 published tables to the 12 the registration
+    # selects; the other 38 retire (frozen), they are not re-baselined
+    assert len(plan.relations) == 12
+    assert {r.target_schema for r in plan.relations} == {"public"}
 
     destination = Destination(DestinationSpec(kind="duckdb", database="bronze_featherbase",
                                               path=duckdb_path,
@@ -128,12 +138,14 @@ def test_the_pilot_hands_its_slot_and_destination_to_the_runtime_without_re_snap
         assert con.execute('select count(*) from "_cdc_runtime".checkpoint').fetchone() == (1,)
         assert con.execute('select count(*) from "_cdc_runtime".lifecycle where state '
                            "= 'streaming'").fetchone() == (len(plan.relations),)
+        assert con.execute('select count(*) from "_cdc_runtime".lifecycle where state '
+                           "= 'retired'").fetchone() == (len(tables) - len(plan.relations),)
     finally:
         con.close()
 
     assert q(dsn, "select wal_status from pg_replication_slots where slot_name = %s",
              slot)[0][0] == "reserved"
     assert q(dsn, "select count(*) from pg_publication_tables where pubname = %s",
-             pub)[0][0] == len(plan.relations)
+             pub)[0][0] == len(plan.relations), "the 38 unselected tables left the publication"
     assert q(dsn, r"select count(*) from pg_tables where tablename like '\_dlt\_%'"
              )[0][0] == 0, "the runtime must leave no staging table on the source"

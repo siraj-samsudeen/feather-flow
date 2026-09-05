@@ -177,3 +177,46 @@ def test_table_class_defaults(source_id, schema, table, expected):
 def test_manifest_classification_rule_beats_the_default():
     m = _m(classification={"rules": [{"match": "public.comment", "table_class": "source_system"}]})
     assert sel.table_class(m, "public", "comment") == "source_system"
+
+
+# --------------------------------------------------------------------------- D-13 · per-table targets + origin
+
+
+def test_table_schemas_route_per_table_and_fall_back_to_schema_mapping():
+    m = _m(destination={
+        "schema_mapping": {"public": "application"},
+        "table_schemas": [{"match": "public.table_def", "schema": "catalog"},
+                          {"match": "public.*_def", "schema": "never_reached"},
+                          {"match": "public.user", "schema": "access"}],
+    })
+    plan = sel.compile(m, [rel("public", "table_def", pk=["id"]), rel("public", "user", pk=["id"]),
+                           rel("public", "test", pk=["id"])])
+    assert {r.table: r.target_schema for r in plan.relations} == {
+        "table_def": "catalog", "user": "access", "test": "application"}   # first match wins
+    assert [r.target for r in plan.relations] == ["catalog.table_def", "application.test", "access.user"]
+
+
+def test_two_relations_routed_to_one_target_schema_and_table_collide():
+    m = _m(destination={"table_schemas": [{"match": "a.t", "schema": "x"}, {"match": "b.t", "schema": "x"}]})
+    plan = sel.compile(m, [rel("a", "t", pk=["id"]), rel("b", "t", pk=["id"])])
+    assert "target_collision" in codes(plan, "error")
+
+
+def test_a_user_created_relation_is_application_whatever_it_is_called():
+    """A Featherbase user's own table named `share` is not the platform's `share`."""
+    from pg_md_cdc.adapters import NAMED_SYSTEM, USER_CREATED
+    m = _m(source={"dsn_env": "DEMO_PG_DSN", "discovery": {"adapter": "featherbase", "options": {}}})
+    disc = [rel("public", "share", pk=["id"]), rel("public", "role", pk=["id"]), rel("public", "test", pk=["id"])]
+    plan = sel.compile(m, disc, [
+        AdapterRelation("public", "share", "Custom", None, USER_CREATED),
+        AdapterRelation("public", "role", "Core", None, NAMED_SYSTEM),
+        AdapterRelation("public", "test", "Custom", None, USER_CREATED),
+    ])
+    by = {r.table: r for r in plan.relations}
+    assert (by["share"].table_class, by["share"].origin) == ("application", USER_CREATED)
+    assert (by["role"].table_class, by["role"].origin) == ("source_system", NAMED_SYSTEM)
+    assert (by["test"].table_class, by["test"].origin) == ("application", USER_CREATED)
+    # a manifest rule still beats the origin default
+    m2 = _m(source={"dsn_env": "DEMO_PG_DSN", "discovery": {"adapter": "featherbase", "options": {}}},
+            classification={"rules": [{"match": "public.share", "table_class": "source_system"}]})
+    assert sel.table_class(m2, "public", "share", USER_CREATED) == "source_system"

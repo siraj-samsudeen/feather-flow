@@ -219,3 +219,63 @@ def test_a_partitioned_parent_is_reported_and_its_leaves_are_selected(fresh_db):
     assert warning.severity == "warning"
     assert "public.events_2026" in warning.message and "public.events_2027" in warning.message
     assert plan.relations[0].key == ("id", "day")
+
+
+def test_featherbase_adapter_two_way_rule_selects_user_tables_and_only_named_system_tables(fresh_db):
+    """D-13 (Siraj, 05-Sep-2026): `table_def."system" = false` (user-created) always flows,
+    `"system" = true` (Featherbase's own) only when named in `options.system_tables` — the
+    catalog tables included. Without the option, today's behaviour (everything) is unchanged."""
+    from pg_md_cdc.adapters import NAMED_SYSTEM, USER_CREATED
+    from pg_md_cdc.adapters.featherbase import select
+
+    _ddl(
+        fresh_db,
+        'create table public.table_def (id serial primary key, "name" text, module text, '
+        'data_source text, kind text, description text, "system" boolean not null default false)',
+        "create table public.column_def (id int primary key)",
+        "create table public.role (id int primary key)",
+        "create table public.background_job (id int primary key)",
+        "create table public.share (id int primary key)",
+        "create table public.test (id int primary key)",
+        "create table public.invoice (id int primary key)",
+        """insert into public.table_def ("name", module, data_source, kind, description, "system") values
+             ('Role', 'Core', null, 'table', null, true),
+             ('Background Job', 'Core', null, 'table', null, true),
+             ('Share', 'Core', null, 'table', null, true),
+             ('Test', 'Custom', null, 'table', null, false),
+             ('Invoice', 'Custom', null, 'table', null, false),
+             ('Not Yet Built', 'Custom', null, 'table', null, false),
+             ('Table', 'Core', null, 'table', null, true),
+             ('Column', 'Core', null, 'sub_table', null, true)""",
+    )
+    two_way = select(fresh_db, {"system_tables": ["table_def", "column_def", "role"]})
+    assert {r.table: r.origin for r in two_way} == {
+        "column_def": NAMED_SYSTEM, "invoice": USER_CREATED, "role": NAMED_SYSTEM,
+        "table_def": NAMED_SYSTEM, "test": USER_CREATED}
+    # `share` and `background_job` are system tables not named → out; the catalog is no longer
+    # unconditional: drop it from the list and it goes too.
+    without_catalog = select(fresh_db, {"system_tables": ["role"]})
+    assert [r.table for r in without_catalog] == ["invoice", "role", "test"]
+    # a name in the list that is user-created anyway, or not in the catalog, changes nothing
+    assert [r.table for r in select(fresh_db, {"system_tables": ["role", "test", "no_such"]})] == [
+        "invoice", "role", "test"]
+    # user-created tables still honour the module allow-list; named system tables ride along
+    assert [r.table for r in select(fresh_db, {"system_tables": ["role"], "modules": ["Core"]})] == ["role"]
+
+    legacy = select(fresh_db, {})
+    assert [r.table for r in legacy] == ["background_job", "column_def", "invoice", "role", "share",
+                                         "table_def", "test"]
+    assert {r.origin for r in legacy} == {None}
+
+
+def test_featherbase_adapter_refuses_system_tables_without_the_system_column(fresh_db):
+    """With no flag every row would read as user-created and the allow-list would admit every
+    platform table — the opposite of what the option promises. Fail, never leak."""
+    from pg_md_cdc.adapters.featherbase import select
+
+    _ddl(fresh_db,
+         'create table public.table_def (id serial primary key, "name" text, module text, '
+         "data_source text, kind text)")
+    with pytest.raises(RuntimeError, match='"system"'):
+        select(fresh_db, {"system_tables": ["table_def"]})
+    assert [r.table for r in select(fresh_db, {})] == ["table_def"]   # legacy path unaffected

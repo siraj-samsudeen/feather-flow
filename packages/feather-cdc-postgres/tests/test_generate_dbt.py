@@ -38,37 +38,54 @@ def _featherbase_plan():
     return m, sel.compile(m, discovered, adapter)
 
 
-def test_generated_featherbase_file_is_a_superset_of_todays_tables():
+def _tables_by_source(doc) -> dict:
+    return {s["name"]: {t["name"]: t for t in s["tables"]} for s in doc["sources"]}
+
+
+def test_generated_featherbase_file_has_one_source_per_target_schema():
+    """D-13: the registration routes `public` into four bronze schemas, so the file carries
+    four dbt sources — disambiguated `<database>__<schema>` — each with its own `_dlt_loads`.
+    (The selectors alone do not apply the two-way rule — that is the adapter's — so the
+    unnamed platform tables here still compile, into the `application` fallback.)"""
     m, plan = _featherbase_plan()
     doc = yaml.safe_load(generate_dbt.render(m, plan))
-    (source,) = doc["sources"]
-    assert source["name"] == "bronze_featherbase"  # existing source() refs must keep resolving
-    assert source["database"] == "bronze_featherbase" and source["schema"] == "public"
-    names = [t["name"] for t in source["tables"]]
-    assert set(LIVE_TABLES) <= set(names)
-    assert "_dlt_loads" in names
+    assert [s["name"] for s in doc["sources"]] == [
+        "bronze_featherbase__access", "bronze_featherbase__activity",
+        "bronze_featherbase__application", "bronze_featherbase__catalog"]
+    assert {s["schema"] for s in doc["sources"]} == {"access", "activity", "application", "catalog"}
+    assert {s["database"] for s in doc["sources"]} == {"bronze_featherbase"}
+    by = _tables_by_source(doc)
+    assert set(by["bronze_featherbase__catalog"]) == {"table_def", "column_def", "_dlt_loads"}
+    assert set(by["bronze_featherbase__access"]) == {"user", "role", "has_role", "_dlt_loads"}
+    assert set(by["bronze_featherbase__activity"]) == {"comment", "_dlt_loads"}
+    assert set(by["bronze_featherbase__application"]) == {
+        "background_job", "home_page", "home_page_link", "job_execution", "_dlt_loads"}
+    every = {t for tables in by.values() for t in tables}
+    assert set(LIVE_TABLES) <= every
 
 
 def test_meta_blocks_carry_class_module_and_source_identity():
     m, plan = _featherbase_plan()
-    doc = yaml.safe_load(generate_dbt.render(m, plan))
-    by = {t["name"]: t for t in doc["sources"][0]["tables"]}
-    assert by["background_job"]["meta"]["table_class"] == "source_operational"
-    assert by["job_execution"]["meta"]["table_class"] == "source_operational"
-    assert by["table_def"]["meta"]["table_class"] == "source_system"
-    assert by["comment"]["meta"]["table_class"] == "application"
-    assert by["comment"]["meta"]["source_module"] == "Core"
-    assert by["comment"]["meta"]["source_schema"] == "public"
-    assert by["comment"]["meta"]["source_table"] == "comment"
-    assert by["_dlt_loads"]["meta"]["table_class"] == "loader_internal"
+    by = _tables_by_source(yaml.safe_load(generate_dbt.render(m, plan)))
+    app, cat, act = (by["bronze_featherbase__application"], by["bronze_featherbase__catalog"],
+                     by["bronze_featherbase__activity"])
+    assert app["background_job"]["meta"]["table_class"] == "source_operational"
+    assert app["job_execution"]["meta"]["table_class"] == "source_operational"
+    assert cat["table_def"]["meta"]["table_class"] == "source_system"
+    assert act["comment"]["meta"]["table_class"] == "application"
+    assert act["comment"]["meta"]["source_module"] == "Core"
+    assert act["comment"]["meta"]["source_schema"] == "public"   # the SOURCE schema, not activity
+    assert act["comment"]["meta"]["source_table"] == "comment"
+    assert act["_dlt_loads"]["meta"]["table_class"] == "loader_internal"
 
 
 def test_dlt_loads_keeps_the_24h_warn_only_freshness_backstop():
     m, plan = _featherbase_plan()
-    loads = {t["name"]: t for t in yaml.safe_load(generate_dbt.render(m, plan))["sources"][0]["tables"]}["_dlt_loads"]
-    assert loads["loaded_at_field"] == "inserted_at"
-    assert loads["freshness"] == {"warn_after": {"count": 24, "period": "hour"}}
-    assert "error_after" not in loads
+    for source in yaml.safe_load(generate_dbt.render(m, plan))["sources"]:
+        loads = {t["name"]: t for t in source["tables"]}["_dlt_loads"]
+        assert loads["loaded_at_field"] == "inserted_at"
+        assert loads["freshness"] == {"warn_after": {"count": 24, "period": "hour"}}
+        assert "error_after" not in loads
 
 
 def test_adapter_description_wins_over_the_default():

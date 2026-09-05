@@ -91,7 +91,7 @@ APPEND_ONLY_REASON = ("append_only: the destination keeps every row version, so 
                       "cannot tie against the source's current rows")
 
 
-def reconcile_counts(dsn: str, destination, relations, schema_map,
+def reconcile_counts(dsn: str, destination, relations, targets,
                      *, threshold: int = RECONCILE_MAX_ROWS,
                      exclude: "list[str] | None" = None,
                      append_only: "set | None" = None) -> list[dict]:
@@ -100,9 +100,11 @@ def reconcile_counts(dsn: str, destination, relations, schema_map,
     skipped with a reason — never as a silent pass. `exclude` exists because a relation this
     drainer WRITES DURING THE RUN (its own `control.run`/`control.event`) can never tie "now"
     against "now"; `append_only` because one source UPDATE leaves two destination row versions,
-    which would pin that table to EV_ERROR for the rest of its life.
+    which would pin that table to EV_ERROR for the rest of its life. `targets` maps
+    (schema, table) -> destination schema; a relation not in it is counted where it came from.
     """
     out: list[dict] = []
+    target = lambda s, t: targets.get((s, t), s)  # noqa: E731
     patterns = list(exclude or [])
     keyless = set(append_only or ())
     compared: list[tuple] = []   # (schema, table, source_rows), counted on one dest connection
@@ -130,9 +132,9 @@ def reconcile_counts(dsn: str, destination, relations, schema_map,
             compared.append((schema, table, int(src)))
             out.append(None)   # placeholder keeps relation order
     dest_counts = destination.table_row_counts(
-        [(schema_map.get(s, s), t) for s, t, _ in compared]) if compared else {}
+        [(target(s, t), t) for s, t, _ in compared]) if compared else {}
     for schema, table, src in compared:
-        dest = dest_counts.get((schema_map.get(schema, schema), table))
+        dest = dest_counts.get((target(schema, table), table))
         out[out.index(None)] = {
             "schema": schema, "table": table, "skipped": False,
             "source_rows": src, "destination_rows": dest,
