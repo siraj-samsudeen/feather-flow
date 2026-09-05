@@ -25,7 +25,9 @@ is always `pg_md_cdc`. Env vars, matching `registrations/*.yml`:
 | `CONTROL_PG_DSN` | the control-plane Postgres DSN | Railway reference var — hard dependency unless `--dev` |
 | `CONTROL_WAL_DIR` | a mounted (non-ephemeral) path | only needed if `control.event_durability: persistent_local_wal`; neither shipped manifest uses it |
 
-Cron: `*/5 * * * *` (`railway.json`). Details, health-check queries and the destructive-command
+Cron: `*/5 * * * *`, set on the **service instance** (`railway api` `serviceInstanceUpdate`, or
+the dashboard) — `railway.json` is NOT honoured on these instances and must not be cited as the
+schedule (`docs/agents/gotchas/railway-status-stale-cron-schedule.md`). Details, health-check queries and the destructive-command
 confirmations live in the runbook, not here.
 
 ## Commands
