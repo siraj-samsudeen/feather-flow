@@ -532,8 +532,8 @@ def resolve_unchanged_toast(
         raise ValueError(
             f"table {table_name!r}: UPDATE carries unchanged-TOAST column(s) but no full old"
             " tuple to recover them from. Set REPLICA IDENTITY FULL on the table"
-            f' (ALTER TABLE "{table_name}" REPLICA IDENTITY FULL) — the featherbase_extract'
-            " drainer enforces this each tick; re-run it or apply the ALTER by hand."
+            f' (ALTER TABLE "{table_name}" REPLICA IDENTITY FULL) — this drainer enforces this'
+            " each tick; re-run it or apply the ALTER by hand."
         )
     return [o if n.col_data_category == "u" else n for n, o in zip(new, old)]
 

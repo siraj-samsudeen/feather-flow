@@ -5,7 +5,8 @@ one Railway service instance per registration. A reviewed declaration is suffici
 PostgreSQL database into MotherDuck at bronze fidelity — no per-source extractor.
 
 Plan: `docs/plans/issue_3079_pg_md_cdc_runtime.md`. It generalizes the #2851 Featherbase pilot
-(`featherbase_extract/`), which keeps running until an operator flips the Railway service root.
+(`featherbase_extract/`) — cut over to this runtime on 05-Sep-2026 and deleted from the repo
+the same day (#3156).
 **Operator runbook (activation, status, pause, slot-fuse recovery, resnapshot, declaration
 changes, rollback, decommission, the Featherbase cutover and control-plane activation
 checklists): `docs/agents/deployment.md`'s `pg-md-cdc` row + `docs/agents/pg-md-cdc-runbook.md`.**
