@@ -18,7 +18,6 @@ VENDORED = [
     REPO / "zakya_extract/src/control_plane",
     REPO / "sap_bronze/src/control_plane",
     REPO / "dbt_runner/src/control_plane",
-    REPO / "featherbase_extract/src/control_plane",
     REPO / "ptp_extract/src/control_plane",
     REPO / "stylehr_bronze/src/control_plane",
     REPO / "pg_md_cdc/src/control_plane",
