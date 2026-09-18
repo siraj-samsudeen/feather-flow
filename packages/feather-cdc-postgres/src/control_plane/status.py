@@ -18,7 +18,7 @@ RUN_PARTIAL = "partial"   # finished, some units errored (or budget cut it short
 RUN_FAILED = "failed"     # finished by an unhandled exception
 RUN_DIED = "died"         # never finished itself; reconciled by a later run (lease lapsed)
 
-RUN_STATES = frozenset({RUN_RUNNING, RUN_OK, RUN_PARTIAL, RUN_FAILED, RUN_DIED})
+RUN_STATES = frozenset({RUN_RUNNING, RUN_OK, RUN_PARTIAL, RUN_FAILED, RUN_DIED})  # @spec run_vocabulary_unvalidated
 
 # --- control.run.stop_reason (why the run ended) ---
 STOP_CLEAN = "clean"               # ran to natural completion
@@ -33,7 +33,7 @@ STOP_REASONS = frozenset({
 })
 
 # --- control.event.status (per unit/cell outcome) ---
-EV_OK = "ok"                    # landed rows
+EV_OK = "ok"                    # landed rows  # @spec event_vocabulary_unvalidated
 EV_ZERO_ROWS = "zero_rows"      # source reachable, genuinely empty (http 200)
 EV_SOURCE_ERROR = "source_error"  # source returned non-200 / bad payload (API extractors)
 EV_TIMEOUT = "timeout"          # source did not respond at all (http=0, all attempts threw)
