@@ -23,7 +23,7 @@ def replay_prior(conn: psycopg.Connection, extractor: str, wal_dir: str, this_ru
     pattern = os.path.join(wal_dir, extractor, "*.jsonl")
     for path in sorted(glob.glob(pattern)):
         run_id = os.path.basename(path)[: -len(".jsonl")]
-        if run_id == this_run_id:
+        if run_id == this_run_id:  # @spec prior_wal_replayed_before_lease
             continue
         try:
             shipped += shipper.ship(conn, path)

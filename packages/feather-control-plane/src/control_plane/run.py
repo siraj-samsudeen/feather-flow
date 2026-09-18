@@ -68,14 +68,15 @@ class _Renewer:
                 pass
 
     def _loop(self) -> None:
-        while not self._stop.wait(self._interval):
+        while not self._stop.wait(self._interval):  # @spec lease_renewed_in_background
             try:
                 if self._conn is None or self._conn.closed:
                     self._conn = psycopg.connect(self._dsn, connect_timeout=10)
                 if not store.lease_renew(self._conn, self._extractor, self._run_id, self._ttl):
+                    # @spec lease_loss_does_not_stop_run
                     print(f"[control_plane] lease lost for {self._extractor}/{self._run_id} "
                           "(another run reclaimed it?)", flush=True)
-            except Exception as exc:  # noqa: BLE001 — renew must never crash the run
+            except Exception as exc:  # noqa: BLE001 — renew must never crash the run  # @spec false_death_of_live_run
                 print(f"[control_plane] lease renew failed (will retry): "
                       f"{type(exc).__name__}: {str(exc)[:160]}", flush=True)
                 if self._conn is not None:
@@ -101,12 +102,12 @@ class RunContext:
             return
         try:
             shipper.ship(self.conn, self.wal.path)
-        except Exception as exc:  # noqa: BLE001 — WAL already holds it; recovery ships later
+        except Exception as exc:  # noqa: BLE001 — WAL already holds it; recovery ships later  # @spec ship_as_you_go
             print(f"[control_plane] ship failed (buffered in WAL): "
                   f"{type(exc).__name__}: {str(exc)[:160]}", flush=True)
 
     def _emit(self, record: dict) -> None:
-        self.wal.append(record)   # durable first
+        self.wal.append(record)   # durable first  # @spec wal_before_network
         self._ship_now()          # then best-effort to PG
 
     # --- public API ---
@@ -125,10 +126,10 @@ class RunContext:
             "business_date": business_date, "status": status, "http_status": http_status,
             "rows": rows, "source_attempts": source_attempts, "sink_attempts": sink_attempts,
             "pull_ms": pull_ms, "load_ms": load_ms,
-            "error_detail": (error_detail[:ERROR_DETAIL_CAP] if error_detail else None),
+            "error_detail": (error_detail[:ERROR_DETAIL_CAP] if error_detail else None),  # @spec error_detail_capped
             "extra": extra,
         })
-        self._seq += 1
+        self._seq += 1  # @spec event_one_row_per_unit
 
     def budget(self, name: str, *, limit: int | None, used: int | None,
                remaining: int | None, hit: bool) -> None:
@@ -142,7 +143,7 @@ class RunContext:
     def finish(self, run_status: str, *, stop_reason: str, n_ok: int | None = None,
                n_err: int | None = None, n_skipped: int | None = None) -> None:
         """Close the run with its final disposition. Idempotent (first call wins)."""
-        if self._finished:
+        if self._finished:  # @spec run_finish_first_call_wins
             return
         self._emit({
             "kind": "run_finish", "extractor": self.cp.extractor, "run_id": self.run_id,
@@ -176,16 +177,17 @@ class ControlPlane:
         # MUST be reachable or the run aborts — never run blind. A failure here propagates out of
         # the `with` before any work begins. (dsn=None is the explicit no-control-plane mode for
         # dev/test → WAL-only.)
-        if self.dsn:
+        if self.dsn:  # @spec hard_startup_dependency
             conn = psycopg.connect(self.dsn, connect_timeout=10)
             try:
                 store.ensure_schema(conn)
                 recovery.replay_prior(conn, self.extractor, self.wal_dir, run_id)
+                # @spec lease_refuses_second_writer
                 if not store.lease_acquire(conn, self.extractor, run_id, self.lease_ttl_s):
                     raise ControlPlaneError(
                         f"another live run holds the lease for {self.extractor!r} "
                         "(fresh lease present) — refusing to start a second writer")
-                store.reconcile_dead(conn, self.extractor, run_id)
+                store.reconcile_dead(conn, self.extractor, run_id)  # @spec death_visible_only_at_next_start
                 renewer = _Renewer(self.dsn, self.extractor, run_id,
                                    self.lease_ttl_s, self.renew_interval_s)
                 renewer.start()
@@ -200,7 +202,7 @@ class ControlPlane:
                 raise
 
         rc = RunContext(self, run_id, wal, conn)
-        rc._emit({
+        rc._emit({  # @spec run_start_recorded_before_work
             "kind": "run_start", "run_id": run_id, "extractor": self.extractor,
             "mode": mode, "host": self.host, "pid": os.getpid(),
             "started_at": self._started_at, "status": status.RUN_RUNNING,
@@ -211,17 +213,17 @@ class ControlPlane:
             yield rc
         except BaseException:
             if not rc._finished:
-                rc.finish(status.RUN_FAILED, stop_reason=status.STOP_ERROR)
+                rc.finish(status.RUN_FAILED, stop_reason=status.STOP_ERROR)  # @spec implicit_finish_on_exit.sys_exit_inside_block
             raise
         finally:
             if not rc._finished:
-                rc.finish(status.RUN_OK, stop_reason=status.STOP_CLEAN)
+                rc.finish(status.RUN_OK, stop_reason=status.STOP_CLEAN)  # @spec implicit_finish_on_exit
             if renewer is not None:
                 renewer.stop()
             if conn is not None:
                 try:
-                    store.lease_release(conn, self.extractor, run_id)
-                    shipper.ship(conn, wal.path)  # final flush
+                    store.lease_release(conn, self.extractor, run_id)  # @spec lease_released_on_exit
+                    shipper.ship(conn, wal.path)  # final flush  # @spec final_flush_on_exit
                 except Exception as exc:  # noqa: BLE001
                     print(f"[control_plane] final flush/release failed (WAL retained): "
                           f"{type(exc).__name__}: {str(exc)[:160]}", flush=True)

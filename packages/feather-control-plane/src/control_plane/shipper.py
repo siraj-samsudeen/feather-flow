@@ -52,5 +52,5 @@ def ship(conn: psycopg.Connection, wal_path: str) -> int:
     except Exception:
         conn.rollback()
         raise
-    _write_off(wal_path, new_off)
+    _write_off(wal_path, new_off)  # @spec whole_tail_one_transaction
     return len(records)

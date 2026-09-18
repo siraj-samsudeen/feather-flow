@@ -22,6 +22,7 @@ def _q(dsn, sql, args=()):
 # --- shipping + idempotency ---
 
 def test_event_upsert_idempotent(fresh_schema):
+    """@spec shipping_idempotent"""
     dsn = fresh_schema
     rec = {"kind": "event", "extractor": EXT, "run_id": "R1", "seq": 0,
            "ran_at": "2026-06-24T01:00:00+00:00", "entity": "sales_item_wise", "unit": "1001",
@@ -40,7 +41,9 @@ def test_event_upsert_idempotent(fresh_schema):
 
 def test_event_extra_jsonb_round_trip(fresh_schema):
     """Source-specific metrics (Zakya's n_requests/gen_ms/rate_remaining) ride in control.event.extra
-    losslessly; a None extra stays SQL NULL (#222, D1)."""
+    losslessly; a None extra stays SQL NULL (#222, D1).
+
+    @spec event_one_row_per_unit"""
     dsn = fresh_schema
     with psycopg.connect(dsn) as c:
         with c.cursor() as cur:
@@ -60,7 +63,9 @@ def test_event_extra_jsonb_round_trip(fresh_schema):
 
 def test_run_extra_jsonb_survives_a_finish_that_carries_none(fresh_schema):
     """control.run.extra (#2640) — dbt's bronze_watermark/action/dbt_rc land at run_start, and a
-    finish without an extra must NOT erase them (the ON CONFLICT uses COALESCE, not EXCLUDED)."""
+    finish without an extra must NOT erase them (the ON CONFLICT uses COALESCE, not EXCLUDED).
+
+    @spec run_extra_preserved_on_finish.finish_without_extra"""
     dsn = fresh_schema
     extra = {"action": "ran", "bronze_watermark": "2026-08-28T05:55:00+00:00", "dbt_rc": 1}
     with psycopg.connect(dsn) as c:
@@ -79,6 +84,7 @@ def test_run_extra_jsonb_survives_a_finish_that_carries_none(fresh_schema):
 
 
 def test_run_extra_is_replaced_when_the_finish_carries_one(fresh_schema):
+    """@spec run_extra_preserved_on_finish"""
     dsn = fresh_schema
     with psycopg.connect(dsn) as c:
         with c.cursor() as cur:
@@ -95,6 +101,7 @@ def test_run_extra_is_replaced_when_the_finish_carries_one(fresh_schema):
 
 
 def test_shipper_tails_and_resumes(fresh_schema, tmp_path):
+    """@spec whole_tail_one_transaction"""
     dsn = fresh_schema
     w = Wal(str(tmp_path / EXT / "R2.jsonl"))
     w.append({"kind": "run_start", "run_id": "R2", "extractor": EXT, "mode": "nightly",
@@ -118,6 +125,7 @@ def test_shipper_tails_and_resumes(fresh_schema, tmp_path):
 # --- the lease: deterministic death detection ---
 
 def test_lease_steal_only_if_expired(fresh_schema):
+    """@spec lease_refuses_second_writer"""
     dsn = fresh_schema
     with psycopg.connect(dsn) as c:
         assert store.lease_acquire(c, EXT, "A", ttl_s=300) is True    # first holder
@@ -125,6 +133,7 @@ def test_lease_steal_only_if_expired(fresh_schema):
 
 
 def test_lease_reclaim_after_expiry(fresh_schema):
+    """@spec lease_steal_only_if_expired.lapsed_lease_reclaimed"""
     dsn = fresh_schema
     with psycopg.connect(dsn) as c:
         assert store.lease_acquire(c, EXT, "A", ttl_s=-1) is True      # already-expired lease
@@ -134,6 +143,7 @@ def test_lease_reclaim_after_expiry(fresh_schema):
 
 
 def test_lease_renew_extends(fresh_schema):
+    """@spec lease_renewed_in_background.renewal_extends_expiry"""
     dsn = fresh_schema
     with psycopg.connect(dsn) as c:
         store.lease_acquire(c, EXT, "A", ttl_s=5)
@@ -147,6 +157,7 @@ def test_lease_renew_extends(fresh_schema):
 # --- reconcile_dead ---
 
 def test_reconcile_marks_unfinished_died(fresh_schema):
+    """@spec unfinished_prior_runs_marked_died"""
     dsn = fresh_schema
     with psycopg.connect(dsn) as c:
         with c.cursor() as cur:
@@ -164,6 +175,8 @@ def test_reconcile_marks_unfinished_died(fresh_schema):
 # --- end-to-end through ControlPlane ---
 
 def test_controlplane_full_lifecycle(fresh_schema, tmp_path):
+    """@spec budget_recorded_every_run
+    @spec event_one_row_per_unit.two_events_two_rows"""
     dsn = fresh_schema
     cp = ControlPlane(EXT, dsn=dsn, wal_dir=str(tmp_path), lease_ttl_s=300, renew_interval_s=60)
     with cp.run("nightly", run_id="LIVE1") as run:
@@ -187,7 +200,9 @@ def test_controlplane_full_lifecycle(fresh_schema, tmp_path):
 
 def test_controlplane_reconciles_dead_predecessor(fresh_schema, tmp_path):
     """A crashed run (started, never finished, lease lapsed) is reconciled to `died` by the
-    next run — the core death-detection guarantee."""
+    next run — the core death-detection guarantee.
+
+    @spec unfinished_prior_runs_marked_died.crashed_predecessor"""
     dsn = fresh_schema
     with psycopg.connect(dsn) as c:
         with c.cursor() as cur:
@@ -205,7 +220,9 @@ def test_controlplane_reconciles_dead_predecessor(fresh_schema, tmp_path):
 
 def test_controlplane_refuses_second_writer(fresh_schema, tmp_path):
     """A genuinely-live run (fresh lease) is never displaced — the 14h-job-not-killed property:
-    the second starter refuses rather than stealing the lease."""
+    the second starter refuses rather than stealing the lease.
+
+    @spec lease_refuses_second_writer.fresh_lease_held"""
     dsn = fresh_schema
     with psycopg.connect(dsn) as c:
         store.lease_acquire(c, EXT, "LONGRUN", ttl_s=300)   # alive, fresh lease
@@ -219,7 +236,9 @@ def test_controlplane_refuses_second_writer(fresh_schema, tmp_path):
 
 def test_controlplane_hard_dependency_raises_when_pg_down(tmp_path):
     """Postgres is a HARD dependency (ADR 0028): a configured-but-unreachable DSN ABORTS the run —
-    no blind runs. The failure propagates out of the `with` before any work begins."""
+    no blind runs. The failure propagates out of the `with` before any work begins.
+
+    @spec hard_startup_dependency.unreachable_at_start"""
     import pytest
     cp = ControlPlane(EXT, dsn="postgresql://nobody@127.0.0.1:1/none", wal_dir=str(tmp_path))
     with pytest.raises(Exception):
@@ -229,7 +248,10 @@ def test_controlplane_hard_dependency_raises_when_pg_down(tmp_path):
 
 def test_controlplane_dsn_none_is_wal_only_dev_mode(tmp_path):
     """dsn=None is the explicit no-control-plane mode (dev/test): events go to the WAL only, no PG.
-    This is what the hermetic extractor-wiring tests rely on."""
+    This is what the hermetic extractor-wiring tests rely on.
+
+    @spec hard_startup_dependency.dsn_none_is_wal_only
+    @spec run_start_recorded_before_work"""
     cp = ControlPlane(EXT, dsn=None, wal_dir=str(tmp_path))
     with cp.run("nightly", run_id="DEVRUN") as run:
         run.event(entity="f", status=status.EV_OK, rows=1)

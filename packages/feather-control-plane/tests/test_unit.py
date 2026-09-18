@@ -18,6 +18,7 @@ def test_wal_roundtrip(tmp_path):
 
 
 def test_wal_serialises_dates(tmp_path):
+    """@spec wal_torn_tail_not_consumed"""
     w = walmod.Wal(str(tmp_path / "r.jsonl"))
     w.append({"ran_at": dt.datetime(2026, 6, 24, 1, 2, 3, tzinfo=dt.timezone.utc),
               "business_date": dt.date(2026, 6, 24)})
@@ -28,7 +29,9 @@ def test_wal_serialises_dates(tmp_path):
 
 def test_wal_partial_trailing_line_not_consumed(tmp_path):
     """A crash mid-write leaves a newline-less tail; read_new must stop before it so the
-    offset never advances past durable data (the recovery invariant)."""
+    offset never advances past durable data (the recovery invariant).
+
+    @spec wal_torn_tail_not_consumed.crash_mid_write"""
     w = walmod.Wal(str(tmp_path / "r.jsonl"))
     w.append({"seq": 0})
     _, off = walmod.read_new(w.path)
@@ -53,6 +56,8 @@ def test_wal_incremental_offset(tmp_path):
 
 
 def test_status_vocab_partitions():
+    """@spec run_vocabulary_unvalidated
+    @spec event_vocabulary_unvalidated"""
     assert status.RUN_DIED in status.RUN_STATES
     assert status.STOP_BUDGET_TIME in status.STOP_REASONS
     # API-extractor split vs DB-extractor fused leg are distinct words

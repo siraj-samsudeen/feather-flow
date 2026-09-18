@@ -127,7 +127,7 @@ def ensure_schema(conn: psycopg.Connection) -> None:
     the featherbase drainer's startup 27 seconds earlier. With featherbase ticking every 5 minutes
     that was a dice-roll at every startup, fleet-wide.
     """
-    if _schema_is_current(conn):
+    if _schema_is_current(conn):  # @spec schema_ensured_without_locks
         conn.rollback()   # end the read's implicit transaction; hold no locks on the way out
         return
 
@@ -148,7 +148,7 @@ def ensure_schema(conn: psycopg.Connection) -> None:
 
 # --- WAL-record projection (the shipper calls apply() per record, in file order) ---
 
-def apply(cur: psycopg.Cursor, rec: dict) -> None:
+def apply(cur: psycopg.Cursor, rec: dict) -> None:  # @spec shipping_idempotent
     """Project one WAL record into Postgres. Idempotent; dispatched by `kind`."""
     kind = rec["kind"]
     if kind == "run_start":
@@ -169,12 +169,12 @@ def apply(cur: psycopg.Cursor, rec: dict) -> None:
             "(run_id, extractor, started_at, finished_at, status, stop_reason, n_ok, n_err, n_skipped, extra) "
             "VALUES (%s,%s,%s::timestamptz,%s::timestamptz,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (run_id) DO UPDATE SET "
-            "finished_at=EXCLUDED.finished_at, status=EXCLUDED.status, "
+            "finished_at=EXCLUDED.finished_at, status=EXCLUDED.status, "  # @spec died_overwritten_by_late_finish
             "stop_reason=EXCLUDED.stop_reason, n_ok=EXCLUDED.n_ok, n_err=EXCLUDED.n_err, "
             "n_skipped=EXCLUDED.n_skipped, "
             # COALESCE, not overwrite: a finish that carries no extra must never erase what
             # run_start recorded (dbt's bronze_watermark lands at start).
-            "extra=COALESCE(EXCLUDED.extra, control.run.extra)",
+            "extra=COALESCE(EXCLUDED.extra, control.run.extra)",  # @spec run_extra_preserved_on_finish
             (rec["run_id"], rec["extractor"], rec.get("started_at", rec["finished_at"]),
              rec["finished_at"], rec["status"], rec.get("stop_reason"),
              rec.get("n_ok"), rec.get("n_err"), rec.get("n_skipped"),
@@ -199,7 +199,7 @@ def apply(cur: psycopg.Cursor, rec: dict) -> None:
             "INSERT INTO control.budget_usage "
             "(run_id, extractor, budget_name, limit_val, used, remaining, hit, ran_at) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s,%s::timestamptz) "
-            "ON CONFLICT (run_id, extractor, budget_name) DO UPDATE SET "
+            "ON CONFLICT (run_id, extractor, budget_name) DO UPDATE SET "  # @spec budget_recorded_every_run
             "limit_val=EXCLUDED.limit_val, used=EXCLUDED.used, remaining=EXCLUDED.remaining, "
             "hit=EXCLUDED.hit, ran_at=EXCLUDED.ran_at",
             (rec["run_id"], rec["extractor"], rec["budget_name"], rec.get("limit_val"),
@@ -251,7 +251,7 @@ def lease_acquire(conn: psycopg.Connection, extractor: str, run_id: str, ttl_s: 
             "VALUES (%s, %s, now() + make_interval(secs => %s)) "
             "ON CONFLICT (extractor) DO UPDATE SET "
             "run_id = EXCLUDED.run_id, lease_expires_at = EXCLUDED.lease_expires_at "
-            "WHERE control.lease.lease_expires_at < now() "
+            "WHERE control.lease.lease_expires_at < now() "  # @spec lease_steal_only_if_expired
             "RETURNING run_id",
             (extractor, run_id, ttl_s),
         )
@@ -292,7 +292,7 @@ def reconcile_dead(conn: psycopg.Connection, extractor: str, run_id: str) -> int
         cur.execute(
             "UPDATE control.run SET status = 'died', stop_reason = 'died', "
             "finished_at = now(), reconciled_by = %s "
-            "WHERE extractor = %s AND finished_at IS NULL AND run_id <> %s",
+            "WHERE extractor = %s AND finished_at IS NULL AND run_id <> %s",  # @spec unfinished_prior_runs_marked_died
             (run_id, extractor, run_id),
         )
         n = cur.rowcount

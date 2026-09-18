@@ -69,7 +69,9 @@ def test_the_legacy_unconditional_ddl_deadlocks(fresh_schema):
 
 
 def test_ensure_schema_survives_concurrent_startups(fresh_schema):
-    """The guard: eight writers starting at once, as the fleet does. No exception, no deadlock."""
+    """The guard: eight writers starting at once, as the fleet does. No exception, no deadlock.
+
+    @spec schema_ensured_without_locks.eight_writers_start_together"""
     errors = _sessions_racing_for(fresh_schema, store.ensure_schema, n=8)
     assert errors == [], f"ensure_schema raised under concurrency: {errors}"
 
@@ -83,6 +85,8 @@ def test_startup_is_not_blocked_by_someone_holding_control_event_exclusively(fre
     and raises LockNotAvailable, because its unconditional ALTER has to queue behind the holder.
     (Checking pg_locks after the call instead would prove nothing — the commit has already
     released everything by then, so that version of this test passed on the broken build too.)
+
+    @spec schema_ensured_without_locks
     """
     holder = psycopg.connect(fresh_schema)
     try:
@@ -101,7 +105,9 @@ def test_startup_is_not_blocked_by_someone_holding_control_event_exclusively(fre
 
 
 def test_ensure_schema_still_builds_a_schema_from_scratch(pg_dsn):
-    """The slow path must still work — this is the function's actual job."""
+    """The slow path must still work — this is the function's actual job.
+
+    @spec schema_ensured_without_locks"""
     with psycopg.connect(pg_dsn) as conn:
         with conn.cursor() as cur:
             cur.execute("DROP SCHEMA IF EXISTS control CASCADE")
@@ -116,7 +122,9 @@ def test_ensure_schema_still_builds_a_schema_from_scratch(pg_dsn):
 
 def test_ensure_schema_still_adds_a_missing_migrated_column(fresh_schema):
     """The migration path (#2640's `extra`) must survive the fast-path short-circuit: a plane
-    missing the column has to get it, or the skip would silently strand an old control plane."""
+    missing the column has to get it, or the skip would silently strand an old control plane.
+
+    @spec schema_ensured_without_locks"""
     with psycopg.connect(fresh_schema) as conn:
         with conn.cursor() as cur:
             cur.execute("ALTER TABLE control.event DROP COLUMN extra")
@@ -129,7 +137,9 @@ def test_ensure_schema_still_adds_a_missing_migrated_column(fresh_schema):
 
 
 def test_concurrent_first_runs_all_succeed(pg_dsn):
-    """Cold start, eight writers at once — the case the advisory lock exists for."""
+    """Cold start, eight writers at once — the case the advisory lock exists for.
+
+    @spec schema_ensured_without_locks.eight_writers_start_together"""
     with psycopg.connect(pg_dsn) as conn:
         with conn.cursor() as cur:
             cur.execute("DROP SCHEMA IF EXISTS control CASCADE")

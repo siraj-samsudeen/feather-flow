@@ -54,7 +54,7 @@ def read_new(path: str, start_offset: int = 0) -> tuple[list[dict], int]:
     records: list[dict] = []
     consumed = 0
     for line in data.splitlines(keepends=True):
-        if not line.endswith(b"\n"):
+        if not line.endswith(b"\n"):  # @spec wal_torn_tail_not_consumed
             break  # partial trailing line — not durable, stop here
         consumed += len(line)
         s = line.strip()
