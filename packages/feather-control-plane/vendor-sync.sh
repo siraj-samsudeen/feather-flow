@@ -30,4 +30,23 @@ for dest in "${TARGETS[@]}"; do
   find "$dest/control_plane" -name __pycache__ -type d -exec rm -rf {} +
   echo "vendored -> $dest/control_plane"
 done
+
+# business_day.py alone (#3854), for two consumers that must NOT take the whole package:
+#   essl_stylehr_sync_audit — not a control-plane service; its pyproject declares pyodbc + duckdb
+#     and nothing else, and control_plane/__init__.py imports psycopg. Vendoring a Postgres
+#     dependency into a read-only LAN audit to gain one stdlib module is the wrong trade.
+#   scripts/ — hand-run tools take sys.path[0] = scripts/, so `import business_day` resolves there;
+#     the repo-root venv cannot import control_plane at all (it has no src/ on the path).
+# Byte-identical, and guarded by tests/test_business_day_ist.py the same way the packages above
+# are guarded by control_plane/tests/test_vendored.py.
+SINGLE_FILE_TARGETS=(
+  "essl_stylehr_sync_audit/src/essl_stylehr_sync_audit"
+  "scripts"
+)
+for dest in "${SINGLE_FILE_TARGETS[@]}"; do
+  cp "$SRC/business_day.py" "$dest/business_day.py"
+  echo "vendored -> $dest/business_day.py"
+done
+
 echo "done. sameness is guarded by control_plane/tests/test_vendored.py"
+echo "      and, for the single-file copies, tests/test_business_day_ist.py"
