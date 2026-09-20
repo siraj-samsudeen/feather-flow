@@ -5,6 +5,10 @@ description = "Durable failure observability for the extractor fleet: WAL + Post
 requires-python = ">=3.12"
 dependencies = [
     "psycopg[binary]>=3.1",
+    # business_day.py builds ZoneInfo("Asia/Kolkata") AT IMPORT (#3854). psycopg already requires
+    # tzdata but ONLY under `sys_platform == 'win32'`, so on Linux it is absent and `zoneinfo` would
+    # be left depending on the image's /usr/share/zoneinfo — which bookworm-slim does not guarantee.
+    "tzdata>=2026.1",
 ]
 
 [build-system]
