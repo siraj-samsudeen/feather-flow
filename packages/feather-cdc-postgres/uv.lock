@@ -518,6 +518,7 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg2-binary" },
     { name = "pyyaml" },
+    { name = "tzdata" },
 ]
 
 [package.dev-dependencies]
@@ -532,6 +533,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "psycopg2-binary", specifier = ">=2.9.9" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "tzdata", specifier = ">=2026.1" },
 ]
 
 [package.metadata.requires-dev]

@@ -18,6 +18,12 @@ dependencies = [
     "psycopg[binary]>=3.1",
     # Registration manifests are YAML (registrations/*.yml).
     "pyyaml>=6.0",
+    # business_day.py (vendored with control_plane) builds ZoneInfo("Asia/Kolkata") AT IMPORT
+    # (#3854). dlt -> pendulum already requires tzdata unconditionally, so this is already
+    # installed; it is DECLARED because a zoneinfo lookup that silently depends on somebody else's
+    # dependency tree is one dlt release away from being a startup crash, and the alternative (the
+    # image's /usr/share/zoneinfo) is not guaranteed on bookworm-slim.
+    "tzdata>=2026.1",
 ]
 
 [dependency-groups]

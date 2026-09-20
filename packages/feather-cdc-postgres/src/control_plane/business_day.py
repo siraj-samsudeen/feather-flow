@@ -20,6 +20,19 @@ from zoneinfo import ZoneInfo
 IST = ZoneInfo("Asia/Kolkata")
 
 
+def ist_now() -> dt.datetime:
+    """The current instant as an IST-aware datetime — for the callers that need the HOUR.
+
+    A tick that asks "is it past 22:00 IST?" needs a datetime, not a date, and building
+    `now_utc().astimezone(ZoneInfo(...))` inline is how a module ends up with two spellings of IST
+    and no rule about which to use. Use this, then `.hour` / `.date()` off it.
+
+    This is still a *business* clock, not an instant to store: stamp `_loaded_at` with
+    `datetime.now(timezone.utc)` (ADR 0027), never with this.
+    """
+    return dt.datetime.now(IST)
+
+
 def ist_today() -> dt.date:
     """The calendar date it is *now in India* — the warehouse's business day.
 
@@ -29,7 +42,7 @@ def ist_today() -> dt.date:
     nightly started at 04:48 IST on 20-Sep-2026 (23:18 UTC on the 19th) pulled 18/17/16-Sep
     and lost 19-Sep entirely, with a clean `control.run` row and an all-`ok` grid (#3854).
     """
-    return dt.datetime.now(IST).date()
+    return ist_now().date()
 
 
 def ist_yesterday() -> dt.date:
