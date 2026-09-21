@@ -18,6 +18,8 @@ from __future__ import annotations
 import psycopg
 from psycopg.types.json import Json
 
+from . import status
+
 SCHEMA_DDL = """
 CREATE SCHEMA IF NOT EXISTS control;
 
@@ -94,6 +96,45 @@ _SCHEMA_ADVISORY_LOCK = 3_204_198_401
 _REQUIRED_TABLES = ("run", "lease", "event", "budget_usage")
 _REQUIRED_COLUMNS = (("event", "extra"), ("run", "extra"))
 
+# The dbt-ready notification (#3884). dbt-runner's worker LISTENs on this channel and runs a tick
+# the moment Zakya's coherent-batch marker is recorded, instead of waiting for its next slot.
+# AFTER INSERT ... FOR EACH ROW fires only for a row actually inserted, so a WAL replay that hits
+# `ON CONFLICT DO NOTHING` notifies nobody; a duplicate would be harmless anyway (the tick is
+# idempotent). NOTIFY is delivered at COMMIT, and the shipper commits each shipped tail at once
+# (ship-as-you-go), so the listener hears it seconds after the marker lands. Not durable: a
+# listener that is down misses it, which is why the worker also ticks on its registry slots.
+# To CHANGE the function body or filter, rename the trigger (the presence check below is by name).
+DBT_READY_CHANNEL = "dbt_ready"  # @spec ready_event_notify
+DBT_READY_TRIGGER = "event_dbt_ready_notify"
+DBT_READY_SOURCE = ("zakya", "transform_ready", status.EV_OK)  # extractor, entity, status
+DBT_READY_DDL = f"""
+CREATE OR REPLACE FUNCTION control.notify_dbt_ready() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+    PERFORM pg_notify('{DBT_READY_CHANNEL}', json_build_object(
+        'extractor', NEW.extractor, 'run_id', NEW.run_id,
+        'business_date', NEW.business_date)::text);
+    RETURN NULL;
+END
+$fn$;
+DO $do$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'control' AND c.relname = 'event' AND t.tgname = '{DBT_READY_TRIGGER}'
+    ) THEN
+        CREATE TRIGGER {DBT_READY_TRIGGER}
+            AFTER INSERT ON control.event FOR EACH ROW
+            WHEN (NEW.extractor = '{DBT_READY_SOURCE[0]}' AND NEW.entity = '{DBT_READY_SOURCE[1]}'
+                  AND NEW.status = '{DBT_READY_SOURCE[2]}')
+            EXECUTE FUNCTION control.notify_dbt_ready();
+    END IF;
+END
+$do$;
+"""
+
 
 def _schema_is_current(conn: psycopg.Connection) -> bool:
     """True when every table and migrated column already exists — a pure catalog read, no locks.
@@ -111,7 +152,15 @@ def _schema_is_current(conn: psycopg.Connection) -> bool:
             "WHERE table_schema = 'control' AND table_name = ANY(%s)",
             ([t for t, _ in _REQUIRED_COLUMNS],))
         columns = {(r[0], r[1]) for r in cur.fetchall()}
-        return set(_REQUIRED_COLUMNS) <= columns
+        if not set(_REQUIRED_COLUMNS) <= columns:
+            return False
+        # A catalog read like the two above: no lock on control.event.
+        cur.execute(
+            "SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'control' AND c.relname = 'event' AND t.tgname = %s",
+            (DBT_READY_TRIGGER,))
+        return cur.fetchone() is not None
 
 
 def ensure_schema(conn: psycopg.Connection) -> None:
@@ -143,6 +192,7 @@ def ensure_schema(conn: psycopg.Connection) -> None:
         # extractor has -- bronze_watermark, action, dbt_rc -- and bolting five dbt-specific
         # columns onto the table five writers share would be worse than one JSONB bag.
         cur.execute("ALTER TABLE control.run ADD COLUMN IF NOT EXISTS extra JSONB")
+        cur.execute(DBT_READY_DDL)  # #3884 — created only if absent, so a re-run takes no lock
     conn.commit()
 
 
