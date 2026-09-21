@@ -136,31 +136,43 @@ $do$;
 """
 
 
-def _schema_is_current(conn: psycopg.Connection) -> bool:
-    """True when every table and migrated column already exists — a pure catalog read, no locks.
+# How long the trigger-only migration may WAIT for control.event before it gives up for this start.
+# A shipper transaction holds RowExclusive on control.event; CREATE TRIGGER needs ShareRowExclusive
+# and must queue behind it. Bounded so a writer's startup is delayed seconds at worst, never
+# stalled -- and never part of a lock cycle, because this path takes no other table lock (#3884).
+_TRIGGER_LOCK_TIMEOUT = "5s"
 
-    This is the steady state on a live control plane, so the common path of ensure_schema() must
-    reach exactly here and stop: no CREATE, no ALTER, nothing that can block another session."""
+
+def _schema_state(conn: psycopg.Connection) -> str:
+    """'current', 'trigger_missing' (every table and column present, only #3884's trigger absent)
+    or 'stale' -- pure catalog reads, no lock on any control table."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'control'")
         tables = {r[0] for r in cur.fetchall()}
         if not set(_REQUIRED_TABLES) <= tables:
-            return False
+            return "stale"
         cur.execute(
             "SELECT table_name, column_name FROM information_schema.columns "
             "WHERE table_schema = 'control' AND table_name = ANY(%s)",
             ([t for t, _ in _REQUIRED_COLUMNS],))
         columns = {(r[0], r[1]) for r in cur.fetchall()}
         if not set(_REQUIRED_COLUMNS) <= columns:
-            return False
-        # A catalog read like the two above: no lock on control.event.
+            return "stale"
         cur.execute(
             "SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
             "JOIN pg_namespace n ON n.oid = c.relnamespace "
             "WHERE n.nspname = 'control' AND c.relname = 'event' AND t.tgname = %s",
             (DBT_READY_TRIGGER,))
-        return cur.fetchone() is not None
+        return "current" if cur.fetchone() is not None else "trigger_missing"
+
+
+def _schema_is_current(conn: psycopg.Connection) -> bool:
+    """True when every table, migrated column and the dbt-ready trigger exist — no locks.
+
+    This is the steady state on a live control plane, so the common path of ensure_schema() must
+    reach exactly here and stop: no CREATE, no ALTER, nothing that can block another session."""
+    return _schema_state(conn) == "current"
 
 
 def ensure_schema(conn: psycopg.Connection) -> None:
@@ -176,8 +188,27 @@ def ensure_schema(conn: psycopg.Connection) -> None:
     the featherbase drainer's startup 27 seconds earlier. With featherbase ticking every 5 minutes
     that was a dice-roll at every startup, fleet-wide.
     """
-    if _schema_is_current(conn):  # @spec schema_ensured_without_locks
+    state = _schema_state(conn)
+    if state == "current":  # @spec schema_ensured_without_locks
         conn.rollback()   # end the read's implicit transaction; hold no locks on the way out
+        return
+    if state == "trigger_missing":
+        # Every live plane on first start after #3884. NOT the full DDL path below: its CREATE
+        # INDEX (ShareLock on control.run) then ALTERs (AccessExclusive on control.event) form a
+        # cycle with a shipper holding control.event and updating control.run -- the #3091
+        # deadlock again, reproduced 4/4 in review. Only the trigger, lock-bounded; a start that
+        # cannot get the lock in time carries on without it and a later start installs it.
+        conn.rollback()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_ADVISORY_LOCK,))
+                cur.execute(f"SET LOCAL lock_timeout = '{_TRIGGER_LOCK_TIMEOUT}'")
+                cur.execute(DBT_READY_DDL)
+            conn.commit()
+        except psycopg.errors.LockNotAvailable:
+            conn.rollback()
+            print("[control_plane] dbt-ready trigger not installed this start (control.event "
+                  f"busy > {_TRIGGER_LOCK_TIMEOUT}); a later start will.", flush=True)
         return
 
     with conn.cursor() as cur:

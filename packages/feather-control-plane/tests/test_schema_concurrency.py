@@ -149,3 +149,77 @@ def test_concurrent_first_runs_all_succeed(pg_dsn):
     with psycopg.connect(pg_dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema='control'")
         assert cur.fetchone()[0] >= 4
+
+
+# --- #3884: adding the dbt-ready trigger to a live plane -------------------------------------
+
+def _drop_trigger(dsn):
+    with psycopg.connect(dsn) as c:
+        c.execute(f"DROP TRIGGER IF EXISTS {store.DBT_READY_TRIGGER} ON control.event")
+        c.commit()
+
+
+def _trigger_present(dsn) -> bool:
+    with psycopg.connect(dsn) as c:
+        return c.execute("SELECT count(*) FROM pg_trigger WHERE tgname = %s",
+                         (store.DBT_READY_TRIGGER,)).fetchone()[0] == 1
+
+
+def _shipper_shaped(dsn, hold_s, started):
+    """What a WAL ship does: insert events (RowExclusive on control.event), then update the run
+    row (control.run), all in one transaction."""
+    with psycopg.connect(dsn) as c, c.cursor() as cur:
+        cur.execute("INSERT INTO control.run (run_id, extractor, started_at, status) "
+                    "VALUES ('R-race', 'zakya', now(), 'running') ON CONFLICT DO NOTHING")
+        c.commit()
+        cur.execute("INSERT INTO control.event (extractor, run_id, seq, ran_at, status) "
+                    "VALUES ('zakya', 'R-race', 0, now(), 'ok') ON CONFLICT DO NOTHING")
+        started.set()
+        cur.execute("SELECT pg_sleep(%s)", (hold_s,))
+        cur.execute("UPDATE control.run SET status='ok', finished_at=now() WHERE run_id='R-race'")
+        c.commit()
+
+
+def test_trigger_migration_does_not_deadlock_a_concurrent_ship(fresh_schema):
+    """@spec ready_event_notify — review of #3884 reproduced a deadlock 4/4 when the missing
+    trigger sent ensure_schema down the FULL DDL path (CREATE INDEX on control.run + ALTERs on
+    control.event) against exactly this shipper shape. The trigger-only path must not."""
+    for attempt in range(4):
+        _drop_trigger(fresh_schema)
+        started, errors = threading.Event(), []
+        ship = threading.Thread(target=lambda: _shipper_shaped(fresh_schema, 1.0, started))
+        ship.start()
+        assert started.wait(10)
+        try:
+            with psycopg.connect(fresh_schema, connect_timeout=10) as conn:
+                store.ensure_schema(conn)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+        ship.join(30)
+        with psycopg.connect(fresh_schema) as c:
+            c.execute("DELETE FROM control.event WHERE run_id='R-race'")
+            c.execute("DELETE FROM control.run WHERE run_id='R-race'")
+            c.commit()
+        assert errors == [], f"attempt {attempt}: {errors}"
+        assert _trigger_present(fresh_schema), f"attempt {attempt}: trigger not installed"
+
+
+def test_trigger_migration_gives_up_quietly_behind_a_long_transaction(fresh_schema):
+    """@spec ready_event_notify — a ship holding control.event past the lock timeout must not stall
+    or fail the starting writer; the trigger lands on a later start."""
+    _drop_trigger(fresh_schema)
+    started = threading.Event()
+    ship = threading.Thread(target=lambda: _shipper_shaped(fresh_schema, 8.0, started))
+    ship.start()
+    assert started.wait(10)
+    import time
+    t0 = time.monotonic()
+    with psycopg.connect(fresh_schema, connect_timeout=10) as conn:
+        store.ensure_schema(conn)                       # must return, not raise
+    waited = time.monotonic() - t0
+    ship.join(30)
+    assert waited < 7, f"startup stalled {waited:.1f}s"
+    assert not _trigger_present(fresh_schema)
+    with psycopg.connect(fresh_schema) as conn:
+        store.ensure_schema(conn)
+    assert _trigger_present(fresh_schema)
