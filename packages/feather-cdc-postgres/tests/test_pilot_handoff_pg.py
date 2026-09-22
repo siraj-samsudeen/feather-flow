@@ -105,6 +105,13 @@ def test_the_pilot_hands_its_slot_and_destination_to_the_runtime_without_re_snap
     m = mf.load(str(MANIFEST))
     m = dataclasses.replace(
         m,
+        source=dataclasses.replace(
+            m.source,
+            discovery=dataclasses.replace(
+                m.source.discovery,
+                options={**m.source.discovery.options, "schema": "public"},
+            ),
+        ),
         replication=dataclasses.replace(m.replication, slot=slot, publication=pub),
         destination=dataclasses.replace(m.destination, pipeline_name="featherbase_cdc",
                                         schema_mapping="preserve_source", table_schemas=[]))

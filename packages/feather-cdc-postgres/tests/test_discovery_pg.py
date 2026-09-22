@@ -279,3 +279,73 @@ def test_featherbase_adapter_refuses_system_tables_without_the_system_column(fre
     with pytest.raises(RuntimeError, match='"system"'):
         select(fresh_db, {"system_tables": ["table_def"]})
     assert [r.table for r in select(fresh_db, {})] == ["table_def"]   # legacy path unaffected
+
+
+def test_featherbase_adapter_uses_catalog_physical_relations_across_schemas(fresh_db):
+    """#3894: platform Tables moved with the catalog to `featherbase`, while installed apps
+    declare their own physical schema/relation. The catalog remains the authority for both."""
+    from pg_md_cdc.adapters import NAMED_SYSTEM, USER_CREATED
+    from pg_md_cdc.adapters.featherbase import select
+
+    _ddl(
+        fresh_db,
+        "create schema featherbase",
+        "create schema tasker",
+        'create table featherbase.table_def ("name" text, module text, data_source text, '
+        'kind text, description text, "system" boolean not null, physical_schema text, '
+        "physical_relation text)",
+        "create table featherbase.column_def (row_id text primary key)",
+        "create table featherbase.role (row_id text primary key)",
+        "create table featherbase.background_job (row_id text primary key)",
+        "create table tasker.task (row_id text primary key)",
+        "create table public.site (row_id text primary key)",
+        """insert into featherbase.table_def
+             ("name", module, data_source, kind, description, "system", physical_schema, physical_relation)
+             values
+             ('Role', 'Core', null, 'table', null, true, null, null),
+             ('Background Job', 'Core', null, 'table', null, true, null, null),
+             ('Table', 'Core', null, 'table', null, true, null, null),
+             ('Column', 'Core', null, 'sub_table', null, true, null, null),
+             ('tasker.task', 'Tasker', null, 'table', 'Shared work.', false, 'tasker', 'task')""",
+    )
+
+    selected = select(
+        fresh_db,
+        {"schema": "featherbase", "system_tables": ["table_def", "column_def", "role"]},
+    )
+    assert {(r.schema, r.table): r.origin for r in selected} == {
+        ("featherbase", "column_def"): NAMED_SYSTEM,
+        ("featherbase", "role"): NAMED_SYSTEM,
+        ("featherbase", "table_def"): NAMED_SYSTEM,
+        ("tasker", "task"): USER_CREATED,
+    }
+    assert {(r.schema, r.table): r.description for r in selected}[("tasker", "task")] == "Shared work."
+
+
+@pytest.mark.parametrize(
+    "physical_columns, values, message",
+    [
+        ("physical_schema text", "'tasker'", "both physical_schema and physical_relation"),
+        (
+            "physical_schema text, physical_relation text",
+            "null, null",
+            "has no physical_schema/physical_relation",
+        ),
+    ],
+)
+def test_featherbase_adapter_refuses_incomplete_current_physical_metadata(
+    fresh_db, physical_columns, values, message
+):
+    """A current non-system catalog row cannot fall back to name derivation: that would look
+    for `featherbase.tasker_task` and silently omit the real `tasker.task`."""
+    from pg_md_cdc.adapters.featherbase import select
+
+    _ddl(
+        fresh_db,
+        "create schema featherbase",
+        'create table featherbase.table_def ("name" text, module text, data_source text, '
+        f'kind text, "system" boolean not null, {physical_columns})',
+        f"insert into featherbase.table_def values ('tasker.task', 'Tasker', null, 'table', false, {values})",
+    )
+    with pytest.raises(RuntimeError, match=message):
+        select(fresh_db, {"schema": "featherbase", "system_tables": []})

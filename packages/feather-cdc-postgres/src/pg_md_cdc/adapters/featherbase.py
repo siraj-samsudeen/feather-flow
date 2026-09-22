@@ -1,7 +1,9 @@
 """Featherbase catalog adapter — `table_def` decides which relations exist (#2209, #3079 D4/D-13).
 
 Constraints (each one is a live behaviour of Featherbase, not a preference):
-  - physical name = lower(Table name) with spaces → underscores ('Access Log' → access_log);
+  - platform physical name = lower(Table name) with spaces → underscores
+    ('Access Log' → access_log) in the catalog schema;
+  - current app Tables name their physical schema/relation in the catalog;
   - only kind in (table, sub_table) — settings Tables are EAV rows, not relations;
   - data_source IS NULL — a row with one is a reflection of an external source, not ours;
   - a declared Table with no physical relation yet is SKIPPED, never an error;
@@ -55,42 +57,67 @@ def select(dsn: str, options: Dict[str, Any] | None = None) -> List[AdapterRelat
             raise RuntimeError(
                 f"{schema}.table_def has no \"system\" column — options.system_tables needs it"
             )
+        physical_cols = {"physical_schema", "physical_relation"}
+        if physical_cols & cols and not physical_cols <= cols:
+            raise RuntimeError(
+                f"{schema}.table_def needs both physical_schema and physical_relation"
+            )
+        has_physical = physical_cols <= cols
         desc = '"description"' if "description" in cols else "null"
         system = '"system"' if "system" in cols else "false"
+        physical_schema = "physical_schema" if has_physical else "null"
+        physical_relation = "physical_relation" if has_physical else "null"
         rows = conn.execute(
-            f'select "name", module, data_source, kind, {desc}, {system} from "{schema}".table_def'
+            f'select "name", module, data_source, kind, {desc}, {system}, '
+            f'{physical_schema}, {physical_relation} from "{schema}".table_def'
         ).fetchall()
         physical = {
-            r[0]
+            (r[0], r[1])
             for r in conn.execute(
-                "select tablename from pg_tables where schemaname = %s", (schema,)
+                "select schemaname, tablename from pg_tables"
             ).fetchall()
         }
 
-    out: Dict[str, AdapterRelation] = {}
-    for name, module, data_source, kind, description, is_system in rows:
-        tbl = str(name).lower().replace(" ", "_")
+    out: Dict[tuple[str, str], AdapterRelation] = {}
+    for name, module, data_source, kind, description, is_system, physical_schema, physical_relation in rows:
+        derived_table = str(name).lower().replace(" ", "_")
         if kind not in ("table", "sub_table"):
             continue
         if data_source is not None:
             continue
-        if tbl in CATALOG_TABLES:
+        if derived_table in CATALOG_TABLES:
             continue  # the catalog's own rows are handled below
         if modules is not None and (module or "") not in modules:
             continue
-        if tbl not in physical:
+        relation_schema = schema
+        relation_table = derived_table
+        if has_physical and not bool(is_system):
+            if not physical_schema or not physical_relation:
+                raise RuntimeError(
+                    f"{schema}.table_def row {name!r} has no "
+                    "physical_schema/physical_relation"
+                )
+            relation_schema = str(physical_schema)
+            relation_table = str(physical_relation)
+        if (relation_schema, relation_table) not in physical:
             continue  # declared but not materialised yet
         origin = None
         if system_tables is not None:
-            if bool(is_system) and tbl not in system_tables:
+            if bool(is_system) and relation_table not in system_tables:
                 continue
             origin = NAMED_SYSTEM if bool(is_system) else USER_CREATED
-        out[tbl] = AdapterRelation(schema, tbl, module, description or None, origin)
+        out[(relation_schema, relation_table)] = AdapterRelation(
+            relation_schema, relation_table, module, description or None, origin
+        )
     for tbl, description in CATALOG_TABLES.items():
-        if tbl not in physical:
+        if (schema, tbl) not in physical:
             continue
         if system_tables is None:
-            out[tbl] = AdapterRelation(schema, tbl, None, description)   # unconditional (legacy)
+            out[(schema, tbl)] = AdapterRelation(
+                schema, tbl, None, description
+            )  # unconditional (legacy)
         elif tbl in system_tables:
-            out[tbl] = AdapterRelation(schema, tbl, None, description, NAMED_SYSTEM)
+            out[(schema, tbl)] = AdapterRelation(
+                schema, tbl, None, description, NAMED_SYSTEM
+            )
     return [out[k] for k in sorted(out)]

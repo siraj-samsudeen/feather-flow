@@ -5,7 +5,10 @@ source_id: featherbase
 source:
   dsn_env: FEATHERBASE_PG_DSN
   include:
-    schemas: [public]        # Featherbase stores its tables in public; `meta` holds no relations
+    # The adapter remains the allow-list: platform tables live in `featherbase`, while each
+    # installed app can own its physical schema (`tasker` today). Unrelated relations such as
+    # public.site are not catalog-declared and therefore cannot enter the compiled set.
+    schemas: ["*"]
   exclude:
     tables:
       # persist_snapshots left 50 of these in the SOURCE schema (#2874); never replicate them.
@@ -14,12 +17,13 @@ source:
     tables:
       # Credential/PII tables. Not catalog-declared today, so the adapter never offers them —
       # this is the tripwire that makes a future catalog change fail validate instead of leaking.
-      - "public.access_token"
-      - "public.password_reset"
-      - "public.user_settings"
+      - "featherbase.access_token"
+      - "featherbase.password_reset"
+      - "featherbase.user_settings"
   discovery:
     adapter: featherbase
     options:
+      schema: featherbase
       modules: null          # null = every module; a list narrows and DROPS the rest from the pub
       # Two-way rule (Siraj, 05-Sep-2026): every user-created table (`table_def."system" = false`)
       # flows with no edit here; Featherbase's own tables flow ONLY when named below.
@@ -41,21 +45,23 @@ source:
 destination:
   token_env: MOTHERDUCK_TOKEN
   database: bronze_featherbase
-  # Fallback for anything table_schemas does not name — i.e. every user-created table.
-  schema_mapping: {public: application}
-  # Per-table bronze schemas, first match wins; the source schema is `public` for all of them.
+  schema_mapping: preserve_source
+  # Per-table bronze schemas, first match wins. Platform tables live in `featherbase`; app
+  # tables retain their physical source schema until this final domain routing step.
   table_schemas:
-    - {match: "public.table_def", schema: catalog}
-    - {match: "public.column_def", schema: catalog}
-    - {match: "public.user", schema: access}
-    - {match: "public.role", schema: access}
-    - {match: "public.has_role", schema: access}
-    - {match: "public.permission", schema: access}
-    - {match: "public.data_scope", schema: access}
-    - {match: "public.share", schema: access}
-    - {match: "public.activity_log", schema: activity}
-    - {match: "public.user_event", schema: activity}
-    - {match: "public.comment", schema: activity}
+    - {match: "featherbase.table_def", schema: catalog}
+    - {match: "featherbase.column_def", schema: catalog}
+    - {match: "featherbase.user", schema: access}
+    - {match: "featherbase.role", schema: access}
+    - {match: "featherbase.has_role", schema: access}
+    - {match: "featherbase.permission", schema: access}
+    - {match: "featherbase.data_scope", schema: access}
+    - {match: "featherbase.share", schema: access}
+    - {match: "featherbase.activity_log", schema: activity}
+    - {match: "featherbase.user_event", schema: activity}
+    - {match: "featherbase.comment", schema: activity}
+    # Adapter-selected relations not named above are catalog-declared app/user tables.
+    - {match: "*.*", schema: application}
   retirement_policy: freeze
 
 replication:

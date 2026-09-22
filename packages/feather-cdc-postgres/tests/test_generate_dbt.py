@@ -6,19 +6,15 @@ import pathlib
 import yaml
 
 from pg_md_cdc import generate_dbt, selectors as sel
-from pg_md_cdc.adapters import AdapterRelation
+from pg_md_cdc.adapters import NAMED_SYSTEM, USER_CREATED, AdapterRelation
 from pg_md_cdc.discovery import SourceColumn, SourceRelation
 from pg_md_cdc.manifest import load, parse
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 REGISTRATIONS = pathlib.Path(__file__).resolve().parents[1] / "registrations"
 
-# The ten tables the live dbt file carries today (dbt_runner/dbt/models/featherbase/
-# _featherbase_sources.yml). The generated file must remain a superset of them.
-LIVE_TABLES = [
-    "background_job", "column_def", "comment", "has_role", "home_page", "home_page_link",
-    "job_execution", "role", "table_def", "user",
-]
+PLATFORM_TABLES = ["column_def", "comment", "has_role", "role", "table_def", "user"]
+APP_TABLES = ["task"]
 
 
 def _rel(schema, table):
@@ -31,9 +27,17 @@ def _rel(schema, table):
 
 def _featherbase_plan():
     m = load(str(REGISTRATIONS / "featherbase.yml"))
-    discovered = [_rel("public", t) for t in LIVE_TABLES]
+    discovered = (
+        [_rel("featherbase", t) for t in PLATFORM_TABLES]
+        + [_rel("tasker", t) for t in APP_TABLES]
+    )
     adapter = [
-        AdapterRelation("public", t, None if t.endswith("_def") else "Core", None) for t in LIVE_TABLES
+        AdapterRelation(
+            "featherbase", t, None if t.endswith("_def") else "Core", None, NAMED_SYSTEM
+        )
+        for t in PLATFORM_TABLES
+    ] + [
+        AdapterRelation("tasker", t, "Tasker", None, USER_CREATED) for t in APP_TABLES
     ]
     return m, sel.compile(m, discovered, adapter)
 
@@ -43,10 +47,9 @@ def _tables_by_source(doc) -> dict:
 
 
 def test_generated_featherbase_file_has_one_source_per_target_schema():
-    """D-13: the registration routes `public` into four bronze schemas, so the file carries
+    """D-13/#3894: the registration routes platform and app schemas into four bronze schemas, so the file carries
     four dbt sources — disambiguated `<database>__<schema>` — each with its own `_dlt_loads`.
-    (The selectors alone do not apply the two-way rule — that is the adapter's — so the
-    unnamed platform tables here still compile, into the `application` fallback.)"""
+    """
     m, plan = _featherbase_plan()
     doc = yaml.safe_load(generate_dbt.render(m, plan))
     assert [s["name"] for s in doc["sources"]] == [
@@ -58,10 +61,9 @@ def test_generated_featherbase_file_has_one_source_per_target_schema():
     assert set(by["bronze_featherbase__catalog"]) == {"table_def", "column_def", "_dlt_loads"}
     assert set(by["bronze_featherbase__access"]) == {"user", "role", "has_role", "_dlt_loads"}
     assert set(by["bronze_featherbase__activity"]) == {"comment", "_dlt_loads"}
-    assert set(by["bronze_featherbase__application"]) == {
-        "background_job", "home_page", "home_page_link", "job_execution", "_dlt_loads"}
+    assert set(by["bronze_featherbase__application"]) == {"task", "_dlt_loads"}
     every = {t for tables in by.values() for t in tables}
-    assert set(LIVE_TABLES) <= every
+    assert set(PLATFORM_TABLES + APP_TABLES) <= every
 
 
 def test_meta_blocks_carry_class_module_and_source_identity():
@@ -69,12 +71,12 @@ def test_meta_blocks_carry_class_module_and_source_identity():
     by = _tables_by_source(yaml.safe_load(generate_dbt.render(m, plan)))
     app, cat, act = (by["bronze_featherbase__application"], by["bronze_featherbase__catalog"],
                      by["bronze_featherbase__activity"])
-    assert app["background_job"]["meta"]["table_class"] == "source_operational"
-    assert app["job_execution"]["meta"]["table_class"] == "source_operational"
+    assert app["task"]["meta"]["table_class"] == "application"
+    assert app["task"]["meta"]["source_schema"] == "tasker"
     assert cat["table_def"]["meta"]["table_class"] == "source_system"
     assert act["comment"]["meta"]["table_class"] == "application"
     assert act["comment"]["meta"]["source_module"] == "Core"
-    assert act["comment"]["meta"]["source_schema"] == "public"   # the SOURCE schema, not activity
+    assert act["comment"]["meta"]["source_schema"] == "featherbase"  # source, not target
     assert act["comment"]["meta"]["source_table"] == "comment"
     assert act["_dlt_loads"]["meta"]["table_class"] == "loader_internal"
 
