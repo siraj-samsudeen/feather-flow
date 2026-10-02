@@ -135,17 +135,23 @@ END
 $do$;
 """
 
-# The run-finish notification (#4024): the same channel, for every OTHER source. GoFrugal and SAP
-# have no marker event; their proof of a complete load is their own `control.run` row finishing
-# `ok`, which the worker used to find only at its 15-minute check. This trigger fires on the
-# TRANSITION into (status ok, finished_at set) -- on the INSERT a `run_finish` makes when no
-# `run_start` landed, or on the UPDATE from running/died -- and never again for that row: a WAL
-# replay of `run_finish` is `ON CONFLICT DO UPDATE` on a row already `ok`, so the body drops it.
-# Every extractor except `dbt` (this channel's own listener) notifies; the WORKER owns which
-# extractors it acts on (listen_worker.RUN_NOTIFY_EXTRACTORS, derived from the admitted sources), so
-# admitting a source never needs this trigger renamed. The payload carries `kind: run` so the
-# listener can tell it from the marker payload above, which has no `kind`.
-RUN_FINISH_TRIGGER = "run_dbt_ready_notify"  # @spec run_finish_notify
+# The run-finish notification (#4024), for every OTHER source. GoFrugal and SAP have no marker
+# event; their proof of a complete load is their own `control.run` row finishing `ok`, which the
+# worker used to find only at its 15-minute check. This trigger fires on the TRANSITION into
+# (status ok, finished_at set) -- on the INSERT a `run_finish` makes when no `run_start` landed, or
+# on the UPDATE from running/died -- and never again for that row: a WAL replay of `run_finish` is
+# `ON CONFLICT DO UPDATE` on a row already `ok`, so the body drops it. Every extractor except `dbt`
+# (the listener's own rows) notifies; the WORKER owns which extractors it acts on
+# (listen_worker.RUN_NOTIFY_EXTRACTORS, derived from the admitted sources), so admitting a source
+# never needs this trigger renamed. Its OWN channel, not `dbt_ready`: a worker from before #4024
+# treats every `dbt_ready` payload as a Zakya marker and exits 76 for a run_id it cannot find, and
+# with the CDC instances finishing a run every 5 minutes that retry chain never runs out -- so on
+# the shared channel a rolled-back or not-yet-redeployed dbt-runner would stop building while any
+# other writer had installed this trigger (review of #4025). On its own channel an old worker
+# never hears it. The payload carries `kind: run` as well, so a listener on both channels can route
+# by payload alone.
+DBT_RUN_FINISHED_CHANNEL = "dbt_run_finished"  # @spec run_finish_notify
+RUN_FINISH_TRIGGER = "run_dbt_ready_notify"
 RUN_FINISH_DDL = f"""
 CREATE OR REPLACE FUNCTION control.notify_dbt_run_finished() RETURNS trigger
 LANGUAGE plpgsql AS $fn$
@@ -153,7 +159,7 @@ BEGIN
     IF TG_OP = 'UPDATE' AND OLD.status = '{status.RUN_OK}' AND OLD.finished_at IS NOT NULL THEN
         RETURN NULL;
     END IF;
-    PERFORM pg_notify('{DBT_READY_CHANNEL}', json_build_object(
+    PERFORM pg_notify('{DBT_RUN_FINISHED_CHANNEL}', json_build_object(
         'kind', 'run', 'extractor', NEW.extractor, 'run_id', NEW.run_id,
         'finished_at', NEW.finished_at)::text);
     RETURN NULL;
@@ -186,8 +192,10 @@ _NOTIFY_DDLS = (DBT_READY_DDL, RUN_FINISH_DDL)
 # How long the trigger-only migration may WAIT for its table before it gives up for this start.
 # A shipper transaction holds RowExclusive on control.event / control.run; CREATE TRIGGER needs
 # ShareRowExclusive and must queue behind it. Bounded so a writer's startup is delayed seconds at
-# worst, never stalled -- and never part of a lock cycle, because this path takes no other table
-# lock (#3884; the same holds for the second trigger, #4024).
+# worst, never stalled -- and never part of a lock cycle, because each trigger is installed in its
+# OWN transaction that takes no other table lock (#3884). Installing both in one transaction would
+# lock control.event then control.run while a replaying shipper locks control.run (run_start) then
+# control.event (events): a cycle, reproduced in the review of #4025 as DeadlockDetected.
 _TRIGGER_LOCK_TIMEOUT = "5s"
 
 
@@ -250,20 +258,22 @@ def ensure_schema(conn: psycopg.Connection) -> None:
         # control.event) form a cycle with a shipper holding control.event and updating
         # control.run -- the #3091 deadlock again, reproduced 4/4 in review. Only the triggers,
         # lock-bounded, each created only if absent (the one already there costs a catalog read
-        # and no lock); a start that cannot get the lock in time carries on without it and a
-        # later start installs it.
+        # and no table lock), and each in its OWN transaction so this path never holds two table
+        # locks at once (see _TRIGGER_LOCK_TIMEOUT); a start that cannot get a lock in time, or
+        # loses a deadlock race, carries on without that trigger and a later start installs it.
         conn.rollback()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_ADVISORY_LOCK,))
-                cur.execute(f"SET LOCAL lock_timeout = '{_TRIGGER_LOCK_TIMEOUT}'")
-                for ddl in _NOTIFY_DDLS:
+        for trigger, ddl in zip((t for t, _ in _NOTIFY_TRIGGERS), _NOTIFY_DDLS):
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_ADVISORY_LOCK,))
+                    cur.execute(f"SET LOCAL lock_timeout = '{_TRIGGER_LOCK_TIMEOUT}'")
                     cur.execute(ddl)
-            conn.commit()
-        except psycopg.errors.LockNotAvailable:
-            conn.rollback()
-            print("[control_plane] dbt-ready trigger(s) not installed this start (control.event "
-                  f"or control.run busy > {_TRIGGER_LOCK_TIMEOUT}); a later start will.", flush=True)
+                conn.commit()
+            except (psycopg.errors.LockNotAvailable, psycopg.errors.DeadlockDetected) as exc:
+                conn.rollback()
+                print(f"[control_plane] trigger {trigger} not installed this start "
+                      f"({type(exc).__name__}: its table was busy > {_TRIGGER_LOCK_TIMEOUT}); "
+                      "a later start will.", flush=True)
         return
 
     with conn.cursor() as cur:

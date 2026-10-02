@@ -12,14 +12,21 @@ from control_plane import shipper, status, store
 from control_plane.wal import Wal
 
 
-def _listener(dsn):
+def _listener(dsn, channels=(store.DBT_READY_CHANNEL, store.DBT_RUN_FINISHED_CHANNEL)):
+    """The worker's connection: both channels since #4024. A pre-#4024 worker is
+    `_listener(dsn, (store.DBT_READY_CHANNEL,))`."""
     conn = psycopg.connect(dsn, autocommit=True)
-    conn.execute(f"LISTEN {store.DBT_READY_CHANNEL}")
+    for channel in channels:
+        conn.execute(f"LISTEN {channel}")
     return conn
 
 
 def _heard(conn, timeout=0.5):
     return [json.loads(n.payload) for n in conn.notifies(timeout=timeout)]
+
+
+def _heard_on(conn, timeout=0.5):
+    return [(n.channel, json.loads(n.payload)) for n in conn.notifies(timeout=timeout)]
 
 
 def _event(seq, *, extractor="zakya", entity="transform_ready", st=status.EV_OK, run_id="Z1"):
@@ -134,15 +141,23 @@ def _apply_all(dsn, *recs):
 
 
 def test_a_source_run_finishing_ok_notifies_once_with_a_run_payload(fresh_schema):
-    """@spec run_finish_notify — the real shape: run_start lands, the finish UPDATEs it to ok."""
+    """@spec run_finish_notify — the real shape: run_start lands, the finish UPDATEs it to ok. On
+    its OWN channel: a worker from before #4024 (marker channel only) hears nothing, so it can
+    never mistake the finish for a Zakya marker (review of #4025)."""
+    from datetime import datetime, timezone
     listener = _listener(fresh_schema)
+    old_worker = _listener(fresh_schema, (store.DBT_READY_CHANNEL,))
     _apply_all(fresh_schema, _run_start())
     assert _heard(listener) == []                              # a start is not a finish
     _apply_all(fresh_schema, _run_finish())
-    heard = _heard(listener)
-    assert len(heard) == 1 and heard[0]["kind"] == "run"
-    assert heard[0]["extractor"] == "gofrugal" and heard[0]["run_id"] == "G1"
-    assert heard[0]["finished_at"].startswith("2026-09-21T05:10:00")
+    heard = _heard_on(listener)
+    assert len(heard) == 1
+    channel, payload = heard[0]
+    assert channel == store.DBT_RUN_FINISHED_CHANNEL != store.DBT_READY_CHANNEL
+    assert payload["kind"] == "run"
+    assert payload["extractor"] == "gofrugal" and payload["run_id"] == "G1"
+    assert datetime.fromisoformat(payload["finished_at"]) == datetime(2026, 9, 21, 5, 10, tzinfo=timezone.utc)
+    assert _heard(old_worker) == []
 
 
 def test_a_finish_with_no_start_row_notifies_once(fresh_schema):
@@ -217,3 +232,22 @@ def test_ensure_schema_adds_the_run_trigger_to_a_pre_4024_control_plane(fresh_sc
     listener = _listener(fresh_schema)
     _apply_all(fresh_schema, _run_finish("G7"), _event(0))
     assert sorted(p["run_id"] for p in _heard(listener)) == ["G7", "Z1"]
+
+
+def test_ensure_schema_installs_both_triggers_when_both_are_missing(fresh_schema):
+    """@spec run_finish_notify.installed_by_ensure_schema — a plane whose #3884 install timed out,
+    or a restored one: both absent, both installed, each in its own transaction (the review of
+    #4025 reproduced a deadlock with a replaying shipper when the two shared one)."""
+    with psycopg.connect(fresh_schema) as c:
+        c.execute(f"DROP TRIGGER {store.DBT_READY_TRIGGER} ON control.event")
+        c.execute(f"DROP TRIGGER {store.RUN_FINISH_TRIGGER} ON control.run")
+        c.commit()
+        assert store._schema_state(c) == "trigger_missing"
+        c.rollback()
+        store.ensure_schema(c)
+        assert store._schema_is_current(c)
+        c.rollback()
+        counts = {name: c.execute("SELECT count(*) FROM pg_trigger WHERE tgname = %s",
+                                  (name,)).fetchone()[0]
+                  for name in (store.DBT_READY_TRIGGER, store.RUN_FINISH_TRIGGER)}
+    assert counts == {store.DBT_READY_TRIGGER: 1, store.RUN_FINISH_TRIGGER: 1}
