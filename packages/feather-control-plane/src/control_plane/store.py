@@ -135,17 +135,66 @@ END
 $do$;
 """
 
+# The run-finish notification (#4024): the same channel, for every OTHER source. GoFrugal and SAP
+# have no marker event; their proof of a complete load is their own `control.run` row finishing
+# `ok`, which the worker used to find only at its 15-minute check. This trigger fires on the
+# TRANSITION into (status ok, finished_at set) -- on the INSERT a `run_finish` makes when no
+# `run_start` landed, or on the UPDATE from running/died -- and never again for that row: a WAL
+# replay of `run_finish` is `ON CONFLICT DO UPDATE` on a row already `ok`, so the body drops it.
+# Every extractor except `dbt` (this channel's own listener) notifies; the WORKER owns which
+# extractors it acts on (listen_worker.RUN_NOTIFY_EXTRACTORS, derived from the admitted sources), so
+# admitting a source never needs this trigger renamed. The payload carries `kind: run` so the
+# listener can tell it from the marker payload above, which has no `kind`.
+RUN_FINISH_TRIGGER = "run_dbt_ready_notify"  # @spec run_finish_notify
+RUN_FINISH_DDL = f"""
+CREATE OR REPLACE FUNCTION control.notify_dbt_run_finished() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+    IF TG_OP = 'UPDATE' AND OLD.status = '{status.RUN_OK}' AND OLD.finished_at IS NOT NULL THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_notify('{DBT_READY_CHANNEL}', json_build_object(
+        'kind', 'run', 'extractor', NEW.extractor, 'run_id', NEW.run_id,
+        'finished_at', NEW.finished_at)::text);
+    RETURN NULL;
+END
+$fn$;
+DO $do$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'control' AND c.relname = 'run' AND t.tgname = '{RUN_FINISH_TRIGGER}'
+    ) THEN
+        CREATE TRIGGER {RUN_FINISH_TRIGGER}
+            AFTER INSERT OR UPDATE ON control.run FOR EACH ROW
+            WHEN (NEW.status = '{status.RUN_OK}' AND NEW.finished_at IS NOT NULL
+                  AND NEW.extractor <> 'dbt')
+            EXECUTE FUNCTION control.notify_dbt_run_finished();
+    END IF;
+END
+$do$;
+"""
+# (trigger name, table) for every notification trigger a current plane carries; the presence check
+# in `_schema_state` and the create-if-absent DDL are both by name, so changing a body means a
+# new name here.
+_NOTIFY_TRIGGERS = ((DBT_READY_TRIGGER, "event"), (RUN_FINISH_TRIGGER, "run"))
+_NOTIFY_DDLS = (DBT_READY_DDL, RUN_FINISH_DDL)
 
-# How long the trigger-only migration may WAIT for control.event before it gives up for this start.
-# A shipper transaction holds RowExclusive on control.event; CREATE TRIGGER needs ShareRowExclusive
-# and must queue behind it. Bounded so a writer's startup is delayed seconds at worst, never
-# stalled -- and never part of a lock cycle, because this path takes no other table lock (#3884).
+
+# How long the trigger-only migration may WAIT for its table before it gives up for this start.
+# A shipper transaction holds RowExclusive on control.event / control.run; CREATE TRIGGER needs
+# ShareRowExclusive and must queue behind it. Bounded so a writer's startup is delayed seconds at
+# worst, never stalled -- and never part of a lock cycle, because this path takes no other table
+# lock (#3884; the same holds for the second trigger, #4024).
 _TRIGGER_LOCK_TIMEOUT = "5s"
 
 
 def _schema_state(conn: psycopg.Connection) -> str:
-    """'current', 'trigger_missing' (every table and column present, only #3884's trigger absent)
-    or 'stale' -- pure catalog reads, no lock on any control table."""
+    """'current', 'trigger_missing' (every table and column present, a notification trigger --
+    #3884's on control.event or #4024's on control.run -- absent) or 'stale' -- pure catalog
+    reads, no lock on any control table."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'control'")
@@ -159,16 +208,19 @@ def _schema_state(conn: psycopg.Connection) -> str:
         columns = {(r[0], r[1]) for r in cur.fetchall()}
         if not set(_REQUIRED_COLUMNS) <= columns:
             return "stale"
-        cur.execute(
-            "SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
-            "JOIN pg_namespace n ON n.oid = c.relnamespace "
-            "WHERE n.nspname = 'control' AND c.relname = 'event' AND t.tgname = %s",
-            (DBT_READY_TRIGGER,))
-        return "current" if cur.fetchone() is not None else "trigger_missing"
+        for trigger, table in _NOTIFY_TRIGGERS:
+            cur.execute(
+                "SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'control' AND c.relname = %s AND t.tgname = %s",
+                (table, trigger))
+            if cur.fetchone() is None:
+                return "trigger_missing"
+        return "current"
 
 
 def _schema_is_current(conn: psycopg.Connection) -> bool:
-    """True when every table, migrated column and the dbt-ready trigger exist — no locks.
+    """True when every table, migrated column and both dbt-ready triggers exist — no locks.
 
     This is the steady state on a live control plane, so the common path of ensure_schema() must
     reach exactly here and stop: no CREATE, no ALTER, nothing that can block another session."""
@@ -193,22 +245,25 @@ def ensure_schema(conn: psycopg.Connection) -> None:
         conn.rollback()   # end the read's implicit transaction; hold no locks on the way out
         return
     if state == "trigger_missing":
-        # Every live plane on first start after #3884. NOT the full DDL path below: its CREATE
-        # INDEX (ShareLock on control.run) then ALTERs (AccessExclusive on control.event) form a
-        # cycle with a shipper holding control.event and updating control.run -- the #3091
-        # deadlock again, reproduced 4/4 in review. Only the trigger, lock-bounded; a start that
-        # cannot get the lock in time carries on without it and a later start installs it.
+        # Every live plane on first start after #3884 (and again after #4024). NOT the full DDL
+        # path below: its CREATE INDEX (ShareLock on control.run) then ALTERs (AccessExclusive on
+        # control.event) form a cycle with a shipper holding control.event and updating
+        # control.run -- the #3091 deadlock again, reproduced 4/4 in review. Only the triggers,
+        # lock-bounded, each created only if absent (the one already there costs a catalog read
+        # and no lock); a start that cannot get the lock in time carries on without it and a
+        # later start installs it.
         conn.rollback()
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_ADVISORY_LOCK,))
                 cur.execute(f"SET LOCAL lock_timeout = '{_TRIGGER_LOCK_TIMEOUT}'")
-                cur.execute(DBT_READY_DDL)
+                for ddl in _NOTIFY_DDLS:
+                    cur.execute(ddl)
             conn.commit()
         except psycopg.errors.LockNotAvailable:
             conn.rollback()
-            print("[control_plane] dbt-ready trigger not installed this start (control.event "
-                  f"busy > {_TRIGGER_LOCK_TIMEOUT}); a later start will.", flush=True)
+            print("[control_plane] dbt-ready trigger(s) not installed this start (control.event "
+                  f"or control.run busy > {_TRIGGER_LOCK_TIMEOUT}); a later start will.", flush=True)
         return
 
     with conn.cursor() as cur:
@@ -223,7 +278,8 @@ def ensure_schema(conn: psycopg.Connection) -> None:
         # extractor has -- bronze_watermark, action, dbt_rc -- and bolting five dbt-specific
         # columns onto the table five writers share would be worse than one JSONB bag.
         cur.execute("ALTER TABLE control.run ADD COLUMN IF NOT EXISTS extra JSONB")
-        cur.execute(DBT_READY_DDL)  # #3884 — created only if absent, so a re-run takes no lock
+        for ddl in _NOTIFY_DDLS:  # #3884, #4024 — created only if absent, so a re-run takes no lock
+            cur.execute(ddl)
     conn.commit()
 
 

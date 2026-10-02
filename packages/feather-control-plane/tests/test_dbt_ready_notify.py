@@ -107,3 +107,113 @@ def test_ensure_schema_adds_the_trigger_to_a_pre_3884_control_plane(fresh_schema
         n = c.execute("SELECT count(*) FROM pg_trigger WHERE tgname = %s",
                       (store.DBT_READY_TRIGGER,)).fetchone()[0]
     assert n == 1
+
+
+# --- the run-finish trigger on control.run (#4024) ---------------------------------------------
+# GoFrugal and SAP have no marker event; their proof of a complete load is their own control.run
+# row finishing ok. The second trigger notifies the same channel with `kind: run`, once per row,
+# on the transition into (ok, finished) only.
+
+def _run_start(run_id="G1", extractor="gofrugal"):
+    return {"kind": "run_start", "run_id": run_id, "extractor": extractor, "mode": "scheduled",
+            "host": "test", "pid": 1, "started_at": "2026-09-21T05:00:00+00:00",
+            "status": status.RUN_RUNNING, "wal_path": None}
+
+
+def _run_finish(run_id="G1", extractor="gofrugal", st=status.RUN_OK):
+    return {"kind": "run_finish", "run_id": run_id, "extractor": extractor,
+            "started_at": "2026-09-21T05:00:00+00:00", "finished_at": "2026-09-21T05:10:00+00:00",
+            "status": st, "stop_reason": None, "n_ok": 3, "n_err": 0, "n_skipped": 0}
+
+
+def _apply_all(dsn, *recs):
+    with psycopg.connect(dsn) as c, c.cursor() as cur:
+        for rec in recs:
+            store.apply(cur, rec)
+        c.commit()
+
+
+def test_a_source_run_finishing_ok_notifies_once_with_a_run_payload(fresh_schema):
+    """@spec run_finish_notify — the real shape: run_start lands, the finish UPDATEs it to ok."""
+    listener = _listener(fresh_schema)
+    _apply_all(fresh_schema, _run_start())
+    assert _heard(listener) == []                              # a start is not a finish
+    _apply_all(fresh_schema, _run_finish())
+    heard = _heard(listener)
+    assert len(heard) == 1 and heard[0]["kind"] == "run"
+    assert heard[0]["extractor"] == "gofrugal" and heard[0]["run_id"] == "G1"
+    assert heard[0]["finished_at"].startswith("2026-09-21T05:10:00")
+
+
+def test_a_finish_with_no_start_row_notifies_once(fresh_schema):
+    """@spec run_finish_notify — Postgres was down at start: the finish is an INSERT, and it is
+    still the transition into (ok, finished)."""
+    listener = _listener(fresh_schema)
+    _apply_all(fresh_schema, _run_finish(run_id="G2"))
+    assert [p["run_id"] for p in _heard(listener)] == ["G2"]
+
+
+def test_a_replayed_finish_does_not_notify_again(fresh_schema):
+    """@spec run_finish_notify.transition_only — the WAL's at-least-once replay is ON CONFLICT DO
+    UPDATE on a row already ok: the row trigger fires, the body drops it."""
+    listener = _listener(fresh_schema)
+    _apply_all(fresh_schema, _run_start())
+    for _ in range(3):
+        _apply_all(fresh_schema, _run_finish())
+    assert len(_heard(listener)) == 1
+
+
+def test_only_a_source_finish_that_is_ok_notifies(fresh_schema):
+    """@spec run_finish_notify — partial and failed finishes, the `died` reconcile, a later
+    reconciled_by UPDATE of an ok row, and dbt's own rows (the listener's own builds) stay silent;
+    a `died` row later overwritten by a late ok finish is a transition and notifies."""
+    listener = _listener(fresh_schema)
+    _apply_all(fresh_schema, _run_start("G3"), _run_finish("G3", st=status.RUN_PARTIAL),
+               _run_start("G4"), _run_finish("G4", st=status.RUN_FAILED),
+               _run_start("D1", extractor="dbt"), _run_finish("D1", extractor="dbt"),
+               _run_start("G5"))
+    with psycopg.connect(fresh_schema) as c:
+        c.execute("UPDATE control.run SET status = 'died', stop_reason = 'died', finished_at = now() "
+                  "WHERE run_id = 'G5'")
+        c.commit()
+    assert _heard(listener) == []
+    _apply_all(fresh_schema, _run_finish("G5"))                # died -> ok: the load did complete
+    assert [p["run_id"] for p in _heard(listener)] == ["G5"]
+    with psycopg.connect(fresh_schema) as c:
+        c.execute("UPDATE control.run SET reconciled_by = 'X' WHERE run_id = 'G5'")
+        c.commit()
+    assert _heard(listener) == []
+
+
+def test_a_rolled_back_finish_delivers_nothing(fresh_schema):
+    """@spec run_finish_notify — NOTIFY rides the transaction, as the marker's does."""
+    listener = _listener(fresh_schema)
+    c = psycopg.connect(fresh_schema)
+    with c.cursor() as cur:
+        store.apply(cur, _run_finish("G6"))
+        assert _heard(listener, timeout=0.3) == []
+        c.rollback()
+    assert _heard(listener, timeout=0.3) == []
+    c.close()
+
+
+def test_ensure_schema_adds_the_run_trigger_to_a_pre_4024_control_plane(fresh_schema):
+    """@spec run_finish_notify.installed_by_ensure_schema — a live plane has every table, column
+    and #3884's trigger; only the run trigger's absence sends it down `trigger_missing`, which
+    installs that one and leaves the event trigger untouched."""
+    with psycopg.connect(fresh_schema) as c:
+        c.execute(f"DROP TRIGGER {store.RUN_FINISH_TRIGGER} ON control.run")
+        c.commit()
+        assert store._schema_state(c) == "trigger_missing"
+        c.rollback()
+        store.ensure_schema(c)
+        assert store._schema_is_current(c)
+        c.rollback()
+        store.ensure_schema(c)                              # idempotent second pass
+        counts = {name: c.execute("SELECT count(*) FROM pg_trigger WHERE tgname = %s",
+                                  (name,)).fetchone()[0]
+                  for name in (store.DBT_READY_TRIGGER, store.RUN_FINISH_TRIGGER)}
+    assert counts == {store.DBT_READY_TRIGGER: 1, store.RUN_FINISH_TRIGGER: 1}
+    listener = _listener(fresh_schema)
+    _apply_all(fresh_schema, _run_finish("G7"), _event(0))
+    assert sorted(p["run_id"] for p in _heard(listener)) == ["G7", "Z1"]
