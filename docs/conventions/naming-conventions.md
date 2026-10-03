@@ -42,6 +42,38 @@ Where the original is strong industry jargon that practitioners say out loud, le
 
 A dropped implication can also be carried by the **explanation** rather than the name, and the sharpest explanations contrast with the term next door: *"a scheduler decides when; an orchestrator also handles dependencies, retries and ordering."*
 
+## Identifiers: the system's own noun, always text, `_code` for our handles, `_number` for sequences
+
+1. **An identifier takes the system of record's own noun.** SAP's plant is `plant_code` (WERKS, '1501'), its merchandise leaf is `material_group_code` (MATKL, '010505003'); its documents are `document_number`, `purchase_order_number`. Do not coin a second name for a value another system already names.
+2. **Every identifier is text, never cast**, and a fixed-width code is stored **zero-padded to its width** (SAP: line of business 2, main category 4, category 6, material group 9, plant 4). '1501' has no leading zero only because it fills its width; there is no exception to document, only the width.
+3. **`_code` is a human-readable business handle when it is ours**: `store_code` = 'ATK', `region_code` = 'KL'.
+4. **`_number` only for sequence and document numbers a person quotes** (invoice, purchase order, revision). Never for a location or a classification — a digit string that acts as a code is a code.
+5. **Acronyms in CAPS** inside column names when they are established and known to the people who read them: `LOB_SAP`, `category_SAP`; a house acronym nobody outside can rebuild still fails rule 1.
+
+## Hierarchy and classification names: unique at every level, title case, one spelling
+
+A name in a hierarchy (division, subdivision, category, subcategory; any classification) must be **unique at its level without walking the path**, so a full-name search returns one row and a `group by name` never merges two nodes: a bare name may not hide inside an audience-qualified sibling ("Kurti" beside "Girls Kurti" becomes "Women Kurti"). Names are **title case**, spelled once, `&` never `N`, abbreviations expanded, no source-system shouting; the code (not the name) is the join key, so a rename is a data edit. Enforced by a build test wherever the tree lives.
+
+## Infrastructure names: the customer slug first, lowercase-hyphen, `-db` for databases
+
+Every **Railway** project and service (and any cloud resource that cannot carry a customer column) is named
+`<customer>-<system>[-<part>]` (Siraj, 03-Oct-2026, data-warehouse #4085):
+
+1. **The customer slug comes first, on projects *and* services**, so a search across workspaces shows
+   `jeyarama-cdc-log-db` and `acme-cdc-log-db`, never two bare `cdc-log-db`s. The slug is defined once, in the
+   system registry (feather-flow #77). Jeyarama's is `jeyarama`; no acronyms such as JRBG.
+2. **All lowercase, hyphens only.** Railway puts service names in private network addresses, which allow
+   letters, digits and hyphens. A mix of `Jeyarama-ETL`, `control_plane_db` and `featherbase-cdc` is what
+   confuses agents.
+3. **A database ends in `-db`**: `jeyarama-featherbase-db`, `jeyarama-cdc-log-db`.
+4. **A CDC worker is named after its source**: `<customer>-cdc-<source>`, e.g. `jeyarama-cdc-featherbase`.
+5. **One Railway workspace per customer**, named after the customer: the walled-off boundary.
+6. **Existing names change only when touched**, and every rename comes with a sweep of name-based references
+   (CLI `-s <name>`, skills, runbooks). A reference variable follows the service id; a name lookup silently
+   returns nothing (the stale `-s Postgres` lookup, fixed in data-warehouse #4083).
+
+Packages follow the product family: `feather-cdc`, `feather-control-plane` (feather-flow #80).
+
 ## The local-vs-global tension — flag it
 
 Sometimes the local term is *less* clear than the global one, and the writer cannot see it because it is their own usage. In India "department store" reads as a glorified kirana, so we use the precise format word instead. An internal name-prefix like `CC` / `HM` should be replaced by the plain term it stands for, not preserved. **Watch especially for vocabulary carried in from a previous industry or employer** — *client* is standard in consulting and reads as jargon in a product context, which is why **customer** is the word in these repos.
@@ -71,3 +103,4 @@ Settled 2026-08-17 under this rule:
 
 - **Rejected:** `control plane` (*plane* gives no route to "deciding" — re-explained every time), `agent` for a collector (means an LLM agent), `ledger` alone (pulls toward blockchain and accounting), `findings` (audit vocabulary, vague about what was found), `register` (reads as the CPU sense), `isolated` as an identifier (means transaction isolation levels), `client` (consulting vocabulary), `liveness signal` (a second name for *heartbeat*), `markdown` as an identifier (means the text format).
 - **Adopted:** `customer estate`, `central monitoring service`, `customer-side collector`, `heartbeat`, `heartbeat history ledger`, `system registry`, `detected issues`, `walled off`, `data pipeline scheduler (orchestrator)`, and `multi-tenant` kept deliberately.
+- **Ruling, 03-Oct-2026 (Siraj, data-warehouse #4085): `control plane` and `client` are kept.** Their rejection above was idealistic: both are prevalent in the code and docs, and agents understand them. Use them freely; do not rename existing uses. The rule they were judged by still stands for new coinages.
