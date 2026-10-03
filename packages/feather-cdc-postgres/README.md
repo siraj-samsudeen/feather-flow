@@ -22,7 +22,7 @@ is always `pg_md_cdc`. Env vars, matching `registrations/*.yml`:
 | `CDC_REGISTRATION` | the registration id, e.g. `featherbase` or `control_plane` | selects `registrations/<id>.yml` |
 | `<manifest source.dsn_env>` | the source Postgres DSN (`FEATHERBASE_PG_DSN` / `CONTROL_PG_DSN`) | Railway reference var |
 | `<manifest destination.token_env>` | the MotherDuck token (`MOTHERDUCK_TOKEN` in both shipped manifests) | Railway reference var |
-| `CDC_LOG_PG_DSN` | the deployment's own **CDC log DB** (Railway `cdc_log_db`) — where its runs and events are logged (#4078) | Railway reference var — hard dependency unless `--dev`. `CONTROL_PG_DSN` is accepted for one release; for the control-plane CDC it is also the source, so set `CDC_LOG_PG_DSN` |
+| `CDC_LOG_PG_DSN` | the customer's **CDC log DB** (Railway `<customer>-cdc-log-db` in project `<customer>-cdc`, e.g. `jeyarama-cdc-log-db`) — where its runs and events are logged (#4078) | Railway reference var — hard dependency unless `--dev`. `CONTROL_PG_DSN` is accepted for one release; for the control-plane CDC it is also the source, so set `CDC_LOG_PG_DSN` |
 | `CONTROL_WAL_DIR` | a mounted (non-ephemeral) path | only needed if `control.event_durability: persistent_local_wal`; neither shipped manifest uses it |
 
 Cron: `*/5 * * * *`, set on the **service instance** (`railway api` `serviceInstanceUpdate`, or
