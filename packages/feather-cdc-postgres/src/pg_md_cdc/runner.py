@@ -642,11 +642,18 @@ def _destination(m) -> Destination:
                                        pipelines_dir=pipelines_dir))
 
 
+def _run_log_dsn() -> str | None:
+    # #4078: the CDC logs to its own CDC log DB. CONTROL_PG_DSN is accepted for one release, and
+    # must lose: for the control-plane CDC it is ALSO the source being mirrored.
+    return os.environ.get("CDC_LOG_PG_DSN") or os.environ.get("CONTROL_PG_DSN")
+
+
 def _control_plane(m, dev: bool) -> ControlPlane:
-    control_dsn = os.environ.get("CONTROL_PG_DSN")
+    control_dsn = _run_log_dsn()
     if not control_dsn and not dev:
-        sys.exit("FATAL: CONTROL_PG_DSN not set. The Postgres control plane is a HARD dependency "
-                 "(ADR 0028) — set it, or pass --dev for a local WAL-only run.")
+        sys.exit("FATAL: CDC_LOG_PG_DSN not set (CONTROL_PG_DSN is accepted for one release). "
+                 "The CDC log DB is a HARD dependency (#4078) — set it, or pass --dev for a "
+                 "local WAL-only run.")
     wal_dir = m.control.wal_dir or os.environ.get("CONTROL_WAL_DIR", "control_wal")
     return ControlPlane(m.control.extractor, dsn=None if dev else control_dsn, wal_dir=wal_dir)
 

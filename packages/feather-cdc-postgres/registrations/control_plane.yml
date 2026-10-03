@@ -42,8 +42,9 @@ control:
   extractor: control_plane_cdc
   availability_policy: pause_if_control_unreachable
   event_durability: direct_postgres
-  # This drainer writes these three tables WHILE it runs, so a source-now vs destination-now
-  # count can never tie; reconciling them would emit EV_ERROR every tick, forever.
+  # The batch extractors write these three tables continuously, so a source-now vs
+  # destination-now count can never tie; reconciling them would emit EV_ERROR every tick.
+  # (Before #4078 this drainer also wrote them itself; it now logs to its own CDC log DB.)
   reconcile_exclude:
     - "control.run"
     - "control.event"
