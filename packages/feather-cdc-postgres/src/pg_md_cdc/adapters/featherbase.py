@@ -92,13 +92,16 @@ def select(dsn: str, options: Dict[str, Any] | None = None) -> List[AdapterRelat
         relation_schema = schema
         relation_table = derived_table
         if has_physical and not bool(is_system):
-            if not physical_schema or not physical_relation:
+            if physical_schema and physical_relation:
+                relation_schema = str(physical_schema)
+                relation_table = str(physical_relation)
+            elif "." in str(name):
+                # #4113: Featherbase's tableRelation() — a qualified (app-owned) Table is never
+                # located by its spelling; a plain one lives at the platform default above.
                 raise RuntimeError(
                     f"{schema}.table_def row {name!r} has no "
                     "physical_schema/physical_relation"
                 )
-            relation_schema = str(physical_schema)
-            relation_table = str(physical_relation)
         if (relation_schema, relation_table) not in physical:
             continue  # declared but not materialised yet
         origin = None

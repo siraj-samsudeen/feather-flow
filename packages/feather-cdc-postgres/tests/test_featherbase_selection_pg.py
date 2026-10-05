@@ -96,3 +96,26 @@ def test_a_new_user_created_table_is_selected_with_no_manifest_edit(featherbase_
     assert (by["invoice"].target_schema, by["invoice"].origin, by["invoice"].table_class) == (
         "application", USER_CREATED, "application")
     assert "email_queue_v2" not in by
+
+
+def test_a_plain_user_table_lives_at_featherbases_default_location(featherbase_db):
+    """#4113: Featherbase stores a physical location only for qualified (app-owned) Tables; a
+    plain Table such as the sales-target ones lives at `featherbase.<snake_case>` with NULL
+    physical columns (featherbase `tableRelation()`). Discovery must find it there."""
+    with psycopg.connect(featherbase_db, autocommit=True) as c:
+        c.execute("create table featherbase.section_ownership (row_id varchar(140) primary key)")
+        c.execute('insert into featherbase.table_def (name, module, kind, "system") '
+                  "values ('Section Ownership', 'Store Sections', 'table', false)")
+    _, plan = runner._compile(mf.load(str(MANIFEST)))
+    by = {r.table: r for r in plan.relations}
+    assert (by["section_ownership"].schema, by["section_ownership"].origin,
+            by["section_ownership"].target_schema) == ("featherbase", USER_CREATED, "application")
+
+
+def test_a_qualified_user_table_with_no_stored_location_still_refuses(featherbase_db):
+    """The other half of Featherbase's rule: a qualified name is never located by its spelling."""
+    with psycopg.connect(featherbase_db, autocommit=True) as c:
+        c.execute('insert into featherbase.table_def (name, module, kind, "system") '
+                  "values ('budgets.invoice', 'Budgets', 'table', false)")
+    with pytest.raises(RuntimeError, match="budgets.invoice"):
+        runner._compile(mf.load(str(MANIFEST)))
