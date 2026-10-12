@@ -28,12 +28,14 @@ STOP_BUDGET_TIME = "budget_time"   # walltime budget cut it short (still healthy
 STOP_TOKEN_REFRESH_FAILED = "token_refresh_failed"  # no usable OAuth token: the token endpoint
                                    # refused or is cooling down, or a forced refresh was withheld.
                                    # NOT a quota stop — budget_usage hit stays false (#4245)
+STOP_TOKEN_REJECTED = "token_rejected"  # Zoho kept answering 401 to freshly minted tokens: a
+                                   # scope / org / grant problem, not the token endpoint (#4245)
 STOP_ERROR = "error"               # unhandled exception
 STOP_DIED = "died"                 # set by the reconciler on a dead run
 
 STOP_REASONS = frozenset({
     STOP_CLEAN, STOP_BUDGET_API, STOP_BUDGET_EXPORT, STOP_BUDGET_TIME, STOP_TOKEN_REFRESH_FAILED,
-    STOP_ERROR, STOP_DIED,
+    STOP_TOKEN_REJECTED, STOP_ERROR, STOP_DIED,
 })
 
 # --- control.event.status (per unit/cell outcome) ---
