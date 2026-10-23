@@ -30,7 +30,8 @@ FULL_ROW = "full_row"
 # the class is what lets a consumer filter them out (#3079 D3).
 _SOURCE_SYSTEM = frozenset(
     {
-        "table_def", "column_def", "user", "role", "has_role", "permission", "data_scope",
+        "table_def", "column_def", "person", "identifier_system", "role", "has_role",
+        "permission", "data_scope",
         "share", "user_event", "access_log", "activity_log", "version", "migration", "site",
     }
 )

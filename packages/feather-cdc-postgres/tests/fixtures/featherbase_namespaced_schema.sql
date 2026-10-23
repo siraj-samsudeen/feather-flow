@@ -1,4 +1,6 @@
 -- #3894: current Featherbase platform schema plus one installed app-owned schema.
+-- #4338: after the Person release (featherbase 0101 + 0102): `user` is `person`, service
+-- accounts have their own catalog-declared Table, and the identity tables exist physically.
 create schema featherbase;
 create schema tasker;
 
@@ -14,7 +16,9 @@ create table featherbase.table_def (
   physical_relation text
 );
 create table featherbase.column_def (row_id text primary key);
-create table featherbase."user" (row_id text primary key);
+create table featherbase.person (row_id text primary key);
+create table featherbase.service_account (row_id text primary key);
+create table featherbase.identifier_system (row_id text primary key);
 create table featherbase.role (row_id text primary key);
 create table featherbase.has_role (row_id text primary key);
 create table featherbase.permission (row_id text primary key);
@@ -29,6 +33,16 @@ create table featherbase.background_job (row_id text primary key);
 create table featherbase.version (row_id text primary key);
 create table featherbase.access_token (id text primary key, token_hash text);
 
+-- The Person release's identity tables. Not catalog-declared (no table_def row), so the
+-- adapter never offers them; the registration's deny list is the tripwire if that changes.
+create table featherbase.sign_in_identity (id text primary key, person_id text);
+create table featherbase.person_id_map (old_id text primary key, new_id text, kind text);
+create table featherbase.person_identifier (id text primary key, person_id text, value text);
+create table featherbase.person_identifier_fingerprint (person_identifier_id text primary key, fingerprint bytea);
+create table featherbase.person_match (id text primary key);
+create table featherbase.person_match_member (id text primary key, person_id text);
+create table featherbase.person_merge (id text primary key);
+
 create table tasker.project (row_id text primary key, project_name text);
 create table tasker.task (row_id text primary key, task_title text);
 
@@ -41,7 +55,9 @@ insert into featherbase.table_def
 values
   ('Table', 'Core', 'table', null, null, true, null, null, null),
   ('Column', 'Core', 'sub_table', null, null, true, null, null, null),
-  ('User', 'Core', 'table', null, null, true, null, null, null),
+  ('Person', 'Core', 'table', null, null, true, null, null, null),
+  ('Service Account', 'Core', 'table', null, null, true, null, null, null),
+  ('Identifier System', 'Core', 'table', null, null, true, null, null, null),
   ('Role', 'Core', 'table', null, null, true, null, null, null),
   ('Has Role', 'Core', 'sub_table', null, null, true, null, null, null),
   ('Permission', 'Core', 'table', null, null, true, null, null, null),

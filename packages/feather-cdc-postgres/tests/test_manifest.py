@@ -192,16 +192,19 @@ def test_the_featherbase_registration_is_a_clean_run_with_per_table_targets():
     assert m.destination.schema_mapping == "preserve_source"
     assert m.source.discovery.options["schema"] == "featherbase"
     assert m.source.discovery.options["system_tables"] == [
-        "table_def", "column_def", "user", "role", "has_role", "permission", "data_scope",
-        "share", "activity_log", "user_event", "comment"]
+        "table_def", "column_def", "person", "identifier_system", "role", "has_role",
+        "permission", "data_scope", "share", "activity_log", "user_event", "comment"]
     routed = {
         r.match.split(".", 1)[1]: r.schema
         for r in m.destination.table_schemas
         if r.match.startswith("featherbase.")
     }
     assert routed == {"table_def": "catalog", "column_def": "catalog", "user": "access",
-                      "role": "access", "has_role": "access", "permission": "access",
+                      "person": "access", "identifier_system": "access", "role": "access", "has_role": "access", "permission": "access",
                       "data_scope": "access", "share": "access", "activity_log": "activity",
                       "user_event": "activity", "comment": "activity"}
-    assert set(routed) == set(m.source.discovery.options["system_tables"])
+    # every named table is routed; `user` keeps its rule only as the RETIRED name (#4338), so
+    # WAL written before featherbase 0101 renamed it still lands in the frozen access.user
+    assert set(routed) == set(m.source.discovery.options["system_tables"]) | {"user"}
+    assert "user" not in m.source.discovery.options["system_tables"]
     assert m.destination.target_schema("tasker", "anything_the_app_made") == "application"

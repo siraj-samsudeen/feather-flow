@@ -33,6 +33,9 @@ class Batch:
     # of a keyed relation that preceded its truncate in this batch are already gone from
     # `items_by_namespace`, so "delete, then load the batch" reproduces the source order.
     truncates: list = field(default_factory=list)
+    # (schema, table) -> why a record's merge key could not be honoured (#4338); the runner
+    # reports each as an error event.
+    key_problems: dict = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
@@ -92,7 +95,8 @@ def drain(
         )
         grouped = gen.collect()
         yield Batch(grouped, gen.last_commit_lsn or cursor_lsn, gen.generated_all,
-                    truncates=list(gen.truncates))
+                    truncates=list(gen.truncates),
+                    key_problems=dict(getattr(gen, "key_problems", {}) or {}))
         if gen.generated_all:
             return
         cursor_lsn = gen.last_commit_lsn

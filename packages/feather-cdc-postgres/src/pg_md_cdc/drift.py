@@ -15,12 +15,18 @@ from typing import Sequence
 from control_plane import status as cp_status
 
 from . import discovery, publication
-from .lifecycle import DRIFT_REVIEW, RESNAPSHOT_REQUIRED, Lifecycle
+from .lifecycle import (
+    DISCOVERED, DRIFT_REVIEW, RESNAPSHOT_REQUIRED, RETIRED, SNAPSHOTTING, Lifecycle,
+)
 from .schema_registry import TEXT_FALLBACK, classify_drift, compile_relation, signature
 
 KEY_CHANGE = "key_change"
 # Reported and marked, but the table keeps loading (Appendix C: dlt never destroys a column).
 BREAKING_KINDS = frozenset({"drop_column", "rename_column", "type_incompatible"})
+# States whose next step this tick is a full baseline (runner._adopt_streaming routes a
+# re-selected RETIRED or DISCOVERED relation to SNAPSHOTTING; an unpublished one is added and
+# baselined).
+BASELINE_PENDING = frozenset({SNAPSHOTTING, RETIRED, DISCOVERED})
 
 
 def remedy(manifest_path: str, qualified: str) -> str:
@@ -116,6 +122,16 @@ def scan(cfg, relations, *, run, lc: Lifecycle, owner,
         kinds = {d.kind for d in drifts}
         payload = [{"kind": d.kind, "column": d.column, "severity": d.severity,
                     "detail": d.detail} for d in drifts]
+
+        if lc.state_of(rel.schema, rel.table) in BASELINE_PENDING:
+            # A full baseline is already due this tick (#4338: a re-selected retired table, a
+            # table renamed at the source, an interrupted snapshot): it rebuilds the copy in the
+            # new shape, which IS the remedy. Blocking or reviewing it would also need a
+            # lifecycle edge `snapshotting` does not have, and abort the whole tick.
+            cfg.destination.write_signature(cfg.registration, rel.schema, rel.table, new_sig)
+            run.event(entity=rel.qualified, status=cp_status.EV_OK, unit="schema_drift",
+                      extra={"drifts": payload, "action": "superseded_by_baseline"})
+            continue
 
         if KEY_CHANGE in kinds:
             # The OLD signature stands: the block has to survive a restart, and the only thing

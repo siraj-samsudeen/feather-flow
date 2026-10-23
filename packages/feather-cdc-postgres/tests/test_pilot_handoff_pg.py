@@ -102,14 +102,19 @@ def test_the_pilot_hands_its_slot_and_destination_to_the_runtime_without_re_snap
     # `pipeline_name` pin and four target schemas. This test is the ROLLBACK proof (runbook
     # §h) — that the runtime can adopt the pilot's slot, publication and `featherbase_cdc`
     # state when told to — so it restores the pin and the single `public` dataset here.
+    # The pilot-era catalog predates the Person release (#4338): its people table is still
+    # `user`, so the named list is put back to the pre-release one as well.
     m = mf.load(str(MANIFEST))
+    pre_person = [("user" if t == "person" else t)
+                  for t in m.source.discovery.options["system_tables"] if t != "identifier_system"]
     m = dataclasses.replace(
         m,
         source=dataclasses.replace(
             m.source,
             discovery=dataclasses.replace(
                 m.source.discovery,
-                options={**m.source.discovery.options, "schema": "public"},
+                options={**m.source.discovery.options, "schema": "public",
+                         "system_tables": pre_person},
             ),
         ),
         replication=dataclasses.replace(m.replication, slot=slot, publication=pub),

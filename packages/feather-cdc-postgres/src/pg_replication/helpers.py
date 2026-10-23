@@ -666,6 +666,12 @@ class ItemGenerator:
             namespace = schema.get("namespace") or ""
             if table_name.lower().startswith(DLT_NAME_PREFIX):
                 continue  # dlt internal table on the source
+            if len(data_items) < 2:
+                # Local patch (#4338): no rows, only the hints item — every change of this
+                # relation in the batch was below its baseline boundary (or truncated away).
+                # Loading the hints alone records `lsn`/`deleted_ts` in the dlt schema without
+                # creating them, and the relation's next real merge then fails on `lsn`.
+                continue
             bucket = grouped.setdefault(namespace, [])
             bucket.append(data_items[0])  # meta item with column hints only, no data
             bucket.append(dlt.mark.with_table_name(data_items[1:], table_name))
@@ -711,6 +717,7 @@ class ItemGenerator:
         self.last_commit_lsn = consumer.last_commit_lsn
         self.generated_all = consumer.consumed_all
         self.truncates = consumer.truncates
+        self.key_problems = consumer.key_problems
         return consumer
 
     def __iter__(self) -> Iterator[Union[TDataItem, DataItemWithMeta]]:
@@ -748,6 +755,9 @@ class MessageConsumer:
         # boundary for a transaction that was still in flight when the baseline was taken.
         self._txn_commit_lsn: int = 0
         self.truncates: List[Dict[str, Any]] = []
+        # Local patch (#4338): (schema, table) -> why a merge key could not be honoured for a
+        # record of this batch. The runner turns each into an error event — never silent.
+        self.key_problems: Dict[Any, str] = {}
         self.upto_lsn = upto_lsn
         self.pub_ops = pub_ops
         self.target_batch_size = target_batch_size
@@ -858,6 +868,12 @@ class MessageConsumer:
                 )
         if pk is not None:
             apply_true_primary_key(columns, pk)
+        else:
+            # Neither the compiled plan nor the source catalog knows this relation's key (a
+            # relation renamed or dropped since the record was written, with no recorded key):
+            # its records merge on replica-identity flags — report it (#4338).
+            self.key_problems[(decoded_msg.namespace, table_name)] = (
+                "merge key unresolved: records merge on replica-identity flags")
 
         self.last_table_schema[decoded_msg.relation_id] = {
             "name": table_name,
@@ -987,6 +1003,10 @@ class MessageConsumer:
                 else self.include_columns.get(table_name)
             ),
         )
+        if isinstance(decoded_msg, Update):
+            old_key_delete = self._old_key_delete(decoded_msg, data_item, msg_start_lsn)
+            if old_key_delete is not None:
+                self.data_items[decoded_msg.relation_id].append(old_key_delete)
         self.data_items[decoded_msg.relation_id].append(data_item)
 
     @staticmethod
@@ -1013,3 +1033,43 @@ class MessageConsumer:
         if for_delete:
             data_item["deleted_ts"] = commit_ts
         return data_item
+
+    def _old_key_delete(self, decoded_msg: Update, new_item: TDataItem,
+                        msg_start_lsn: int) -> Optional[TDataItem]:
+        """Local patch (#4338): an UPDATE that changes the primary key. The merge keys on the
+        NEW tuple, so without this the old key's row stays in the mirror for ever (a re-keyed
+        id leaves a ghost). With REPLICA IDENTITY FULL or a key identity the old tuple carries
+        the old key: emit a key-only delete for it at the same LSN — the keys differ, so lsn dedup keeps
+        both, and a later re-use of the old key in the batch has a higher LSN and wins."""
+        relation_id = decoded_msg.relation_id
+        table = self.last_table_schema[relation_id]
+        namespace, table_name = table.get("namespace") or "", table["name"]
+        if self.policies_by_relation.get((namespace, table_name)) == "append_only":
+            return None
+        if decoded_msg.optional_tuple_identifier not in ("O", "K") or decoded_msg.old_tuple is None:
+            return None
+        columns = table["columns"]
+        pk = [name for name, col in columns.items() if col.get("primary_key")]
+        if not pk:
+            return None
+        # A 'K' tuple carries only the REPLICA IDENTITY columns, which need not be the merge
+        # key (an identity on a secondary unique index): a key field missing from the raw tuple
+        # ('n' null, 'u' unchanged-TOAST, or absent) must never become a dummy value in a
+        # tombstone — that could delete an unrelated row. Skip it and report instead.
+        raw = decoded_msg.old_tuple.column_data
+        position = {name: i for i, name in enumerate(columns)}
+        if any(position[k] >= len(raw) or raw[position[k]].col_data_category in ("n", "u")
+               for k in pk):
+            self.key_problems[(namespace, table_name)] = (
+                "a key-changing UPDATE's old tuple lacks the merge key; the old key's row "
+                "may remain in bronze — resnapshot this table")
+            return None
+        old_item = self.gen_data_item(
+            data=decoded_msg.old_tuple.column_data, column_schema=columns,
+            lsn=msg_start_lsn, commit_ts=self.last_commit_ts, for_delete=True)
+        if all(old_item.get(k) == new_item.get(k) for k in pk):
+            return None
+        # The tombstone carries the key and the delete metadata only — never a column the
+        # projection (`include_columns`) leaves out, and nothing the delete does not need.
+        return {**{k: old_item.get(k) for k in pk},
+                "lsn": old_item["lsn"], "deleted_ts": old_item["deleted_ts"]}

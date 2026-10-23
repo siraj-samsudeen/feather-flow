@@ -52,6 +52,10 @@ class Lifecycle:
     def state_of(self, schema: str, table: str) -> str | None:
         return self._states.get((schema, table))
 
+    def known(self) -> dict[tuple[str, str], str]:
+        """Every relation this registration has a row for, with its state (a copy)."""
+        return dict(self._states)
+
     def transition(self, schema: str, table: str, new_state: str,
                    detail: str | None = None) -> str:
         if new_state not in STATES:

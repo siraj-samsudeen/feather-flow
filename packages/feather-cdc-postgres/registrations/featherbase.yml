@@ -20,6 +20,16 @@ source:
       - "featherbase.access_token"
       - "featherbase.password_reset"
       - "featherbase.user_settings"
+      # The Person release (featherbase 0101 + 0102, #4338): sign-in links, the old->new id
+      # map, service accounts and merge history never leave Featherbase; fingerprints are
+      # never mirrored (person-resolution D3/D10). `person_identifier` holds identifier VALUES
+      # and stays denied until Phase 2 (featherbase docs/DEPLOY.md, person release step 9).
+      - "featherbase.sign_in_identity"
+      - "featherbase.person_id_map"
+      - "featherbase.service_account"
+      - "featherbase.person_identifier"
+      - "featherbase.person_identifier_fingerprint"
+      - "featherbase.person_merge"
   discovery:
     adapter: featherbase
     options:
@@ -32,7 +42,8 @@ source:
       system_tables:
         - table_def
         - column_def
-        - user
+        - person              # was `user` until featherbase 0101 renamed it (#4338)
+        - identifier_system   # identifier namespaces, no values (person-resolution D2/D10)
         - role
         - has_role
         - permission
@@ -51,7 +62,12 @@ destination:
   table_schemas:
     - {match: "featherbase.table_def", schema: catalog}
     - {match: "featherbase.column_def", schema: catalog}
+    # `user` is RETIRED (renamed to `person` by featherbase 0101). The rule stays so WAL
+    # written under the old name before the rename lands in the frozen access.user copy, not
+    # in `application`; delete it once that copy is dropped (#4338).
     - {match: "featherbase.user", schema: access}
+    - {match: "featherbase.person", schema: access}
+    - {match: "featherbase.identifier_system", schema: access}
     - {match: "featherbase.role", schema: access}
     - {match: "featherbase.has_role", schema: access}
     - {match: "featherbase.permission", schema: access}

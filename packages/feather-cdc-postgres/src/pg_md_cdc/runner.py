@@ -11,7 +11,12 @@ Correctness invariants this file exists to hold:
   - relation identity is (schema, table) end to end; the destination side is the relation's
     compiled `target_schema` (D-13), one dlt pipeline per TARGET schema, never the source's;
   - a key-changed relation is out of the desired set for the WHOLE run (drift.scan), so the
-    drain, the reconcile counts and the probe all see the same active set.
+    drain, the reconcile counts and the probe all see the same active set;
+  - a table RENAMED at the source stays in the publication under its new name (membership is
+    by OID): a published relation with no lifecycle row and no destination copy is baselined,
+    not adopted, and
+    a known relation that left the selection is retired whether or not the publication still
+    named it (#4338, Featherbase `user` → `person`).
 Contract with the compiler half: manifest.Manifest / selectors.Relation (plan Appendix B).
 """
 from __future__ import annotations
@@ -217,6 +222,11 @@ def _initialize(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
     cfg.destination.write_baseline_lsns(
         cfg.registration, {(r.schema, r.table): handle.consistent_point_lsn for r in relations})
     cfg.destination.write_checkpoint(cfg.registration, cfg.slot, handle.consistent_point_lsn)
+    # A full re-baseline IS a resnapshot: the registry is rewritten with no diff, so a key
+    # change the previous signature would have blocked on is already resolved. Written BEFORE
+    # any relation is marked streaming, so a streaming relation always has a recorded key — a
+    # later rename's queued WAL is merged on it (`_retired_keys`, #4338).
+    drift.record_all(cfg, relations, run=run)
     for r in relations:
         lc.ensure(r.schema, r.table, CATCHING_UP, reason)
         lc.ensure(r.schema, r.table, STREAMING, reason)
@@ -312,18 +322,58 @@ def _reconcile_selection(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifec
         lc.ensure(schema, table, RETIRED, f"dropped from selection ({cfg.retirement_policy})")
     if dropped:
         _log(f"dropped from publication: {dropped} (retirement={cfg.retirement_policy})")
+    _retire_unselected(cfg, lc, desired, skip=blocked or set())
     publication.ensure_replica_identity(cfg.source_dsn, desired, cfg.replica_identity)
     return added, dropped
 
 
+def _retire_unselected(cfg: RuntimeConfig, lc: Lifecycle, desired, *, skip=frozenset()) -> list:
+    """A relation the lifecycle knows that is no longer selected is retired even when the
+    publication no longer names it — a source-side DROP or RENAME takes it out of the
+    publication by itself, so `publication.reconcile` never reports it as dropped, and its row
+    would otherwise say `streaming` for ever. Drift-blocked relations (`skip`) are out of the
+    selection for drift, not retired."""
+    wanted = set(desired) | set(skip)
+    retired = []
+    for (schema, table), state in sorted(lc.known().items()):
+        if state == RETIRED or (schema, table) in wanted:
+            continue
+        lc.ensure(schema, table, RETIRED,
+                  f"no longer selected and gone from the publication ({cfg.retirement_policy})")
+        retired.append((schema, table))
+    if retired:
+        _log(f"retired (no longer selected): {retired} (retirement={cfg.retirement_policy})")
+    return retired
+
+
+def _retired_keys(cfg: RuntimeConfig, lc: Lifecycle, active) -> dict:
+    """Merge keys for RETIRED relations, from their last recorded signature. WAL written before
+    a rename still names the old relation; the stream would otherwise look its key up in the
+    source catalog, find nothing (the name is gone) and fall back to REPLICA IDENTITY FULL's
+    every-column key — an UPDATE would then land as a second row in the frozen copy."""
+    active_keys = {(r.schema, r.table) for r in active}
+    retired = [k for k, s in lc.known().items() if s == RETIRED and k not in active_keys]
+    if not retired:
+        return {}
+    # One with no signature (the pilot's adopted-then-retired tables) falls back to the source
+    # catalog in the stream; only a record whose key resolves NOWHERE is reported, by the
+    # drain (`Batch.key_problems`), so an idle retired table never raises anything.
+    signatures = cfg.destination.read_signatures(cfg.registration)
+    return {k: tuple(signatures[k].get("key") or ()) for k in retired if k in signatures}
+
+
 def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines,
-           targets: _Targets) -> dict:
+           targets: _Targets, retired_keys: dict | None = None) -> dict:
     """Batch loop. The slot hands over items grouped by SOURCE schema; they are regrouped by
     TARGET schema here (one dlt pipeline per dataset). The checkpoint moves only after every
     dataset in the batch committed; the slot is advanced only to a checkpointed LSN."""
-    from .selectors import APPEND_ONLY
+    from .selectors import APPEND_ONLY, PRIMARY_KEY
     keys = {(r.schema, r.table): list(r.key) for r in relations}
     policies = {(r.schema, r.table): r.key_policy for r in relations}
+    for rel, key in (retired_keys or {}).items():
+        if rel not in keys:
+            keys[rel] = list(key)
+            policies[rel] = PRIMARY_KEY if key else APPEND_ONLY
     baselines = cfg.destination.read_baseline_lsns(cfg.registration)
     checkpoint = cfg.destination.read_checkpoint(cfg.registration)
     start_lsn = checkpoint[0] if checkpoint else 0
@@ -336,6 +386,7 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines,
         stream.advance(cfg.source_dsn, cfg.slot, start_lsn)
 
     batches = rows = 0
+    reported_key_problems: set = set()
     for batch in stream.drain(cfg.source_dsn, cfg.slot, cfg.publication, start_lsn,
                               target_batch_size=cfg.target_batch_size,
                               keys_by_relation=keys,
@@ -345,6 +396,11 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines,
         # TRUNCATEs first: the consumer already discarded a keyed relation's earlier rows of
         # this batch, so "empty, then load what followed" is the source's own order. A replay
         # after a crash deletes again and re-merges — idempotent.
+        for (schema, table), why in sorted(batch.key_problems.items()):
+            if (schema, table) not in reported_key_problems:
+                reported_key_problems.add((schema, table))
+                run.event(entity=f"{schema}.{table}", status=cp_status.EV_ERROR,
+                          unit="merge_key", error_detail=why)
         for t in batch.truncates:
             keyed = policies.get((t["namespace"], t["table"])) != APPEND_ONLY
             applied = False
@@ -437,7 +493,9 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
     lost = slot is not None and slot.get("wal_status") == "lost"
     if (slot is None or lost) and cfg.slot_loss_policy == "pause" and slot is not None:
         for r in relations:
-            lc.ensure(r.schema, r.table, RESNAPSHOT_REQUIRED, "slot lost; slot_loss_policy=pause")
+            # State-aware: a relation selected since the last tick has no row (and a re-selected
+            # one is `retired`); neither has a legal edge to resnapshot_required (#4338).
+            _mark_resnapshot_required(lc, r.schema, r.table, "slot lost; slot_loss_policy=pause")
         run.event(entity="_slot", status=cp_status.EV_ERROR, unit="probe",
                   error_detail="slot lost and slot_loss_policy=pause", extra=slot)
         return {"paused": True,
@@ -452,18 +510,22 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
             # ownership BEFORE the drop, not at the top of _initialize which runs after it.
             owner.assert_held()
             for r in relations:
-                lc.ensure(r.schema, r.table, RESNAPSHOT_REQUIRED, reason)
+                # State-aware (#4338): a newly selected or re-selected relation is routed
+                # straight to `snapshotting` by _initialize instead of aborting the tick here.
+                _mark_resnapshot_required(lc, r.schema, r.table, reason)
             publication.drop_publication(cfg.source_dsn, cfg.publication)
             snapshot.drop_slot_if_exists(cfg.source_dsn, cfg.slot)
         _initialize(cfg, relations, run=run, owner=owner, lc=lc, pipelines=pipelines,
                     targets=targets, reason=reason)
-        # A full re-baseline IS a resnapshot: the registry is rewritten with no diff, so a
-        # key change the previous signature would have blocked on is already resolved.
-        drift.record_all(cfg, relations, run=run)
+        # A rebuilt source (slot and publication gone) may no longer carry a table the
+        # lifecycle still calls live; nothing else would ever retire it.
+        _retire_unselected(cfg, lc, [(r.schema, r.table) for r in relations])
         active = relations
     else:
         _adopt_streaming(lc, relations,
-                         publication.published_relations(cfg.source_dsn, cfg.publication))
+                         publication.published_relations(cfg.source_dsn, cfg.publication),
+                         existing=cfg.destination.destination_tables(targets.all()),
+                         targets=targets)
         outcome = drift.scan(cfg, relations, run=run, lc=lc, owner=owner,
                              manifest_path=cfg.manifest_path)
         blocked = outcome.blocked
@@ -473,7 +535,8 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
         _resume_interrupted_snapshots(cfg, active, run=run, owner=owner, lc=lc,
                                       pipelines=pipelines, targets=targets)
 
-    result = _drain(cfg, active, run=run, owner=owner, pipelines=pipelines, targets=targets)
+    result = _drain(cfg, active, run=run, owner=owner, pipelines=pipelines, targets=targets,
+                    retired_keys=_retired_keys(cfg, lc, active))
     result["drift_blocked"] = sorted(blocked)
 
     probe = telemetry.slot_probe(cfg.source_dsn, cfg.slot)
@@ -501,13 +564,35 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
     return result
 
 
-def _adopt_streaming(lc: Lifecycle, relations, published: set) -> None:
+def _adopt_streaming(lc: Lifecycle, relations, published: set, *, existing: set,
+                     targets) -> None:
     """A steady-state run over tables with no lifecycle row (a takeover from the pilot, or a
     destination rebuilt underneath us): record what is observably true. Membership of the
-    publication is the evidence — a newly selected table is NOT adopted, it gets a baseline."""
+    publication is the evidence — a newly selected table is NOT adopted, it gets a baseline.
+
+    Adoption also needs the DESTINATION table to exist: a table RENAMED at the source stays in
+    the publication under its new name (membership is by OID), and its earlier rows are in no
+    WAL record under that name, so with no destination copy it is routed to `snapshotting` and
+    baselined this tick (#4338). Both signals are re-read on every tick, so a takeover that
+    crashed half-way decides the same way on retry — an adopted table is never re-baselined
+    (which would replace an append_only history with the source's current rows)."""
     for r in relations:
-        if lc.state_of(r.schema, r.table) is None and (r.schema, r.table) in published:
+        key = (r.schema, r.table)
+        if key not in published:
+            continue
+        state = lc.state_of(r.schema, r.table)
+        if state in (RETIRED, DISCOVERED):
+            # Re-selected while already published (a rename undone, a restored source whose
+            # publication still names it): `publication.reconcile` will not report it as
+            # added, so nothing else would re-baseline its frozen copy. DISCOVERED is the same
+            # case interrupted between `_to_snapshotting`'s two writes.
+            _to_snapshotting(lc, r.schema, r.table, "re-selected after retirement — baselining")
+        elif state is None and (targets(r.schema, r.table), r.table) in existing:
             lc.ensure(r.schema, r.table, STREAMING, "adopted: already in the publication")
+        elif state is None:
+            _to_snapshotting(lc, r.schema, r.table,
+                             "published, but no lifecycle row and no destination copy "
+                             "(renamed at the source?) — baselining")
 
 
 def _checkpoint_time(cfg: RuntimeConfig):

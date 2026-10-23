@@ -2,7 +2,7 @@
 
 Two-way selection (Siraj, 05-Sep-2026): every user-created table flows with no manifest edit;
 Featherbase's own platform tables flow only when named. Compiled against the fixture (the
-live `table_def` rows, `"system"` flag included) the desired set must be exactly 13 relations
+live `table_def` rows, `"system"` flag included) the desired set must be exactly 14 relations
 in four bronze schemas — and the navigation, scheduler and `version` tables must NOT be in it.
 """
 from __future__ import annotations
@@ -21,24 +21,27 @@ MANIFEST = pathlib.Path(__file__).resolve().parents[1] / "registrations" / "feat
 
 EXPECTED = {
     "catalog": {"table_def", "column_def"},
-    "access": {"user", "role", "has_role", "permission", "data_scope", "share"},
+    "access": {"person", "identifier_system", "role", "has_role", "permission", "data_scope", "share"},
     "activity": {"activity_log", "user_event", "comment"},
     "application": {"project", "task"},
 }
 NEVER = {"background_job", "job_execution", "home_page", "home_page_link", "home_page_role", "version"}
+# The Person release (#4338): never mirrored, whether or not Featherbase ever declares them.
+IDENTITY_DENIED = {"sign_in_identity", "person_id_map", "service_account", "person_identifier",
+                   "person_identifier_fingerprint", "person_merge"}
 
 
 @pytest.fixture
 def featherbase_db(fresh_db, monkeypatch):
     with psycopg.connect(fresh_db, autocommit=True) as c:
         c.execute(FIXTURE.read_text(encoding="utf-8"))
-        assert c.execute('select count(*) from featherbase.table_def where "system"').fetchone()[0] == 14
+        assert c.execute('select count(*) from featherbase.table_def where "system"').fetchone()[0] == 16
         assert c.execute('select count(*) from featherbase.table_def where not "system"').fetchone()[0] == 2
     monkeypatch.setenv("FEATHERBASE_PG_DSN", fresh_db)
     return fresh_db
 
 
-def test_the_shipped_registration_compiles_to_exactly_thirteen_routed_relations(featherbase_db):
+def test_the_shipped_registration_compiles_to_exactly_fourteen_routed_relations(featherbase_db):
     m = mf.load(str(MANIFEST))
     _, plan = runner._compile(m)
     assert [p for p in plan.problems if p.severity == "error"] == []
@@ -46,8 +49,10 @@ def test_the_shipped_registration_compiles_to_exactly_thirteen_routed_relations(
     for r in plan.relations:
         by_target.setdefault(r.target_schema, set()).add(r.table)
     assert by_target == EXPECTED
-    assert len(plan.relations) == 13
+    assert len(plan.relations) == 14
     assert NEVER.isdisjoint({r.table for r in plan.relations})
+    assert IDENTITY_DENIED.isdisjoint({r.table for r in plan.relations})
+    assert "user" not in {r.table for r in plan.relations}
     assert {(r.schema, r.table) for r in plan.relations if r.origin == USER_CREATED} == {
         ("tasker", "project"),
         ("tasker", "task"),
@@ -59,15 +64,16 @@ def test_the_shipped_registration_compiles_to_exactly_thirteen_routed_relations(
     assert {o for (s, _), o in origins.items() if s != "tasker"} == {NAMED_SYSTEM}
     classes = {r.table: r.table_class for r in plan.relations}
     assert classes["task"] == "application" and classes["comment"] == "application"
-    assert classes["table_def"] == "source_system" and classes["user"] == "source_system"
+    assert classes["table_def"] == "source_system" and classes["person"] == "source_system"
+    assert classes["identifier_system"] == "source_system"
 
 
-def test_plan_prints_the_thirteen_with_their_origin_and_target(featherbase_db, capsys):
+def test_plan_prints_the_fourteen_with_their_origin_and_target(featherbase_db, capsys):
     assert cli.main(["plan", str(MANIFEST)]) == 0
     out = capsys.readouterr().out
-    assert "relations (13):" in out
+    assert "relations (14):" in out
     assert "tasker.task" in out and "-> application.task" in out and "origin=user_created" in out
-    assert "-> catalog.table_def" in out and "-> access.user" in out and "-> activity.comment" in out
+    assert "-> catalog.table_def" in out and "-> access.person" in out and "-> activity.comment" in out
     for t in NEVER:
         assert f"featherbase.{t} " not in out
     assert "public.site " not in out
@@ -92,7 +98,7 @@ def test_a_new_user_created_table_is_selected_with_no_manifest_edit(featherbase_
                   "values ('Email Queue V2', 'Core', 'table', true)")
     _, plan = runner._compile(mf.load(str(MANIFEST)))
     by = {r.table: r for r in plan.relations}
-    assert len(plan.relations) == 14
+    assert len(plan.relations) == 15
     assert (by["invoice"].target_schema, by["invoice"].origin, by["invoice"].table_class) == (
         "application", USER_CREATED, "application")
     assert "email_queue_v2" not in by
@@ -119,3 +125,25 @@ def test_a_qualified_user_table_with_no_stored_location_still_refuses(featherbas
                   "values ('budgets.invoice', 'Budgets', 'table', false)")
     with pytest.raises(RuntimeError, match="budgets.invoice"):
         runner._compile(mf.load(str(MANIFEST)))
+
+
+@pytest.mark.parametrize("table", sorted(IDENTITY_DENIED))
+def test_an_identity_table_named_in_system_tables_fails_validate_not_replicates(
+        featherbase_db, table, tmp_path):
+    """#4338 tripwire: Featherbase may later declare one of the Person release's identity
+    tables in its catalog, and someone may name it in `system_tables`. The compiled set must
+    then be refused (deny is evaluated on what selection produced), never replicated."""
+    with psycopg.connect(featherbase_db, autocommit=True) as c:
+        c.execute('insert into featherbase.table_def (name, module, kind, "system") '
+                  "values (%s, 'Core', 'table', true) on conflict (name) do nothing",
+                  (table.replace("_", " ").title(),))
+    text = MANIFEST.read_text(encoding="utf-8").replace(
+        "        - identifier_system ", f"        - {table}\n        - identifier_system ")
+    path = tmp_path / "featherbase.yml"
+    path.write_text(text, encoding="utf-8")
+    plan, problems, _ = cli._compile(mf.load(str(path)), with_publication=False)
+    assert f"featherbase.{table}" in plan.denied_hits
+    assert any(p.code == "deny_hit" and p.severity == "error" for p in problems)
+    assert cli.main(["validate", str(path)]) == 1
+    with pytest.raises(SystemExit, match="compiled plan has errors"):
+        runner._compile(mf.load(str(path)))
