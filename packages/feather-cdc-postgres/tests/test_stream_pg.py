@@ -232,3 +232,31 @@ def test_a_replication_connection_that_cannot_open_reports_the_real_error(names)
         gen.collect()
     assert not isinstance(exc.value, UnboundLocalError), exc.value
     assert "connect" in str(exc.value).lower() or "connection" in str(exc.value).lower()
+
+
+def test_a_stored_generated_column_streams_with_its_value(fresh_db, names):
+    """Featherbase's `has_role.person` is STORED generated (person-rename 0101). On PG 18 the
+    publication publishes it, so inserts, updates and deletes decode with the value."""
+    with psycopg.connect(fresh_db) as c:
+        if c.info.server_version < 180000:
+            pytest.skip("publish_generated_columns is PostgreSQL 18+")
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.g (id int primary key, kind text, v text, "
+                  "person text generated always as (case when kind = 'P' then v end) stored)")
+    publication.reconcile(fresh_db, names["publication"], [("public", "g")])
+    publication.ensure_replica_identity(fresh_db, [("public", "g")], "full")
+    _slot(fresh_db, names["slot"])
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("insert into public.g values (1, 'P', 'a'), (2, 'S', 'x')")
+        c.execute("update public.g set v = 'b' where id = 1")
+        c.execute("delete from public.g where id = 2")
+
+    rows = []
+    for batch in stream.drain(fresh_db, names["slot"], names["publication"], 0,
+                              keys_by_relation={("public", "g"): ["id"]}):
+        rows.extend(_rows(batch, "public", "g"))
+    by_id = {}
+    for r in rows:
+        by_id.setdefault(r["id"], []).append(r)
+    assert [r.get("person") for r in by_id[1]] == ["a", "b"]
+    assert by_id[2][0]["person"] is None and by_id[2][-1].get("deleted_ts") is not None

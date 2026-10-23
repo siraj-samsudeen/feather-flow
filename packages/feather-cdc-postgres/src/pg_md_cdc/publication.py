@@ -69,12 +69,20 @@ def reconcile(
             "where pubname = %s", (publication,)
         ).fetchone()
         exists = flags is not None
+        # PG 18 refuses UPDATEs on a published REPLICA IDENTITY FULL table whose stored
+        # generated columns are not published, so the publication always publishes them.
+        gencols = conn.info.server_version >= 180000
         if exists and not plan_only:
             current_ops = {op for op, col in _PUB_FLAGS.items()
                            if flags[list(_PUB_FLAGS).index(op)]}
             if current_ops != wanted_ops:
                 conn.execute(sql.SQL("alter publication {} set (publish = {})").format(
                     sql.Identifier(publication), sql.Literal(publish)))
+            if gencols and conn.execute(
+                "select pubgencols from pg_publication where pubname = %s", (publication,)
+            ).fetchone()[0] != "s":
+                conn.execute(sql.SQL("alter publication {} set (publish_generated_columns = stored)")
+                             .format(sql.Identifier(publication)))
         current: set[Relation] = set()
         if exists:
             current = {
@@ -90,8 +98,9 @@ def reconcile(
             return added, dropped
         if not exists:
             conn.execute(
-                sql.SQL("create publication {} with (publish = {})").format(
-                    sql.Identifier(publication), sql.Literal(publish)
+                sql.SQL("create publication {} with (publish = {}{})").format(
+                    sql.Identifier(publication), sql.Literal(publish),
+                    sql.SQL(", publish_generated_columns = stored" if gencols else ""),
                 )
             )
         for schema, table in added:

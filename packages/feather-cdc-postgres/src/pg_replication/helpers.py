@@ -266,17 +266,25 @@ def create_publication(
 ) -> None:
     """Creates a publication for logical replication if it doesn't exist yet.
 
-    Does nothing if the publication already exists.
+    An existing publication is left as is, except that on PG 18+ it is made to publish
+    stored generated columns.
     Raises error if the user does not have the CREATE privilege for the database.
     """
     esc_name = escape_postgres_identifier(name)
+    # PG 18: unpublished stored generated columns make FULL-identity tables un-updatable.
+    pg18 = cur.connection.server_version >= 180000
+    gencols = ", publish_generated_columns = stored" if pg18 else ""
     try:
-        cur.execute(f"CREATE PUBLICATION {esc_name} WITH (publish = '{publish}');")
+        cur.execute(f"CREATE PUBLICATION {esc_name} WITH (publish = '{publish}'{gencols});")
         logger.info(
             f"Successfully created publication {esc_name} with publish = '{publish}'."
         )
     except psycopg2.errors.DuplicateObject:  # the publication already exists
         logger.info(f'Publication "{name}" already exists.')
+        if pg18:
+            cur.execute("SELECT pubgencols FROM pg_publication WHERE pubname = %s", (name,))
+            if cur.fetchone()[0] != "s":
+                cur.execute(f"ALTER PUBLICATION {esc_name} SET (publish_generated_columns = stored);")
 
 
 def add_table_to_publication(
