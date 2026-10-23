@@ -98,6 +98,40 @@ class Destination:
         return None
 
     @staticmethod
+    def rounds(items) -> list[list]:
+        """Split one batch into load ROUNDS so no dlt resource carries two descriptions of a
+        table (#4345). A table renamed or altered mid-batch arrives as `hints, rows, hints,
+        rows`; in one resource the LAST hints win for every row, so a column dropped and re-
+        added with another type pushed the earlier rows into a variant column. Round k holds
+        the k-th description group of every table, in WAL order — the per-description loads
+        the stream made before it learnt to decode through a Relation message. A batch with
+        one group per table is one round, as before."""
+        from dlt.extract.hints import HintsMeta
+        from dlt.extract.items import DataItemWithMeta
+        groups: dict[str, list[list]] = {}
+        for item in items:
+            table = Destination.table_of(item)
+            segments = groups.setdefault(table, [])
+            starts = (isinstance(item, DataItemWithMeta) and isinstance(item.meta, HintsMeta))
+            if not segments or (starts and segments[-1]):
+                segments.append([])
+            segments[-1].append(item)
+        depth = max((len(s) for s in groups.values()), default=0)
+        return [[item for segments in groups.values() if k < len(segments)
+                 for item in segments[k]] for k in range(depth)]
+
+    @staticmethod
+    def finish_pending(pipeline: dlt.Pipeline) -> bool:
+        """Load what a crashed run left extracted or normalized but unloaded. dlt's `run`
+        loads such a PENDING package and returns WITHOUT extracting the data it was handed
+        (#4345 Codex adversarial), so a replay must finish it first — before re-applying the
+        batch's truncates, and before loading any round."""
+        if not pipeline.has_pending_data:
+            return False
+        pipeline.run()
+        return True
+
+    @staticmethod
     def load(pipeline: dlt.Pipeline, items, *, resource_name: str = "cdc"):
         """Run one batch through a pipeline as ONE dlt resource PER TABLE, named after the
         table. dlt records the resource that last wrote a table in the schema's `resource`
@@ -109,6 +143,7 @@ class Destination:
         by_table: dict[str, list] = {}
         for item in items:
             by_table.setdefault(Destination.table_of(item) or resource_name, []).append(item)
+        Destination.finish_pending(pipeline)   # never let `run` skip the items handed to it
         return pipeline.run([dlt.resource(v, name=k) for k, v in by_table.items()])
 
     @staticmethod

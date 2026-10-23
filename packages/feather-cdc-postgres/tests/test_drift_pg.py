@@ -9,6 +9,7 @@ the publication while the rest of the publication drains.
 from __future__ import annotations
 
 import duckdb
+import psycopg
 from pg_md_cdc import publication
 from pg_md_cdc.lifecycle import DRIFT_REVIEW, RESNAPSHOT_REQUIRED, STREAMING
 
@@ -303,3 +304,71 @@ def test_an_unchanged_signature_is_not_rewritten_every_tick(
     sql(fresh_db, "alter table public.u add column w int")
     tick(cfg, relations)
     assert writes == ["u"]
+
+
+def test_a_column_added_between_two_changes_of_one_transaction_loads_both_halves(
+        fresh_db, names, duckdb_path, tmp_path):
+    """#4345: rows changed, then a column added, then more rows — one transaction. The batch
+    carries two hints items for the table (one per description) in one dlt resource; both
+    halves must land, the earlier half with the new column null, and the tick must checkpoint
+    past the transaction."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'first'), (2, 'second')")
+    relations = [rel("public", "t", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+
+    with psycopg.connect(fresh_db) as c:
+        c.execute("update public.t set v = 'first-2' where id = 1")
+        c.execute("alter table public.t add column note text")
+        c.execute("update public.t set note = 'has a note' where id = 2")
+        c.execute("insert into public.t values (3, 'third', 'n3')")
+        c.commit()
+    tick(cfg, relations)
+
+    con = duckdb.connect(duckdb_path)
+    assert con.execute("select id, v, note from public.t order by id").fetchall() == [
+        (1, "first-2", None), (2, "second", "has a note"), (3, "third", "n3")]
+    con.close()
+    assert dest.read_checkpoint(cfg.registration)[0] == stream_max(fresh_db, names)
+
+
+def stream_max(dsn, names):
+    with psycopg.connect(dsn, autocommit=True) as c:
+        return int(c.execute("select (confirmed_flush_lsn - '0/0')::bigint from "
+                             "pg_replication_slots where slot_name = %s",
+                             (names["slot"],)).fetchone()[0])
+
+
+def test_a_column_dropped_and_re_added_with_another_type_mid_batch_loads_as_it_did_before(
+        fresh_db, names, duckdb_path, tmp_path):
+    """#4345 review: drop `v` (text) and re-add `v` (int) between two changes of one
+    transaction. The batch carries two conflicting descriptions of `t`; loaded in ONE dlt
+    resource the later hints won for every row and pushed the earlier text into a variant
+    column `v__v_text`. Loaded round by round, the result is what two separate transactions
+    always gave: both values in `v`, no variant column, and the breaking drift reported."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'one'), (2, 'two')")
+    relations = [rel("public", "t", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+
+    with psycopg.connect(fresh_db) as c:
+        c.execute("update public.t set v = 'one-b' where id = 1")
+        c.execute("alter table public.t drop column v")
+        c.execute("alter table public.t add column v int")
+        c.execute("update public.t set v = 5 where id = 2")
+        c.commit()
+    run, result = tick(cfg, relations)
+
+    con = duckdb.connect(duckdb_path)
+    columns = {r[0] for r in con.execute(
+        "select column_name from information_schema.columns "
+        "where table_schema = 'public' and table_name = 't'").fetchall()}
+    assert not any(c.startswith("v__") for c in columns), columns
+    assert con.execute("select id, v from public.t order by id").fetchall() == [
+        (1, "one-b"), (2, "5")]
+    con.close()
+    assert kinds(run, "public.t") >= {"type_incompatible"}
+    assert result["outcome"]["status"] == "partial"
+    assert dest.read_lifecycle(cfg.registration)[("public", "t")] == DRIFT_REVIEW

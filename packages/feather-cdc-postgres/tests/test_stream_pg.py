@@ -1,6 +1,8 @@
 """Slot consumption: schema-qualified identity, batch boundaries, TOAST (#3079)."""
 from __future__ import annotations
 
+import itertools
+
 import psycopg
 import pytest
 
@@ -260,3 +262,258 @@ def test_a_stored_generated_column_streams_with_its_value(fresh_db, names):
         by_id.setdefault(r["id"], []).append(r)
     assert [r.get("person") for r in by_id[1]] == ["a", "b"]
     assert by_id[2][0]["person"] is None and by_id[2][-1].get("deleted_ts") is not None
+
+
+def _hinted_columns(batch, namespace, table):
+    """Column names of every hints (meta) item bound for `table`, in batch order."""
+    out = []
+    for item in batch.items_by_namespace.get(namespace, []):
+        hints = getattr(getattr(item, "meta", None), "hints", None)
+        if hints and hints.get("table_name") == table:
+            out.append(set(hints.get("columns") or {}))
+    return out
+
+
+def test_rows_changed_then_the_table_renamed_in_one_transaction_drain_to_the_commit(
+        fresh_db, names):
+    """#4345: a transaction UPDATEs rows of a table and THEN renames it. pgoutput sends the new
+    Relation message mid-transaction; the decoder used to stop there, before any commit, so the
+    drain had no commit LSN and every later tick died on `None >> 32` after loading a partial
+    transaction. The whole transaction must drain to its commit, each row under the name the
+    table had when the row was written."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute('create table public."user" (id int primary key, v text)')
+        c.execute("insert into public.\"user\" values (1, 'a'), (2, 'b')")
+    publication.reconcile(fresh_db, names["publication"], [("public", "user")])
+    publication.ensure_replica_identity(fresh_db, [("public", "user")], "full")
+    _slot(fresh_db, names["slot"])
+    with psycopg.connect(fresh_db) as c:   # ONE transaction: rows first, rename after
+        c.execute("update public.\"user\" set v = 'a2' where id = 1")
+        c.execute('alter table public."user" rename to person')
+        c.execute("update public.person set v = 'b2' where id = 2")
+        c.execute("insert into public.person values (3, 'c')")
+        c.commit()
+    with psycopg.connect(fresh_db, autocommit=True) as c:   # and one ordinary commit after it
+        c.execute("insert into public.person values (4, 'd')")
+    upto = stream.max_lsn(fresh_db, names["slot"], names["publication"])
+
+    for size in (1000, 1):   # one batch, and one commit per batch
+        batches = list(stream.drain(fresh_db, names["slot"], names["publication"], 0,
+                                    target_batch_size=size,
+                                    keys_by_relation={("public", "user"): ["id"],
+                                                      ("public", "person"): ["id"]}))
+        assert batches and batches[-1].consumed_all is True
+        assert all(b.last_commit_lsn for b in batches), "a batch ended without a commit"
+        assert batches[-1].last_commit_lsn == upto
+        user = [r for b in batches for r in _rows(b, "public", "user")]
+        person = [r for b in batches for r in _rows(b, "public", "person")]
+        assert [(r["id"], r["v"]) for r in user] == [(1, "a2")]
+        assert [(r["id"], r["v"]) for r in person] == [(2, "b2"), (3, "c"), (4, "d")]
+        # the renaming transaction lands whole, in ONE batch, never split at the rename
+        mixed = [b for b in batches if _rows(b, "public", "user")]
+        assert len(mixed) == 1 and [r["id"] for r in _rows(mixed[0], "public", "person")][:2] \
+            == [2, 3]
+
+
+def test_a_column_added_mid_transaction_keeps_both_halves_with_their_own_hints(
+        fresh_db, names):
+    """#4345, the other mid-transaction Relation message: ALTER TABLE ADD COLUMN between two
+    changes of the same table. Both halves land in one batch; the later half's hints carry the
+    new column, the earlier half's do not."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.t (id int primary key, v text)")
+        c.execute("insert into public.t values (1, 'a'), (2, 'b')")
+    publication.reconcile(fresh_db, names["publication"], [("public", "t")])
+    publication.ensure_replica_identity(fresh_db, [("public", "t")], "full")
+    _slot(fresh_db, names["slot"])
+    with psycopg.connect(fresh_db) as c:
+        c.execute("update public.t set v = 'a2' where id = 1")
+        c.execute("alter table public.t add column w text")
+        c.execute("update public.t set w = 'x' where id = 2")
+        c.commit()
+
+    batches = list(stream.drain(fresh_db, names["slot"], names["publication"], 0,
+                                keys_by_relation={("public", "t"): ["id"]}))
+    assert len(batches) == 1 and batches[0].consumed_all and batches[0].last_commit_lsn
+    rows = _rows(batches[0], "public", "t")
+    assert [(r["id"], r["v"], r.get("w")) for r in rows] == [(1, "a2", None), (2, "b", "x")]
+    hinted = _hinted_columns(batches[0], "public", "t")
+    assert len(hinted) == 2 and "w" not in hinted[0] and "w" in hinted[1]
+
+
+def test_a_truncate_after_a_mid_transaction_column_change_discards_both_halves(
+        fresh_db, names):
+    """#4345 review: rows of the table collected before a mid-transaction Relation message sit
+    in an earlier group; a keyed TRUNCATE later in the batch must discard them too, or they
+    would be loaded AFTER the runner's delete and resurrect truncated rows."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.t (id int primary key, v text)")
+        c.execute("insert into public.t values (1, 'a')")
+    publication.reconcile(fresh_db, names["publication"], [("public", "t")])
+    publication.ensure_replica_identity(fresh_db, [("public", "t")], "full")
+    _slot(fresh_db, names["slot"])
+    with psycopg.connect(fresh_db) as c:
+        c.execute("update public.t set v = 'a2' where id = 1")
+        c.execute("alter table public.t add column w text")
+        c.execute("insert into public.t values (2, 'b', 'x')")
+        c.execute("truncate public.t")
+        c.execute("insert into public.t values (3, 'c', 'y')")
+        c.commit()
+
+    batches = list(stream.drain(fresh_db, names["slot"], names["publication"], 0,
+                                keys_by_relation={("public", "t"): ["id"]}))
+    assert len(batches) == 1
+    assert [t["table"] for t in batches[0].truncates] == ["t"]
+    assert [r["id"] for r in _rows(batches[0], "public", "t")] == [3]
+
+
+def test_a_batch_that_ends_without_a_commit_fails_closed_before_it_is_loaded(monkeypatch):
+    """#4345 backstop: should the consumer ever stop without reaching a commit, the drain must
+    raise a clear error BEFORE yielding — never hand the runner a partial transaction to load,
+    and never loop on a `None` restart LSN."""
+    class _NoCommit:
+        def __init__(self, **kw):
+            self.last_commit_lsn = None
+            self.generated_all = False
+            self.truncates = []
+            self.key_problems = {}
+
+        def collect(self):
+            return {"public": ["a partial transaction"]}
+
+    monkeypatch.setattr(stream, "ItemGenerator", _NoCommit)
+    monkeypatch.setattr(stream, "get_max_lsn", lambda *a, **k: 100)
+    drained = stream.drain("postgresql://unused", "s", "p", 0)
+    with pytest.raises(RuntimeError, match="without reaching a commit"):
+        next(drained)
+
+
+def test_repeated_column_changes_still_split_batches_at_the_batch_size(fresh_db, names):
+    """#4345 Codex review: rows retained under an earlier description still count towards
+    `target_batch_size`, so a table altered in every transaction cannot grow one batch without
+    limit."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.t (id int primary key, v text)")
+    publication.reconcile(fresh_db, names["publication"], [("public", "t")])
+    publication.ensure_replica_identity(fresh_db, [("public", "t")], "full")
+    _slot(fresh_db, names["slot"])
+    for i in range(20):
+        with psycopg.connect(fresh_db) as c:
+            for j in range(4):
+                c.execute("insert into public.t (id, v) values (%s, 'x')", (i * 10 + j,))
+            c.execute(f"alter table public.t add column c{i} text")
+            for j in range(4, 8):
+                c.execute("insert into public.t (id, v) values (%s, 'y')", (i * 10 + j,))
+            c.commit()
+
+    batches = list(stream.drain(fresh_db, names["slot"], names["publication"], 0,
+                                target_batch_size=10,
+                                keys_by_relation={("public", "t"): ["id"]}))
+    assert len(batches) >= 10, "the batch size was ignored"
+    assert sum(len(_rows(b, "public", "t")) for b in batches) == 160
+    assert all(b.last_commit_lsn for b in batches) and batches[-1].consumed_all
+
+
+def test_a_truncate_after_a_rename_swap_discards_the_other_relations_rows_of_that_name(
+        fresh_db, names):
+    """#4345 Codex adversarial: `a` and `b` swap names in one transaction, then the new `a` is
+    truncated. The rows written under the name `a` BEFORE the swap belong to the other relation
+    but target the same destination table; they must be discarded too, or they load after the
+    runner's delete and resurrect."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.a (id int primary key, v text)")
+        c.execute("create table public.b (id int primary key, v text)")
+        c.execute("insert into public.a values (1, 'a1')")
+        c.execute("insert into public.b values (1, 'b1')")
+    rels = [("public", "a"), ("public", "b")]
+    publication.reconcile(fresh_db, names["publication"], rels)
+    publication.ensure_replica_identity(fresh_db, rels, "full")
+    _slot(fresh_db, names["slot"])
+    with psycopg.connect(fresh_db) as c:
+        c.execute("update public.a set v = 'a1-changed' where id = 1")
+        c.execute("alter table public.a rename to tmp")
+        c.execute("alter table public.b rename to a")
+        c.execute("alter table public.tmp rename to b")
+        c.execute("update public.a set v = 'b1-changed' where id = 1")
+        c.execute("truncate public.a")
+        c.execute("insert into public.a values (2, 'after-truncate')")
+        c.commit()
+
+    batches = list(stream.drain(fresh_db, names["slot"], names["publication"], 0,
+                                keys_by_relation={r: ["id"] for r in rels}))
+    assert len(batches) == 1
+    assert [t["table"] for t in batches[0].truncates] == ["a"]
+    assert [(r["id"], r["v"]) for r in _rows(batches[0], "public", "a")] == [
+        (2, "after-truncate")]
+
+
+def _primary_keys(batch, namespace, table):
+    """Primary-key columns of every hints item bound for `table`, in batch order."""
+    out = []
+    for item in batch.items_by_namespace.get(namespace, []):
+        hints = getattr(getattr(item, "meta", None), "hints", None)
+        if hints and hints.get("table_name") == table:
+            out.append(sorted(n for n, c in (hints.get("columns") or {}).items()
+                              if c.get("primary_key")))
+    return out
+
+
+def test_a_swapped_name_never_lends_its_new_owner_s_key_to_an_undeclared_relation(
+        fresh_db, names):
+    """#4345 review: with no declared key the decoder reads the key from the source catalog
+    NOW, by name. After a swap the name `a` belongs to the other table, whose key is `code`;
+    the records written under `a` before the swap must not merge on `code`. The lookup checks
+    the table's oid and reports the key problem instead."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.a (id int primary key, code text not null unique)")
+        c.execute("create table public.b (id int not null unique, code text primary key)")
+        c.execute("insert into public.a values (1, 'x')")
+        c.execute("insert into public.b values (1, 'y')")
+    rels = [("public", "a"), ("public", "b")]
+    publication.reconcile(fresh_db, names["publication"], rels)
+    publication.ensure_replica_identity(fresh_db, rels, "full")
+    _slot(fresh_db, names["slot"])
+    with psycopg.connect(fresh_db) as c:
+        c.execute("update public.a set code = 'x2' where id = 1")
+        c.execute("alter table public.a rename to tmp")
+        c.execute("alter table public.b rename to a")
+        c.execute("alter table public.tmp rename to b")
+        c.execute("update public.b set code = 'x3' where id = 1")   # the former `a`
+        c.commit()
+
+    (batch,) = list(stream.drain(fresh_db, names["slot"], names["publication"], 0))
+    assert _primary_keys(batch, "public", "a") != [["code"]], "the swapped-in table's key"
+    assert "belongs to another table" in batch.key_problems[("public", "a")]
+    # the same relation under its CURRENT name resolves its own key from the catalog
+    assert _primary_keys(batch, "public", "b") == [["id"]]
+    assert ("public", "b") not in batch.key_problems
+
+
+def test_a_large_transaction_ending_a_batch_is_delivered_once(fresh_db, names):
+    """#4345 review: the drain restarts at the last commit LSN. A transaction of at least
+    `target_batch_size` rows that ends a batch must not be re-delivered by that restart — or
+    every restart would stop at the same commit for ever. Measured with and without advancing
+    the slot in between (the runner advances; a bare drain does not)."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.t (id int primary key, v text)")
+    publication.reconcile(fresh_db, names["publication"], [("public", "t")])
+    _slot(fresh_db, names["slot"])
+    for k in range(3):
+        with psycopg.connect(fresh_db) as c:
+            for i in range(20):
+                c.execute("insert into public.t values (%s, 'x')", (k * 100 + i,))
+            c.commit()
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("insert into public.t values (999, 'y')")
+
+    for advance in (False, True):
+        seen = []
+        for batch in itertools.islice(
+                stream.drain(fresh_db, names["slot"], names["publication"], 0,
+                             target_batch_size=10, keys_by_relation={("public", "t"): ["id"]}),
+                10):   # a re-delivery loop would run past this; four batches are expected
+            seen.append((batch.last_commit_lsn, len(_rows(batch, "public", "t"))))
+            if advance:
+                stream.advance(fresh_db, names["slot"], batch.last_commit_lsn)
+        assert [n for _, n in seen] == [20, 20, 20, 1]
+        assert [lsn for lsn, _ in seen] == sorted({lsn for lsn, _ in seen})

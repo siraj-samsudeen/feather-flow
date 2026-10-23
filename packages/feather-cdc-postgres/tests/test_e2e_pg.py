@@ -1157,3 +1157,79 @@ def test_a_keyed_re_baseline_does_not_resurrect_a_row_deleted_in_between(
     tick(cfg, [keyed_a, t])
     tick(cfg, [keyed_a, t])
     assert [r[:2] for r in table(duckdb_path, "public.t")] == [(1, "a")]
+
+
+def test_a_rename_swap_then_truncate_in_one_transaction_leaves_only_the_post_truncate_rows(
+        fresh_db, names, duckdb_path, tmp_path):
+    """#4345 Codex adversarial, end to end: two keyed tables swap names, the new `a` is
+    truncated and refilled — one transaction. The destination `a` must hold only the
+    post-truncate row, and the tick must checkpoint past the transaction."""
+    sql(fresh_db,
+        "create table public.a (id int primary key, v text)",
+        "create table public.b (id int primary key, v text)",
+        "insert into public.a values (1, 'a1')",
+        "insert into public.b values (1, 'b1')")
+    relations = [rel("public", "a", "id"), rel("public", "b", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+
+    with psycopg.connect(fresh_db) as c:
+        c.execute("update public.a set v = 'a1-changed' where id = 1")
+        c.execute("alter table public.a rename to tmp")
+        c.execute("alter table public.b rename to a")
+        c.execute("alter table public.tmp rename to b")
+        c.execute("update public.a set v = 'b1-changed' where id = 1")
+        c.execute("truncate public.a")
+        c.execute("insert into public.a values (2, 'after-truncate')")
+        c.commit()
+    tick(cfg, relations)
+
+    assert [r[:2] for r in table(duckdb_path, "public.a")] == [(2, "after-truncate")]
+    assert dest.read_checkpoint(cfg.registration)[0] == confirmed_flush(fresh_db, names["slot"])
+
+
+def test_a_crash_with_a_later_round_pending_loses_no_post_truncate_row(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """#4345 Codex adversarial round 3: a keyed batch TRUNCATEs, inserts A, changes the table's
+    description, inserts B — two load rounds. Round 1 commits A; the run dies with round 2
+    normalized but unloaded. dlt's `run` loads a PENDING package and returns WITHOUT extracting
+    the data it was given, so the retry (same pipeline directory) used to re-truncate, skip
+    round 1 and lose A for good while the checkpoint advanced."""
+    sql(fresh_db, "create table public.t (id int primary key, v text)",
+        "insert into public.t values (1, 'old'), (2, 'old')")
+    relations = [rel("public", "t", "id")]
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)
+    with psycopg.connect(fresh_db) as c:
+        c.execute("truncate public.t")
+        c.execute("insert into public.t values (10, 'A')")
+        c.execute("alter table public.t add column w text")
+        c.execute("insert into public.t values (11, 'B', 'w')")
+        c.commit()
+
+    real_load = Destination.load
+    calls = []
+
+    def dying_load(pipeline, items, *, resource_name="cdc"):
+        calls.append(1)
+        if len(calls) == 2:   # round 2: extracted and normalized, never loaded
+            import dlt
+            by_table = {}
+            for item in items:
+                by_table.setdefault(Destination.table_of(item) or resource_name, []).append(item)
+            pipeline.extract([dlt.resource(v, name=k) for k, v in by_table.items()])
+            pipeline.normalize()
+            raise RuntimeError("injected crash after normalize")
+        return real_load(pipeline, items, resource_name=resource_name)
+
+    checkpoint = dest.read_checkpoint(cfg.registration)
+    import pytest
+    monkeypatch.setattr(Destination, "load", staticmethod(dying_load))
+    with pytest.raises(RuntimeError, match="injected"):
+        tick(cfg, relations)
+    monkeypatch.setattr(Destination, "load", staticmethod(real_load))
+    assert dest.read_checkpoint(cfg.registration) == checkpoint, "no checkpoint on a crash"
+
+    tick(cfg, relations)
+    assert [r[:2] for r in table(duckdb_path, "public.t", "id")] == [(10, "A"), (11, "B")]
+    assert dest.read_checkpoint(cfg.registration)[0] == confirmed_flush(fresh_db, names["slot"])

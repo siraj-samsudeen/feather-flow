@@ -401,6 +401,21 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines,
                 reported_key_problems.add((schema, table))
                 run.event(entity=f"{schema}.{table}", status=cp_status.EV_ERROR,
                           unit="merge_key", error_detail=why)
+        load_ids: list[str] = []
+        by_target: dict[str, list] = {}
+        for source_schema, items in batch.items_by_namespace.items():
+            for item in items:
+                table = Destination.table_of(item)
+                target = (targets(source_schema, table) if table
+                          else cfg.target_schema(source_schema))
+                by_target.setdefault(target, []).append(item)
+        # A replay after a crash may find a pipeline with a package left pending (#4345 Codex
+        # adversarial: a later load round normalized, never loaded). Finish it BEFORE the
+        # truncates below, which then remove it again — after them it would resurrect rows.
+        for target in sorted(set(by_target) | {targets(t["namespace"], t["table"])
+                                               for t in batch.truncates}):
+            if Destination.finish_pending(pipelines.get(target)):
+                owner.assert_held()
         for t in batch.truncates:
             keyed = policies.get((t["namespace"], t["table"])) != APPEND_ONLY
             applied = False
@@ -412,25 +427,20 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines,
                       extra={"lsn": t["lsn"], "commit_lsn": t["commit_lsn"],
                              "applied": "delete_all" if keyed else "recorded_only",
                              "destination_table_existed": applied})
-        load_ids: list[str] = []
-        by_target: dict[str, list] = {}
-        for source_schema, items in batch.items_by_namespace.items():
-            for item in items:
-                table = Destination.table_of(item)
-                target = (targets(source_schema, table) if table
-                          else cfg.target_schema(source_schema))
-                by_target.setdefault(target, []).append(item)
         for target, items in sorted(by_target.items()):
             pipe = pipelines.get(target)
-            info = Destination.load(pipe, items, resource_name=cfg.slot)
-            # The load is the one long blocking call per batch: Postgres may have reaped the
-            # owner backend meanwhile, freeing the lock to a peer. Checkpointing or advancing
-            # the slot without the lock would hand that peer a hole; re-assert first, and leave
-            # the committed load replayable (merge / lsn-merge make the replay exact).
-            owner.assert_held()
-            load_ids += _load_ids(info)
-            rows += sum(Destination.row_counts(pipe).values())
-            _emit_table_events(run, pipe, "cdc", targets.source_of(target), set())
+            # Usually one round; more only when a table changed description mid-batch (#4345).
+            for round_items in Destination.rounds(items):
+                info = Destination.load(pipe, round_items, resource_name=cfg.slot)
+                # The load is the one long blocking call per batch: Postgres may have reaped
+                # the owner backend meanwhile, freeing the lock to a peer. Checkpointing or
+                # advancing the slot without the lock would hand that peer a hole; re-assert
+                # first, and leave the committed load replayable (merge / lsn-merge make the
+                # replay exact).
+                owner.assert_held()
+                load_ids += _load_ids(info)
+                rows += sum(Destination.row_counts(pipe).values())
+                _emit_table_events(run, pipe, "cdc", targets.source_of(target), set())
         if batch.last_commit_lsn:
             owner.assert_held()
             cfg.destination.write_checkpoint(cfg.registration, cfg.slot,

@@ -660,8 +660,9 @@ class ItemGenerator:
         may hold the same table name, and each source schema loads through its own pipeline."""
         consumer = self._consume()
         grouped: Dict[str, List[Union[TDataItem, DataItemWithMeta]]] = {}
-        for rel_id, data_items in consumer.data_items.items():
-            schema = consumer.last_table_schema[rel_id]
+        # One group per relation DESCRIPTION, in WAL order (#4345): a relation renamed or
+        # altered mid-batch has a group per description, each with its own name and hints.
+        for _rel_id, schema, data_items in consumer.groups:
             table_name = schema["name"]
             namespace = schema.get("namespace") or ""
             if table_name.lower().startswith(DLT_NAME_PREFIX):
@@ -774,6 +775,11 @@ class MessageConsumer:
         self.last_table_schema: Dict[
             int, TTableSchema
         ] = dict()  # maps relation_id to table schema
+        # Local patch (#4345): (relation_id, table schema, items) per relation DESCRIPTION, in
+        # the order the descriptions arrived. `data_items[relation_id]` is the CURRENT group's
+        # list; a Relation message mid-batch (a rename, a column change — possibly mid-
+        # transaction) closes it here and opens a new one instead of stopping the stream.
+        self.groups: List[Any] = []
         self.last_commit_ts: pendulum.DateTime
         self.last_commit_lsn = None
 
@@ -786,10 +792,12 @@ class MessageConsumer:
 
         Identifies message type and decodes accordingly.
         Message treatment is different for various message types.
-        Breaks out of stream with StopReplication exception when
+        Breaks out of stream with StopReplication exception — only ever at a Commit — when
         - `upto_lsn` is reached
         - `target_batch_size` is reached
-        - a table's schema has changed
+        A table's schema change no longer stops the stream (#4345): it arrives mid-transaction
+        whenever rows were changed before the DDL, and a stop there left a partial
+        transaction and no commit LSN to restart from.
         """
         op = msg.payload[0]
         if op == 73:  # ASCII for 'I'
@@ -819,9 +827,10 @@ class MessageConsumer:
         self.last_commit_lsn = msg.data_start
         if msg.data_start >= self.upto_lsn:
             self.consumed_all = True
-        n_items = sum(
-            [len(items) for items in self.data_items.values()]
-        )  # combine items for all tables
+        # Every retained group, not just each relation's current one (#4345 review): a
+        # relation whose description changed keeps its earlier rows in `groups`, and counting
+        # only `data_items` would let a batch outgrow `target_batch_size` without limit.
+        n_items = sum(len(items) for _rel_id, _schema, items in self.groups)
         if self.consumed_all or n_items >= self.target_batch_size:
             raise StopReplication
 
@@ -831,12 +840,18 @@ class MessageConsumer:
         Stores table schema in object state.
         Creates meta item to emit column hints while yielding data.
 
-        Raises StopReplication when a table's schema changes.
+        Local patch (#4345): a relation that already has items in this batch had its
+        description changed (renamed, columns altered). Upstream raised StopReplication here,
+        which is NOT a commit boundary — pgoutput sends this message mid-transaction when rows
+        were changed before the DDL — so the batch held a partial transaction and, with no
+        commit yet, no LSN to restart at: the worker wedged on `None >> 32`. Instead the
+        current group is closed with the rows it has (they keep the name and hints they were
+        written under) and decoding carries on to the commit under the new description.
         """
-        if (
-            self.data_items.get(decoded_msg.relation_id) is not None
-        ):  # table schema change
-            raise StopReplication
+        current = self.data_items.get(decoded_msg.relation_id)
+        if current is not None and len(current) < 2:
+            # Only the hints item, no rows: nothing was written under the old description.
+            self.groups = [g for g in self.groups if g[2] is not current]
         # get table schema information from source and store in object state
         table_name = decoded_msg.relation_name
         columns: TTableSchemaColumns = {
@@ -853,12 +868,26 @@ class MessageConsumer:
         pk = self.keys_by_relation.get((decoded_msg.namespace, table_name))
         if pk is not None:
             pk = list(pk) if not isinstance(pk, str) else pk
+        key_problem = "merge key unresolved: records merge on replica-identity flags"
         if pk is None and self.credentials is not None:
             try:
                 conn = _get_conn(self.credentials)
                 try:
                     with conn.cursor() as cur:
-                        pk = _get_pk(cur, table_name, decoded_msg.namespace)
+                        # The catalog is read NOW, the record was written THEN (#4345 review):
+                        # after a rename the name may belong to another table (a swap). Use its
+                        # key only if it is still this relation.
+                        cur.execute("SELECT to_regclass(%s)::oid", (
+                            _make_qualified_table_name(table_name, decoded_msg.namespace),))
+                        row = cur.fetchone()
+                        oid = row[0] if row else None
+                        if oid is not None and int(oid) == decoded_msg.relation_id:
+                            pk = _get_pk(cur, table_name, decoded_msg.namespace)
+                        elif oid is not None:
+                            key_problem = (
+                                "merge key unresolved: the name now belongs to another table at "
+                                "the source (renamed since the record was written); records "
+                                "merge on replica-identity flags")
                 finally:
                     conn.close()
             except Exception as exc:  # noqa: BLE001
@@ -872,8 +901,7 @@ class MessageConsumer:
             # Neither the compiled plan nor the source catalog knows this relation's key (a
             # relation renamed or dropped since the record was written, with no recorded key):
             # its records merge on replica-identity flags — report it (#4338).
-            self.key_problems[(decoded_msg.namespace, table_name)] = (
-                "merge key unresolved: records merge on replica-identity flags")
+            self.key_problems[(decoded_msg.namespace, table_name)] = key_problem
 
         self.last_table_schema[decoded_msg.relation_id] = {
             "name": table_name,
@@ -935,7 +963,10 @@ class MessageConsumer:
             ),
             create_table_variant=True,
         )
-        self.data_items[decoded_msg.relation_id] = [meta_item]
+        items: List[Union[TDataItem, DataItemWithMeta]] = [meta_item]
+        self.data_items[decoded_msg.relation_id] = items
+        self.groups.append(
+            (decoded_msg.relation_id, self.last_table_schema[decoded_msg.relation_id], items))
 
     def _relation_key(self, relation_id: int):
         schema = self.last_table_schema[relation_id]
@@ -961,8 +992,15 @@ class MessageConsumer:
                 continue
             namespace, table_name = self._relation_key(relation_id)
             keyed = self.policies_by_relation.get((namespace, table_name)) != "append_only"
-            if keyed and self.data_items.get(relation_id):
-                self.data_items[relation_id] = self.data_items[relation_id][:1]  # keep the meta item
+            if keyed:
+                # Every earlier group bound for the truncated DESTINATION name — whichever
+                # relation wrote it (#4345): a column change splits a table's rows over two
+                # groups, and a rename swap (or drop and re-create) puts another relation's rows
+                # under this name; any left would load AFTER the runner's delete and resurrect
+                # truncated rows. A group under another name targets another table: kept.
+                for _rel_id, schema, items in self.groups:
+                    if (schema.get("namespace") or "", schema["name"]) == (namespace, table_name):
+                        del items[1:]  # keep the meta item
             self.truncates.append({
                 "namespace": namespace, "table": table_name, "lsn": msg_start_lsn,
                 "commit_lsn": self._txn_commit_lsn, "commit_ts": self.last_commit_ts,

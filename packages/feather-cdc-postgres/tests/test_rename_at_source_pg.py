@@ -374,3 +374,70 @@ def test_a_rollback_interrupted_after_the_discovered_write_still_re_baselines_on
         ("featherbase", "user")] == "streaming"
     assert _rows(duckdb_path, "select row_id from access.user order by 1") == [
         ("Administrator",), ("Guest",), ("psn_a",), ("psn_b",), ("psn_c",)]
+
+
+# Featherbase 0100–0102 as they actually ran (#4345): rows of `user` are changed FIRST, then the
+# table is renamed and its rows re-keyed under the new name — all in one transaction.
+MIGRATION_ROWS_THEN_RENAME = [
+    "update featherbase.\"user\" set full_name = 'Asha K' where row_id = 'E001'",
+    'alter table featherbase."user" rename to person',
+    "update featherbase.table_def set name = 'Person' where name = 'User'",
+    "update featherbase.person set row_id = 'psn_a' where row_id = 'E001'",
+    "update featherbase.person set row_id = 'psn_b' where row_id = 'E002'",
+    "update featherbase.has_role set parent = 'psn_a' where parent = 'E001'",
+    "update featherbase.has_role set parent = 'psn_b' where parent = 'E002'",
+]
+
+
+def test_rows_changed_then_renamed_in_one_transaction_stream_without_a_slot_drop(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """#4345: the release order the 23-Oct rehearsal hit. The worker used to wedge on
+    `None >> 32` and load a partial transaction on every retry; the operator had to drop the
+    slot before the release. Now the tick drains the whole transaction and stays healthy."""
+    _env(monkeypatch, fresh_db, duckdb_path, tmp_path)
+    _sql(fresh_db, *SCHEMA)
+    old = _write(tmp_path, names, "user")
+    new = _write(tmp_path, names, "person")
+    assert cli.main(["run", old, "--dev"]) == 0
+
+    _sql(fresh_db, *MIGRATION_ROWS_THEN_RENAME, transaction=True)
+    assert cli.main(["run", new, "--dev"]) == 0
+    assert _status(tmp_path) == "ok"
+    assert _rows(duckdb_path, "select row_id, full_name from access.person order by 1") == [
+        ("Administrator", "Administrator"), ("Guest", "Guest"),
+        ("psn_a", "Asha K"), ("psn_b", "Bala")]
+    lifecycle = runner._destination(mf.load(new)).read_lifecycle("fb_demo")
+    assert lifecycle[("featherbase", "person")] == "streaming"
+    assert lifecycle[("featherbase", "user")] == "retired"
+    # the pre-rename change of the same transaction landed under the old name, as written
+    assert _rows(duckdb_path, "select row_id, full_name from access.user order by 1") == [
+        ("Administrator", "Administrator"), ("E001", "Asha K"), ("E002", "Bala"),
+        ("Guest", "Guest")]
+    assert _rows(duckdb_path, "select name from catalog.table_def order by 1") == [
+        ("Has Role",), ("Person",), ("Table",)]
+    assert _rows(duckdb_path, "select row_id, parent from access.has_role order by 1") == [
+        ("hr1", "psn_a"), ("hr2", "psn_b")]
+
+    # the checkpoint moved past the release, so the next tick neither wedges nor replays it
+    _sql(fresh_db, "insert into featherbase.person values ('psn_c', 'Chitra')")
+    assert cli.main(["run", new, "--dev"]) == 0
+    assert _status(tmp_path) == "ok"
+    assert _rows(duckdb_path, "select count(*) from access.person") == [(5,)]
+
+
+def test_rows_changed_then_renamed_streams_under_the_old_registration_too(
+        fresh_db, names, duckdb_path, tmp_path, monkeypatch):
+    """#4345 "happens with either registration": the release runs before the registration is
+    switched. The tick must still drain past the release — never wedge on it."""
+    _env(monkeypatch, fresh_db, duckdb_path, tmp_path)
+    _sql(fresh_db, *SCHEMA)
+    old = _write(tmp_path, names, "user")
+    new = _write(tmp_path, names, "person")
+    assert cli.main(["run", old, "--dev"]) == 0
+    _sql(fresh_db, *MIGRATION_ROWS_THEN_RENAME, transaction=True)
+
+    cli.main(["run", old, "--dev"])   # whatever it reports about the vanished `user`, no wedge
+    assert cli.main(["run", new, "--dev"]) == 0
+    assert _status(tmp_path) == "ok"
+    assert _rows(duckdb_path, "select row_id from access.person order by 1") == [
+        ("Administrator",), ("Guest",), ("psn_a",), ("psn_b",)]

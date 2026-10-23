@@ -94,7 +94,14 @@ def drain(
             baseline_lsn_by_relation=dict(baseline_lsn_by_relation or {}),
         )
         grouped = gen.collect()
-        yield Batch(grouped, gen.last_commit_lsn or cursor_lsn, gen.generated_all,
+        if gen.last_commit_lsn is None:
+            # Backstop (#4345): the consumer stops only at a commit, so this cannot happen
+            # today. If it ever does, the batch is a partial transaction and there is no LSN to
+            # restart at — fail before the runner loads it, never loop on a `None` restart.
+            raise RuntimeError(
+                f"slot {slot}: replication stopped without reaching a commit (restarted at LSN "
+                f"{cursor_lsn}); refusing to load a partial transaction — see issue #4345")
+        yield Batch(grouped, gen.last_commit_lsn, gen.generated_all,
                     truncates=list(gen.truncates),
                     key_problems=dict(getattr(gen, "key_problems", {}) or {}))
         if gen.generated_all:
