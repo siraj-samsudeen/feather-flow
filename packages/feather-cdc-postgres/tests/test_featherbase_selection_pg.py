@@ -18,6 +18,8 @@ from pg_md_cdc.adapters import NAMED_SYSTEM, USER_CREATED
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "featherbase_namespaced_schema.sql"
 MANIFEST = pathlib.Path(__file__).resolve().parents[1] / "registrations" / "featherbase.yml"
+# #4340: the dev mirror must compile the same set from the same catalog shape.
+DEV_MANIFEST = MANIFEST.with_name("featherbase_dev.yml")
 
 EXPECTED = {
     "catalog": {"table_def", "column_def"},
@@ -41,8 +43,9 @@ def featherbase_db(fresh_db, monkeypatch):
     return fresh_db
 
 
-def test_the_shipped_registration_compiles_to_exactly_fourteen_routed_relations(featherbase_db):
-    m = mf.load(str(MANIFEST))
+@pytest.mark.parametrize("manifest", [MANIFEST, DEV_MANIFEST], ids=["production", "dev"])
+def test_the_shipped_registration_compiles_to_exactly_fourteen_routed_relations(featherbase_db, manifest):
+    m = mf.load(str(manifest))
     _, plan = runner._compile(m)
     assert [p for p in plan.problems if p.severity == "error"] == []
     by_target: dict = {}

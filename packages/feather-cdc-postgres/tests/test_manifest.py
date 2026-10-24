@@ -113,7 +113,7 @@ def test_pipeline_name_defaults_per_schema_and_honours_the_override():
     assert mf.pipeline_name(_m(destination={"pipeline_name": "featherbase_cdc"}), "public") == "featherbase_cdc"
 
 
-@pytest.mark.parametrize("name", ["featherbase", "control_plane"])
+@pytest.mark.parametrize("name", ["featherbase", "featherbase_dev", "control_plane"])
 def test_shipped_registrations_validate_with_zero_errors(name):
     m = mf.load(str(REGISTRATIONS / f"{name}.yml"))
     problems = mf.validate_static(m)

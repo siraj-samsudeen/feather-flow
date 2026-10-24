@@ -1,6 +1,8 @@
 # Railway control plane (`Postgres`, control.*) -> MotherDuck bronze_control_plane (#3079 D10, #2870).
 api_version: pg-md-cdc/v1
 source_id: control_plane
+# Must equal the Railway environment the worker runs in; `run` refuses otherwise (#4340).
+environment: production
 
 source:
   dsn_env: CONTROL_PG_DSN
@@ -23,7 +25,7 @@ destination:
 replication:
   slot: control_plane_cdc_slot
   publication: control_plane_cdc_pub
-  cadence_minutes: 5
+  cadence_minutes: 5        # generated from config/schedules.yml (pg-md-cdc)
   tables_without_key: reject
   key_overrides:
     # No primary key at the source and no unique index; both are append-only fact streams.

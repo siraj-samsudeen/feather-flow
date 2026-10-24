@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import pathlib
 import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Union
@@ -23,6 +24,13 @@ _IDENT = re.compile(r"^[a-z][a-z0-9_]*$")
 _PG_IDENT = re.compile(r"^[a-z_][a-z0-9_$]*$")
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _QUALIFIED = re.compile(r"^[^.]+\.[^.]+$")
+
+# Which deployment environment a registration belongs to (#4340). It must equal the Railway
+# environment the worker runs in, so a dev instance copied from production's settings refuses
+# to start production's registration (and the reverse) instead of mixing the two.
+PRODUCTION = "production"
+ENVIRONMENTS = (PRODUCTION, "dev")
+RAILWAY_ENVIRONMENT_VAR = "RAILWAY_ENVIRONMENT_NAME"
 
 TABLE_CLASSES = (
     "application",
@@ -145,6 +153,7 @@ class Manifest:
     replication: Replication
     control: Control
     classification: Classification = field(default_factory=Classification)
+    environment: str = "production"
     path: Optional[str] = None
 
 
@@ -195,7 +204,8 @@ def parse(raw: Dict[str, Any], *, path: Optional[str] = None) -> Manifest:
         raise ManifestError("manifest must be a YAML mapping")
     _reject_unknown(
         raw,
-        {"api_version", "source_id", "source", "destination", "replication", "control", "classification"},
+        {"api_version", "source_id", "environment", "source", "destination", "replication", "control",
+         "classification"},
         "manifest",
     )
     src = raw.get("source") or {}
@@ -285,6 +295,7 @@ def parse(raw: Dict[str, Any], *, path: Optional[str] = None) -> Manifest:
             reconcile_exclude=[str(x) for x in (ctl.get("reconcile_exclude") or [])],
         ),
         classification=Classification(rules=rules),
+        environment=str(raw.get("environment", "production")),
         path=path,
     )
 
@@ -348,6 +359,15 @@ def validate_static(m: Manifest) -> List[Problem]:
         err("api_version", f"api_version must be {API_VERSION!r}, got {m.api_version!r}")
     if not _IDENT.match(m.source_id or ""):
         err("source_id", f"source_id must be a lowercase identifier, got {m.source_id!r}")
+    _check_enum(p, "environment", m.environment, ENVIRONMENTS)
+    # A non-production mirror may share its MotherDuck owner with production (the dev Featherbase
+    # CDC does, Siraj 23-Oct-2026), so the token alone does not keep it out of production bronze.
+    # Its database must carry its environment's name; the runtime also refuses any database a
+    # production registration owns (runner._refuse_wrong_environment).
+    if m.environment != PRODUCTION and not m.destination.database.endswith(f"_{m.environment}"):
+        err("environment_database",
+            f"a {m.environment!r} registration must write a database ending in "
+            f"'_{m.environment}', got {m.destination.database!r}")
 
     for label, name in (("source.dsn_env", m.source.dsn_env), ("destination.token_env", m.destination.token_env)):
         if not name:
@@ -365,6 +385,10 @@ def validate_static(m: Manifest) -> List[Problem]:
 
     if not m.destination.database:
         err("destination_database", "destination.database is required")
+    else:
+        why = database_name_problem(m.destination.database)
+        if why:
+            err("destination_database", why)
     _check_enum(p, "destination.retirement_policy", m.destination.retirement_policy, ("freeze", "archive"))
 
     sm = m.destination.schema_mapping
@@ -501,6 +525,44 @@ def _on_a_mount(path: str) -> bool:
         if parent == cur:
             return False
         cur = parent
+
+
+def environment_mismatch(m: Manifest, environ: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Why this registration must not run here, or None (#4340).
+
+    Railway names every deployment's environment in RAILWAY_ENVIRONMENT_NAME. When it is set and
+    is not the registration's `environment`, the worker is in the wrong place — typically a dev
+    instance whose settings were copied from production. Unset (a laptop, a test) means no check.
+    """
+    env = os.environ if environ is None else environ
+    here = (env.get(RAILWAY_ENVIRONMENT_VAR) or "").strip()
+    if here and here != m.environment:
+        return (f"registration {m.source_id!r} is for environment {m.environment!r} but this "
+                f"worker runs in Railway environment {here!r} — refusing to touch any database")
+    return None
+
+
+def database_name_problem(database: str) -> Optional[str]:
+    """Why `database` is not a bare identifier, or None (#4340).
+
+    The destination connects to `md:<database>`, which also accepts connection parameters and
+    other syntax, so `bronze_featherbase?session_hint=x_dev` would pass a suffix check and still
+    open bronze_featherbase. Only a full-string lowercase identifier is a database name here.
+    """
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", database or "") or len(database) > 63:
+        return (f"destination.database must be a bare identifier ([a-z][a-z0-9_]*), "
+                f"got {database!r}")
+    return None
+
+
+def production_databases(registrations_dir: str) -> Dict[str, str]:
+    """{destination database: source_id} for every production registration in the directory."""
+    out: Dict[str, str] = {}
+    for path in sorted(pathlib.Path(registrations_dir).glob("*.yml")):
+        other = load(str(path))
+        if other.environment == PRODUCTION:
+            out[other.destination.database] = other.source_id
+    return out
 
 
 def errors(problems: List[Problem]) -> List[Problem]:

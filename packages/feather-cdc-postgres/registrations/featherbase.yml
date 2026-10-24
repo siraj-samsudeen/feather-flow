@@ -1,6 +1,8 @@
 # Featherbase (Railway `featherbase-db-prod`) -> MotherDuck bronze_featherbase (#3079, #2851).
 api_version: pg-md-cdc/v1
 source_id: featherbase
+# Must equal the Railway environment the worker runs in; `run` refuses otherwise (#4340).
+environment: production
 
 source:
   dsn_env: FEATHERBASE_PG_DSN
@@ -92,7 +94,7 @@ destination:
 replication:
   slot: featherbase_cdc_slot
   publication: featherbase_cdc_pub
-  cadence_minutes: 5
+  cadence_minutes: 5        # generated from config/schedules.yml (pg-md-cdc)
   tables_without_key: reject
   # Unchanged TOASTed values only ride the WAL under FULL; without it a large unchanged column
   # is undecodable on UPDATE. Cost: the whole old row is written on every UPDATE/DELETE.

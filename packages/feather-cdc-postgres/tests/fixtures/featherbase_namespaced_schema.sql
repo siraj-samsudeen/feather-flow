@@ -16,7 +16,8 @@ create table featherbase.table_def (
   physical_relation text
 );
 create table featherbase.column_def (row_id text primary key);
-create table featherbase.person (row_id text primary key);
+-- password_hash is denied by source.deny.columns (#4346); a deny that binds to no column fails closed.
+create table featherbase.person (row_id text primary key, password_hash text);
 create table featherbase.service_account (row_id text primary key);
 create table featherbase.identifier_system (row_id text primary key);
 create table featherbase.role (row_id text primary key);

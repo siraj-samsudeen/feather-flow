@@ -19,7 +19,7 @@ is always `pg_md_cdc`. Env vars, matching `registrations/*.yml`:
 
 | var | set to | source |
 |---|---|---|
-| `CDC_REGISTRATION` | the registration id, e.g. `featherbase` or `control_plane` | selects `registrations/<id>.yml` |
+| `CDC_REGISTRATION` | the registration id, e.g. `featherbase`, `featherbase_dev` (the dev mirror, runbook §m) or `control_plane` | selects `registrations/<id>.yml` |
 | `<manifest source.dsn_env>` | the source Postgres DSN (`FEATHERBASE_PG_DSN` / `CONTROL_PG_DSN`) | Railway reference var |
 | `<manifest destination.token_env>` | the MotherDuck token (`MOTHERDUCK_TOKEN` in both shipped manifests) | Railway reference var |
 | `CDC_LOG_PG_DSN` | the customer's **CDC log DB** (Railway `<customer>-cdc-log-db` in project `<customer>-cdc`, e.g. `jeyarama-cdc-log-db`) — where its runs and events are logged (#4078) | Railway reference var — hard dependency unless `--dev`. `CONTROL_PG_DSN` is accepted for one release; for the control-plane CDC it is also the source, so set `CDC_LOG_PG_DSN` |
@@ -52,9 +52,10 @@ redacted, never as a raw traceback), `2` a malformed manifest.
 
 | Block | Decides |
 |---|---|
+| `environment` | `production` (default) or `dev`: must equal Railway's `RAILWAY_ENVIRONMENT_NAME` where it is set, or `run`/`resnapshot` exit before any connection (#4340) |
 | `source` | which relations: `include`/`exclude`/`deny` globs on `schema.table`, plus an optional catalog `discovery.adapter` |
 | `destination` | MotherDuck database, `schema_mapping` (default: source schemas preserved), **`table_schemas`** (per-table target schema, `[{match: "schema.table" glob, schema: target}]`, first match wins, unmatched → `schema_mapping`; D-13), dlt pipeline name (only with a single target schema), retirement policy |
-| `replication` | slot, publication, cadence, key policy for unkeyed tables, replica identity, batch size |
+| `replication` | slot, publication, cadence (generated from `config/schedules.yml`), key policy for unkeyed tables, replica identity, batch size |
 | `control` | the extractor identity, control-plane availability policy, event durability, `reconcile_exclude` |
 | `classification` | optional first-match rules overriding the default `table_class` |
 

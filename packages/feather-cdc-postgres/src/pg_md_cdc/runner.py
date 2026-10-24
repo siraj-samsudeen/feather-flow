@@ -22,6 +22,7 @@ Contract with the compiler half: manifest.Manifest / selectors.Relation (plan Ap
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -1120,6 +1121,25 @@ def _refuse_static_errors(m) -> None:
         sys.exit("FATAL: the manifest fails static validation — run `validate` and fix it")
 
 
+def _destination_override_path() -> str | None:
+    """The proof-only override's LOCAL FILE path, or None when unset; exits on anything else.
+
+    DuckDB opens `md:`/`motherduck:` (any case) as MotherDuck and reads `?key=value` as connection
+    options, so an unchecked path could reach a production database with the run's token — the
+    dev Featherbase CDC shares production's owner (#4340). A path with a scheme or a `?` is refused.
+    """
+    override = os.environ.get("PG_MD_CDC_DESTINATION", "")
+    if not override:
+        return None
+    kind, _, path = override.partition(":")
+    if kind != "duckdb" or not path:
+        sys.exit("FATAL: PG_MD_CDC_DESTINATION must look like 'duckdb:<file path>'")
+    if re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", path) or "?" in path:
+        sys.exit("FATAL: PG_MD_CDC_DESTINATION's duckdb target must be a local file path, "
+                 "not a URI or connection string")
+    return path
+
+
 def _destination(m) -> Destination:
     """MotherDuck unless `PG_MD_CDC_DESTINATION=duckdb:<path>` overrides it.
 
@@ -1128,12 +1148,9 @@ def _destination(m) -> Destination:
     likewise redirects dlt's pipeline state so a proof never writes into ~/.dlt. Unset, both are
     inert and the destination is MotherDuck.
     """
-    override = os.environ.get("PG_MD_CDC_DESTINATION", "")
+    path = _destination_override_path()
     pipelines_dir = os.environ.get("PG_MD_CDC_PIPELINES_DIR") or None
-    if override:
-        kind, _, path = override.partition(":")
-        if kind != "duckdb" or not path:
-            sys.exit("FATAL: PG_MD_CDC_DESTINATION must look like 'duckdb:<file path>'")
+    if path:
         return Destination(DestinationSpec(kind="duckdb", database=m.destination.database,
                                            path=path, pipelines_dir=pipelines_dir))
     return Destination(DestinationSpec(kind="motherduck", database=m.destination.database,
@@ -1157,7 +1174,35 @@ def _control_plane(m, dev: bool) -> ControlPlane:
     return ControlPlane(m.control.extractor, dsn=None if dev else control_dsn, wal_dir=wal_dir)
 
 
+def _refuse_wrong_environment(manifest) -> None:
+    """Pre-connection refusals for the mutating entry points: wrong Railway environment, a
+    destination that is not a bare database name, a non-production run aimed at production."""
+    from . import manifest as mf
+
+    # Before ANY connection, the run log included: a misplaced worker writing a run row under
+    # production's extractor would make production's stalled-drain alarm read as healthy.
+    why = mf.environment_mismatch(manifest) or mf.database_name_problem(manifest.destination.database)
+    if why:
+        sys.exit(f"FATAL: {why}")
+    _destination_override_path()   # exits on a non-local override, before any connection
+    if manifest.environment != mf.PRODUCTION:
+        # The dev mirror's token may also own production bronze (Siraj, 23-Oct-2026), so refuse
+        # any database a production registration shipped beside this one writes. Fail closed: a
+        # sibling that cannot be read stops the run rather than skipping the check.
+        here = os.path.dirname(os.path.abspath(manifest.path or "registrations/_"))
+        try:
+            prod = mf.production_databases(here)
+        except Exception as exc:  # noqa: BLE001
+            sys.exit(f"FATAL: cannot read the production registrations beside "
+                     f"{manifest.source_id!r} to rule out a production database: {exc}")
+        db = manifest.destination.database
+        if db in prod:
+            sys.exit(f"FATAL: {manifest.environment} registration {manifest.source_id!r} targets "
+                     f"{db!r}, the database of production registration {prod[db]!r} — refusing")
+
+
 def run(manifest, *, dev: bool = False, manifest_path: str = "<manifest>") -> int:
+    _refuse_wrong_environment(manifest)
     cp = _control_plane(manifest, dev)
     try:
         dsn, plan = _compile(manifest)
@@ -1236,6 +1281,7 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
     (D6's "separately approved drop"); the retirement policy never drops on its own."""
     if not yes:
         sys.exit("resnapshot DROPS destination tables — re-run with --yes to confirm")
+    _refuse_wrong_environment(manifest)
     dsn, plan = _compile(manifest)
     wanted = set(tables or [])
     wanted_relations = [r for r in plan.relations if not wanted or r.qualified in wanted]
