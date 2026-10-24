@@ -154,3 +154,20 @@ def test_helper_reinit_upgrades_an_existing_publication(generated_column, names)
         c.execute("update public.g set v = 'b' where id = 1")
         assert c.execute("select pubgencols from pg_publication where pubname = %s",
                          (pub,)).fetchone()[0] == "s"
+
+
+def test_a_column_list_under_full_identity_breaks_updates_at_the_source(fresh_db, names):
+    """Why #4346's deny-list is NOT a publication column list: under REPLICA IDENTITY FULL the
+    list must cover every column, and a list without `password_hash` makes every UPDATE and
+    DELETE on the table fail AT THE SOURCE — sign-in would break, not just the mirror."""
+    pub = names["publication"]
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.person (id int primary key, email text, password_hash text)")
+        c.execute("insert into public.person values (1, 'a@x', 'h1')")
+        c.execute("alter table public.person replica identity full")
+        c.execute(f'create publication "{pub}" for table public.person (id, email)')
+        c.execute("insert into public.person values (2, 'b@x', 'h2')")   # INSERT is not affected
+        for stmt in ("update public.person set email = 'c@x' where id = 1",
+                     "delete from public.person where id = 2"):
+            with pytest.raises(psycopg.Error, match="(?i)replica identity"):
+                c.execute(stmt)

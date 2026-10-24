@@ -372,3 +372,39 @@ def test_a_column_dropped_and_re_added_with_another_type_mid_batch_loads_as_it_d
     assert kinds(run, "public.t") >= {"type_incompatible"}
     assert result["outcome"]["status"] == "partial"
     assert dest.read_lifecycle(cfg.registration)[("public", "t")] == DRIFT_REVIEW
+
+
+# --------------------------------------------------------------------------- deny.columns (#4346)
+
+
+import dataclasses  # noqa: E402
+
+
+def _person(*deny):
+    return dataclasses.replace(rel("public", "person", "id"), deny_columns=tuple(deny))
+
+
+def test_adding_a_column_deny_is_not_a_drop_column_drift(fresh_db, names, duckdb_path, tmp_path):
+    """The signature stored before the deny still names the column; diffed raw, the deny would
+    read as a breaking `drop_column` and push the table into drift_review."""
+    sql(fresh_db, "create table public.person (id int primary key, email text, password_hash text)",
+        "insert into public.person values (1, 'a@x', 'h1')")
+    cfg, dest = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, [_person()])
+    run, result = tick(cfg, [_person("password_hash")])
+    assert "drop_column" not in kinds(run) and drifts(run) == []
+    assert dest.read_lifecycle(cfg.registration)[("public", "person")] == STREAMING
+    assert ("person", "password_hash") not in registry(duckdb_path, cfg.registration)
+    stored = dest.read_signatures(cfg.registration)[("public", "person")]
+    assert "password_hash" not in stored["columns"], "the projected signature is what is stored"
+
+
+def test_a_drop_of_a_column_that_is_not_denied_still_reports(fresh_db, names, duckdb_path, tmp_path):
+    sql(fresh_db, "create table public.person (id int primary key, email text, nickname int, "
+                  "password_hash text)",
+        "insert into public.person values (1, 'a@x', 5, 'h1')")
+    cfg, _ = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, [_person("password_hash")])
+    sql(fresh_db, "alter table public.person drop column nickname")
+    run, _ = tick(cfg, [_person("password_hash")])
+    assert "drop_column" in kinds(run, "public.person")

@@ -68,6 +68,16 @@ carrying a value is rejected, and no environment value is ever printed or writte
   conjunction (schema **and**, when given, table pattern); `exclude` and `deny` are disjunctions.
 - **`deny` is evaluated on the compiled set**, after the adapter narrows it — a deny rule is a
   tripwire that fires only when something really would have been replicated.
+- **`deny.columns`** (`{"schema.table": [column, ...]}`, exact names, #4346) withholds columns:
+  they are left out of the baseline select list, dropped by name from every decoded record and
+  from dlt's hints, and kept out of the drift signature. The deny follows the table's OID and
+  the column's attnum, so a table or column rename cannot release it. Every decoded description
+  of a table that carries a deny must match, exactly, the column layout its baseline recorded;
+  any column DDL there (an added column included) quarantines the table until a resnapshot
+  (runbook §f2). Every run checks the destination (and each `_staging` twin) and
+  reports a denied column found there as an error. It is a projection *inside the CDC process*,
+  not a publication column list: under `replica_identity: full` that list must name every
+  column, or every UPDATE/DELETE of the table fails at the source.
 - A discovery adapter supplies policy only ("which relations, and what does the source call
   them"). It never supplies types, keys or load behaviour. The Featherbase adapter's
   `options.system_tables` switches on the **two-way rule**: a `table_def."system" = true` table

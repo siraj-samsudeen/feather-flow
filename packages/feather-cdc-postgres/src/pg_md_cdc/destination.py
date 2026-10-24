@@ -176,6 +176,25 @@ class Destination:
                 signature_json varchar, seen_at timestamptz)''')
             # The consistent point each relation's CURRENT baseline was taken at: the drain
             # drops that relation's transactions with commit LSN below it (snapshot.py).
+            # Every OID a column-denied name resolved to (#4346): the deny follows the table
+            # through a rename, and survives a new table taking the old name.
+            # `attnum` binds the deny to the COLUMN's identity too, so it follows a column
+            # rename the way `oid` follows a table rename (Sonnet review F1).
+            con.execute(f'''create table if not exists "{RUNTIME_SCHEMA}".denied_oid (
+                registration varchar, oid bigint, origin_schema varchar, origin_table varchar,
+                "column" varchar, attnum bigint, first_seen timestamptz)''')
+            # Relations whose changes the decoder skipped because a description did not match
+            # the reviewed layout (#4346): bronze is stale for them until a resnapshot clears
+            # the row. Keyed by `oid` (Codex round 17); schema/table are reporting metadata.
+            con.execute(f'''create table if not exists "{RUNTIME_SCHEMA}".deny_quarantine (
+                registration varchar, "schema" varchar, "table" varchar, reason varchar,
+                since timestamptz, oid bigint)''')
+            # Each baselined relation's published column description (helpers
+            # `ReviewedLayout.to_json`), read under the baseline's locks (#4346): a decoded
+            # description of a relation that carries a deny must match it exactly.
+            con.execute(f'''create table if not exists "{RUNTIME_SCHEMA}".reviewed_layout (
+                registration varchar, oid bigint, "schema" varchar, "table" varchar,
+                layout_json varchar, reviewed_at timestamptz)''')
             con.execute(f'''create table if not exists "{RUNTIME_SCHEMA}".baseline (
                 registration varchar, "schema" varchar, "table" varchar,
                 boundary_lsn bigint, taken_at timestamptz)''')
@@ -247,6 +266,139 @@ class Destination:
             except Exception:
                 con.execute("rollback")
                 raise
+
+    def record_denied_oids(self, registration: str, rows) -> None:
+        """Insert the (oid, origin_schema, origin_table, column, attnum) rows not already
+        recorded (`attnum` may be None: the column was not there to bind). Append-only by
+        design: a deny must never be forgotten because a name moved."""
+        rows = sorted(set(rows), key=lambda r: (r[0], r[1], r[2], r[3], r[4] or -1))
+        if not rows:
+            return
+        self.ensure_runtime_tables()
+        known = set(self.read_denied_oids(registration))
+        new = [r for r in rows if r not in known]
+        if not new:
+            return
+        now = _dt.datetime.now(_dt.timezone.utc)
+        with self.connect() as con:
+            con.executemany(
+                f'insert into "{RUNTIME_SCHEMA}".denied_oid values (?, ?, ?, ?, ?, ?, ?)',
+                [[registration, int(o), s, t, c, None if a is None else int(a), now]
+                 for o, s, t, c, a in new])
+
+    def read_denied_oids(self, registration: str) -> list[tuple]:
+        self.ensure_runtime_tables()
+
+        def _read():
+            with self.connect() as con:
+                return con.execute(
+                    f'select oid, origin_schema, origin_table, "column", attnum '
+                    f'from "{RUNTIME_SCHEMA}".denied_oid where registration = ?',
+                    [registration]).fetchall()
+        return [(int(r[0]), r[1], r[2], r[3], None if r[4] is None else int(r[4]))
+                for r in self._read_metadata_with_retry(_read)]
+
+    def record_quarantine(self, registration: str, marks: dict) -> None:
+        """{oid: (schema, table, reason)} — one row per OID, kept (first `since` wins) until
+        `clear_quarantine`. De-duplicated by OID, never by name (Codex round 17): a second
+        table that takes a quarantined name is its own quarantine."""
+        if not marks:
+            return
+        self.ensure_runtime_tables()
+        known = self.read_quarantine(registration)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        new = [[registration, s, t, why, now, int(oid)]
+               for oid, (s, t, why) in sorted(marks.items()) if int(oid) not in known]
+        if new:
+            with self.connect() as con:
+                con.executemany(
+                    f'insert into "{RUNTIME_SCHEMA}".deny_quarantine values (?, ?, ?, ?, ?, ?)',
+                    new)
+
+    def read_quarantined_oids(self, registration: str) -> set[int]:
+        self.ensure_runtime_tables()
+
+        def _read():
+            with self.connect() as con:
+                return con.execute(
+                    f'select oid from "{RUNTIME_SCHEMA}".deny_quarantine '
+                    "where registration = ? and oid is not null", [registration]).fetchall()
+        return {int(r[0]) for r in self._read_metadata_with_retry(_read)}
+
+    def write_reviewed_layouts(self, registration: str, layouts: dict) -> None:
+        """{(schema, table): (oid, ReviewedLayout | None)} — replaces each OID's row; None
+        removes it (a baseline that could not prove its layout leaves the relation with none,
+        so its next change quarantines it)."""
+        if not layouts:
+            return
+        import json
+        self.ensure_runtime_tables()
+        now = _dt.datetime.now(_dt.timezone.utc)
+        with self.connect() as con:
+            con.execute("begin transaction")
+            try:
+                for (schema, table), (oid, layout) in sorted(layouts.items()):
+                    con.execute(f'delete from "{RUNTIME_SCHEMA}".reviewed_layout '
+                                "where registration = ? and oid = ?", [registration, int(oid)])
+                    if layout is not None:
+                        con.execute(
+                            f'insert into "{RUNTIME_SCHEMA}".reviewed_layout '
+                            "values (?, ?, ?, ?, ?, ?)",
+                            [registration, int(oid), schema, table,
+                             json.dumps(layout.to_json()), now])
+                con.execute("commit")
+            except Exception:
+                con.execute("rollback")
+                raise
+
+    def read_reviewed_layouts(self, registration: str) -> dict:
+        """{oid: ReviewedLayout}; a row in an older format is left out (no layout)."""
+        import json
+        from pg_replication.helpers import ReviewedLayout
+        self.ensure_runtime_tables()
+
+        def _read():
+            with self.connect() as con:
+                return con.execute(
+                    f'select oid, layout_json from "{RUNTIME_SCHEMA}".reviewed_layout '
+                    "where registration = ?", [registration]).fetchall()
+        out = {int(o): ReviewedLayout.from_json(json.loads(j))
+               for o, j in self._read_metadata_with_retry(_read)}
+        return {o: v for o, v in out.items() if v is not None}
+
+    def read_quarantine(self, registration: str) -> dict:
+        """{oid: (schema, table, reason, since)} — schema/table as recorded at the mark."""
+        self.ensure_runtime_tables()
+
+        def _read():
+            with self.connect() as con:
+                return con.execute(
+                    f'select oid, "schema", "table", reason, min(since) '
+                    f'from "{RUNTIME_SCHEMA}".deny_quarantine '
+                    "where registration = ? and oid is not null "
+                    'group by oid, "schema", "table", reason', [registration]).fetchall()
+        out: dict = {}
+        for o, s, t, why, since in sorted(self._read_metadata_with_retry(_read),
+                                          key=lambda r: (r[0], r[4])):
+            out.setdefault(int(o), (s, t, why, since))   # earliest mark of the OID wins
+        return out
+
+    def quarantined_names(self, registration: str) -> set:
+        """(schema, table) of every mark, for reports and tests."""
+        return {(s, t) for s, t, _w, _since in self.read_quarantine(registration).values()}
+
+    def clear_quarantine(self, registration: str, oids) -> None:
+        """Clear by the OIDs a baseline rebuilt (Codex round 17): a renamed quarantined table
+        resnapshotted under its new name is cleared, and another OID's mark under the same
+        name is not."""
+        oids = sorted({int(o) for o in oids})
+        if not oids:
+            return
+        self.ensure_runtime_tables()
+        with self.connect() as con:
+            for oid in oids:
+                con.execute(f'delete from "{RUNTIME_SCHEMA}".deny_quarantine '
+                            "where registration = ? and oid = ?", [registration, oid])
 
     def read_baseline_lsns(self, registration: str) -> dict[tuple[str, str], int]:
         self.ensure_runtime_tables()
@@ -351,6 +503,32 @@ class Destination:
                 "where table_catalog = current_database() and table_schema = any(?)",
                 [list(schemas)]).fetchall()
         return {(r[0], r[1]) for r in rows if not r[1].startswith("_dlt")}
+
+    def denied_columns_present(self, wanted: dict) -> list[tuple[str, str, str]]:
+        """{(target_schema, table): [column, ...]} -> every (schema, table, column) present in
+        THIS database, in the target schema or its `<schema>_staging` twin (#4346). Reads the
+        catalogue only — never a value of the column. Table and column are probed under BOTH
+        the source spelling and dlt's normalised one (`password$hash` lands `password_hash`)."""
+        from dlt.common.normalizers.naming.snake_case import NamingConvention
+        norm = NamingConvention().normalize_identifier
+        probes = sorted({(sch, t, c) for (schema, table), cols in wanted.items()
+                         for sch in (schema, f"{schema}_staging")
+                         for t in {table, norm(table)} for col in cols
+                         for c in {col, norm(col)}})
+        if not probes:
+            return []
+        with self.connect() as con:
+            rows = con.execute(
+                "with probe as (select unnest(?::varchar[]) as s, unnest(?::varchar[]) as t, "
+                "unnest(?::varchar[]) as c) "
+                "select ic.table_schema, ic.table_name, ic.column_name "
+                "from information_schema.columns ic join probe "
+                "on ic.table_schema = probe.s and ic.table_name = probe.t "
+                "and ic.column_name = probe.c "
+                "where ic.table_catalog = current_database()",
+                [[p[0] for p in probes], [p[1] for p in probes], [p[2] for p in probes]],
+            ).fetchall()
+        return sorted((r[0], r[1], r[2]) for r in rows)
 
     def table_row_count(self, schema: str, table: str) -> int | None:
         try:

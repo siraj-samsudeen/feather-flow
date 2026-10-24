@@ -61,6 +61,17 @@ class RuntimeConfig:
     # a long-running source transaction blocks it, and statement_timeout cannot cancel that
     # command (see the docstring there) — so the client enforces this deadline itself.
     baseline_wait_s: float = snapshot.BASELINE_WAIT_S_DEFAULT
+    # `source.deny.columns` (#4346): (schema, table) -> columns that never leave the process.
+    # The WHOLE manifest map, not just the compiled set: a retired relation's queued WAL is
+    # projected too, and the destination tripwire watches its frozen copy.
+    deny_columns: dict = field(default_factory=dict)
+    # Relation OID -> denied columns, resolved per run by `_with_inherited_denies` (#4346).
+    deny_oids: dict = field(default_factory=dict)
+    # Relation OID -> denied column attnums: a column's identity, so the deny follows a column
+    # RENAME (the baseline resolves them inside its own snapshot).
+    deny_attnums: dict = field(default_factory=dict)
+    # "schema.table.column" denies that bound to no attnum this run (#4346): the run refuses.
+    deny_unbound: tuple = ()
 
     def target_schema(self, source_schema: str, table: str | None = None) -> str:
         """Manifest rules only — the runtime prefers a compiled Relation's own `target_schema`
@@ -76,6 +87,292 @@ class RuntimeConfig:
 
 def _log(msg: str) -> None:
     print(f"[pg_md_cdc] {msg}", flush=True)
+
+
+def _denied(cfg: RuntimeConfig, relations=()) -> dict:
+    """(schema, table) -> sorted denied columns: the manifest map plus each compiled Relation's
+    own (#4346). One answer for the baseline, the drain and the tripwire."""
+    out = {k: set(v) for k, v in (cfg.deny_columns or {}).items()}
+    for r in relations:
+        if getattr(r, "deny_columns", ()):
+            out.setdefault((r.schema, r.table), set()).update(r.deny_columns)
+    return {k: tuple(sorted(v)) for k, v in out.items() if v}
+
+
+def _denied_oids(cfg: RuntimeConfig, denied: dict, unbound: list | None = None) -> dict:
+    """Relation OID -> denied columns (#4346), so the deny follows a table through a RENAME:
+    pgoutput names a relation by its CURRENT description, and a renamed `person` would
+    otherwise arrive under a name with no deny entry. Every OID a manifest-denied name has ever
+    resolved to is PERSISTED (`_cdc_runtime.denied_oid`, with the origin name and column), never
+    re-derived from a name: a new table re-using the old name must not erase the old OID's deny.
+    A persisted row applies only while its origin name still denies that column, so removing a
+    deny from the manifest does remove it.
+
+    Each denied (table, column) must BIND to an attnum (Codex round 16): by name, in the same
+    catalogue statement that finds the table's OID (so a rename cannot slip between two
+    lookups), or through an earlier binding to an attnum. One that binds neither
+    way — renamed before it was ever bound, or not there at all — is appended to `unbound`,
+    and the run refuses: its identity is unknown, so no column of that table is safe to read."""
+    if not denied:
+        return {}
+    import psycopg
+    found, missing = [], []
+    with psycopg.connect(cfg.source_dsn, autocommit=True, connect_timeout=10) as c:
+        for (schema, table), cols in sorted(denied.items()):
+            rows = c.execute(
+                "select c.oid, a.attname, a.attnum from pg_class c "
+                "join pg_namespace n on n.oid = c.relnamespace "
+                "left join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 "
+                "and not a.attisdropped and a.attname = any(%s) "
+                "where n.nspname = %s and c.relname = %s",
+                (list(cols), schema, table)).fetchall()
+            if not rows:
+                continue   # no such table at the source (a frozen copy, say): nothing to bind
+            oid = int(rows[0][0])
+            got = {n: int(a) for _o, n, a in rows if n is not None}
+            found += [(oid, schema, table, col, got[col]) for col in cols if col in got]
+            missing += [(oid, schema, table, col) for col in cols if col not in got]
+    _record_denied(cfg, found)
+    live = _live_denied_columns(cfg, denied)
+    if unbound is not None:
+        # Any earlier binding covers it, a dropped one too: its identity is known, the value is
+        # gone from the table, and the decoder's layout proof quarantines WAL that may carry it.
+        covered = {(int(o), col) for o, _s, _t, col, a in
+                   cfg.destination.read_denied_oids(cfg.registration) if a is not None}
+        unbound += sorted(f"{s}.{t}.{col}" for oid, s, t, col in missing
+                          if (oid, col) not in covered)
+    out: dict = {}
+    for oid, attnum, name, _origin in live:
+        out.setdefault(oid, set()).add(name)
+    for oid, schema, table, col, _attnum in cfg.destination.read_denied_oids(cfg.registration):
+        if col in denied.get((schema, table), ()):
+            out.setdefault(int(oid), set()).add(col)
+    return {k: tuple(sorted(v)) for k, v in out.items()}
+
+
+def _record_denied(cfg: RuntimeConfig, rows) -> None:
+    """Persist (oid, schema, table, column, attnum) deny bindings. Every caller resolved the
+    attnum at a trusted moment — one catalogue statement at run start, under a baseline's
+    locks, or from a proven decoder position — never by a later name lookup (Codex round 16)."""
+    rows = sorted({(int(o), s, t, c, int(a)) for o, s, t, c, a in rows if a is not None})
+    if not rows:
+        return
+    cfg.destination.record_denied_oids(cfg.registration, rows)
+    # ...and into this run's live attnum map (the decoder and later baselines read it).
+    for o, _s, _t, _c, a in rows:
+        cfg.deny_attnums[o] = tuple(sorted(set(cfg.deny_attnums.get(o, ())) | {a}))
+
+
+def _live_denied_columns(cfg: RuntimeConfig, denied: dict) -> list:
+    """(oid, attnum, CURRENT column name, origin column) for every persisted, still-applicable
+    deny binding: a denied column renamed at the source (`password_hash` -> `pw`) keeps its
+    attnum, so its new name is denied too — the column's identity, not its spelling (Sonnet
+    review F1). A dropped column (`attisdropped`) is gone (the decoder's layout proof then
+    quarantines any WAL that may carry it); a re-added one of the same name binds anew."""
+    bindings: dict = {}   # (oid, attnum) -> origin columns (two origin names may share one)
+    for o, s, t, col, a in cfg.destination.read_denied_oids(cfg.registration):
+        if a is not None and col in denied.get((s, t), ()):
+            bindings.setdefault((int(o), int(a)), set()).add(col)
+    if not bindings:
+        return []
+    pairs = sorted(bindings)
+    import psycopg
+    with psycopg.connect(cfg.source_dsn, autocommit=True, connect_timeout=10) as c:
+        rows = c.execute(
+            "select attrelid::bigint, attnum, attname from pg_attribute "
+            "where not attisdropped and (attrelid, attnum) in "
+            "(select unnest(%s::oid[]), unnest(%s::int2[]))",
+            ([p[0] for p in pairs], [p[1] for p in pairs])).fetchall()
+    return [(int(o), int(a), n, origin) for o, a, n in rows
+            for origin in sorted(bindings[(int(o), int(a))])]
+
+
+def _denied_attnums(cfg: RuntimeConfig, denied: dict) -> dict:
+    """Relation OID -> denied attnums, for the baseline to resolve inside its snapshot."""
+    out: dict = {}
+    for o, s, t, col, a in cfg.destination.read_denied_oids(cfg.registration):
+        if a is not None and col in denied.get((s, t), ()):
+            out.setdefault(int(o), set()).add(int(a))
+    return {k: tuple(sorted(v)) for k, v in out.items()}
+
+
+def _baseline_capture() -> dict:
+    """What a baseline reports from under its locks (snapshot_resources' *_out arguments):
+    each relation's OID, its reviewed layout, and each denied name's attnum."""
+    return {"oids_out": {}, "layouts_out": {}, "bound_out": {}}
+
+
+def _persist_bound(cfg: RuntimeConfig, bound: dict) -> None:
+    """Persist what the baseline read under its locks (#4346), before its load: the OID each
+    denied relation had INSIDE the snapshot, bound to its deny and to the attnum each denied
+    name had there (so a replacement-then-rename between lookups cannot leave an OID with rows
+    in bronze but no recorded deny), and each relation's reviewed layout, which later
+    descriptions are proven against."""
+    oids, attnums = bound.get("oids_out", {}), bound.get("bound_out", {})
+    rows = [(oid, s, t, c) for (s, t), oid in oids.items()
+            for c in cfg.deny_columns.get((s, t), ())]
+    _record_denied(cfg, [(oid, s, t, c, dict(attnums.get((s, t), ())).get(c))
+                         for oid, s, t, c in rows])
+    # ...and into THIS run's live map, which the drain hands the decoder: a rename between the
+    # baseline and the drain must not find the bound OID missing (Codex round 6).
+    for oid, _s, _t, col in rows:
+        cfg.deny_oids[oid] = tuple(sorted(set(cfg.deny_oids.get(oid, ())) | {col}))
+    if bound.get("layouts_out"):   # every baseline: a deny added later has its reference
+        cfg.destination.write_reviewed_layouts(cfg.registration, bound["layouts_out"])
+
+
+def _clear_rebuilt_quarantine(cfg: RuntimeConfig, bound: dict, relations) -> None:
+    """Clear the quarantine of each OID this baseline read (Codex round 17): by OID, never by
+    name, so a quarantined table renamed and then resnapshotted under its new name is cleared,
+    and another OID's mark under the rebuilt name is not. A mark whose OID no longer exists at
+    the source and whose recorded name was rebuilt is cleared too: that table can emit nothing
+    more, and the copy it fed was just replaced."""
+    oids = set((bound.get("oids_out") or {}).values())
+    names = {(r.schema, r.table) for r in relations}
+    marks = cfg.destination.read_quarantine(cfg.registration)
+    orphans = [o for o, (s, t, _w, _since) in marks.items() if (s, t) in names and o not in oids]
+    if orphans:
+        import psycopg
+        with psycopg.connect(cfg.source_dsn, autocommit=True, connect_timeout=10) as c:
+            live = {int(r[0]) for r in c.execute(
+                "select oid::bigint from pg_class where oid = any(%s::oid[])",
+                (orphans,)).fetchall()}
+        oids |= set(orphans) - live
+    cfg.destination.clear_quarantine(cfg.registration, oids)
+
+
+def _refuse_denied_keys(cfg: RuntimeConfig, relations) -> list:
+    """Relations whose merge key now intersects the EFFECTIVE deny map — possible only through
+    a deny inherited by OID onto a renamed table (the compiler refuses an explicit one,
+    `deny_column_is_key`). Withholding a key column breaks every merge, so the run refuses,
+    exactly as a compile error would."""
+    return sorted(f"{r.qualified}: {', '.join(sorted(set(r.key) & set(cfg.deny_columns.get((r.schema, r.table), ()))))}"
+                  for r in relations
+                  if set(r.key) & set(cfg.deny_columns.get((r.schema, r.table), ())))
+
+
+def _forms(name: str) -> set:
+    """A source identifier and its dlt-normalised spelling (`password$hash` lands
+    `password_hash`): every comparison against a dlt schema or the destination uses both."""
+    from dlt.common.normalizers.naming.snake_case import NamingConvention
+    return {name, NamingConvention().normalize_identifier(name)}
+
+
+def _pending_safe(cfg: RuntimeConfig, pipe, target: str) -> bool:
+    """Settle a package a crashed run left pending in `pipe` (#4346, Codex). If the pipeline's
+    schema already names a denied column of a table in this dataset, the package may carry the
+    value (extracted before the deny existed): it is DISCARDED, never loaded. That is replay-safe —
+    the checkpoint never moved past a load that did not commit, so the WAL (or the baseline)
+    comes again, through the projection. Otherwise it is finished as #4345 requires."""
+    if not pipe.has_pending_data:
+        return False
+    tables: dict = {}   # unioned: two denied relations may route to one destination table
+    for (s, t), cols in cfg.deny_columns.items():
+        if cfg.target_schema(s, t) == target:
+            tables.setdefault(t, set()).update(cols)
+    try:
+        schema_tables = pipe.default_schema.tables if pipe.default_schema_name else {}
+    except Exception:  # noqa: BLE001 — no schema yet: nothing loaded can name a denied column
+        schema_tables = {}
+    unsafe = sorted(f"{st}.{sc}" for t, cols in tables.items() for st in _forms(t)
+                    if st in schema_tables
+                    for c in cols for sc in _forms(c)
+                    if sc in schema_tables[st].get("columns", {}))
+    if unsafe:
+        _log(f"discarding a pending dlt package in {target}: its schema names denied "
+             f"column(s) {unsafe} — the load replays through the projection")
+        pipe.drop_pending_packages()   # deletes only; abort_packages would also run a load
+        return False
+    return Destination.finish_pending(pipe)
+
+
+def _dlt_schema_hits(pipelines, wanted: dict, selected_targets: set) -> list:
+    """Denied columns in the dlt schema of each SELECTED table this run's pipelines hold — the
+    second, lag-free signal (a fresh MotherDuck connection can miss a column for ~25 s after a
+    write, gotcha `motherduck-catalog-lags-a-write`). A selected table's dlt schema is what its
+    next merge re-creates from, so a denied column there is a finding in its own right. Frozen
+    copies are not checked here: after their purge (a plain DROP COLUMN) dlt's schema still
+    names the column, and nothing writes them again."""
+    hits = []
+    for (target, table), cols in wanted.items():
+        if (target, table) not in selected_targets:
+            continue
+        try:
+            pipe = pipelines.get(target)
+            if not pipe.default_schema_name:
+                continue
+            present = {t: set(pipe.default_schema.get_table_columns(t))
+                       for t in _forms(table) if t in pipe.default_schema.tables}
+        except Exception:  # noqa: BLE001 — no schema in this process: the catalogue decides
+            continue
+        hits += [(target, t, c) for t, cols_there in present.items()
+                 for col in cols for c in _forms(col) if c in cols_there]
+    return hits
+
+
+def _with_inherited_denies(cfg: RuntimeConfig, relations) -> RuntimeConfig:
+    """The run's EFFECTIVE deny map (#4346): the manifest's, plus every table that now carries
+    a denied OID under another name — a denied table renamed between runs, whose new name is
+    selected, would otherwise be baselined (and watched) with no deny at all. Resolved once per
+    run, so the baseline, the drain, drift and the tripwire all see the same projection."""
+    import dataclasses
+    base = _denied(cfg, relations)
+    unbound: list = []
+    by_oid = _denied_oids(cfg, base, unbound=unbound)
+    attnums = _denied_attnums(cfg, base) if base else {}
+    if not by_oid:
+        return dataclasses.replace(cfg, deny_columns=base, deny_oids={}, deny_attnums=attnums,
+                                   deny_unbound=tuple(unbound))
+    import psycopg
+    with psycopg.connect(cfg.source_dsn, autocommit=True, connect_timeout=10) as c:
+        rows = c.execute("select c.oid, n.nspname, c.relname from pg_class c "
+                         "join pg_namespace n on n.oid = c.relnamespace where c.oid = any(%s)",
+                         (list(by_oid),)).fetchall()
+    merged = {k: set(v) for k, v in base.items()}
+    for oid, schema, table in rows:
+        merged.setdefault((schema, table), set()).update(by_oid[int(oid)])
+    inherited = sorted(k for k in merged if k not in base)
+    if inherited:
+        _log(f"deny columns inherited through a rename: {inherited}")
+    return dataclasses.replace(
+        cfg, deny_columns={k: tuple(sorted(v)) for k, v in merged.items() if v},
+        deny_oids=by_oid, deny_attnums=attnums, deny_unbound=tuple(unbound))
+
+
+def _check_denied_columns(cfg: RuntimeConfig, relations, *, run, targets,
+                          pipelines=None) -> int:
+    """Destination tripwire (#4346): a denied column present in a mirror or its merge-staging
+    twin is a leak — it was loaded before the deny existed, or something bypassed the
+    projection. Each hit is an EV_ERROR naming table and column, never a value; the run is then
+    `partial`. Remedy: `resnapshot` a selected table; drop the column from a frozen copy."""
+    denied = _denied(cfg, relations)
+    if not denied:
+        return 0
+    # Unioned per DESTINATION table: a retired and a selected relation may route to the same
+    # one, and a plain dict comprehension would let the later deny-list replace the earlier.
+    wanted: dict = {}
+    for (schema, table), cols in denied.items():
+        wanted.setdefault((targets(schema, table), table), set()).update(cols)
+    selected = {(r.schema, r.table) for r in relations}
+    found = set(cfg.destination.denied_columns_present(wanted))
+    if pipelines is not None:
+        found |= set(_dlt_schema_hits(
+            pipelines, wanted, {(targets(s, t), t) for s, t in selected}))
+    hits = 0
+    for (schema, table), cols in sorted(denied.items()):
+        target = targets(schema, table)
+        names = _forms(table)
+        where = sorted(f"{s}.{t}.{c}" for s, t, c in found
+                       if t in names and s in (target, f"{target}_staging"))
+        if not where:
+            continue
+        hits += len(where)
+        remedy = (drift.remedy(cfg.manifest_path, f"{schema}.{table}") if (schema, table) in selected
+                  else "frozen copy: drop the column at the destination (runbook, #4346)")
+        run.event(entity=f"{schema}.{table}", status=cp_status.EV_ERROR, unit="deny_columns",
+                  error_detail=f"denied column(s) present at the destination: {', '.join(where)}",
+                  extra={"columns": where, "remedy": remedy})
+    return hits
 
 
 # --------------------------------------------------------------------------- pipelines
@@ -197,10 +494,16 @@ def _initialize(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
                                                 baseline_wait_s=cfg.baseline_wait_s)
     keys = {(r.schema, r.table): list(r.key) for r in relations}
     policies = {(r.schema, r.table): r.key_policy for r in relations}
+    bound = _baseline_capture()
     try:
         with snapshot.snapshot_resources(cfg.source_dsn, handle.snapshot_name, desired,
-                                         keys, key_policies=policies) as by_schema:
+                                         keys, key_policies=policies,
+                                         deny_columns=_denied(cfg, relations),
+                                         **bound,
+                                         deny_by_oid=cfg.deny_oids, deny_attnums_by_oid=cfg.deny_attnums) as by_schema:
             handle.close()  # the import already happened; the exporter is no longer needed
+            # Before any load: an interrupted load must not lose an OID first met here.
+            _persist_bound(cfg, bound)
             by_target: dict[str, list] = {}   # a snapshot resource is named after its table
             for source_schema, resources in by_schema.items():
                 for res in resources:
@@ -208,6 +511,7 @@ def _initialize(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
             for target, resources in sorted(by_target.items()):
                 owner.assert_held()
                 pipe = pipelines.get(target)
+                _pending_safe(cfg, pipe, target)   # never let `run` load a stale package instead
                 pipe.run(resources, **BASELINE_KWARGS)
                 owner.assert_held()   # the load blocked for a while; the lock may be gone
                 _emit_table_events(run, pipe, "snapshot", targets.source_of(target),
@@ -227,6 +531,8 @@ def _initialize(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
     # any relation is marked streaming, so a streaming relation always has a recorded key — a
     # later rename's queued WAL is merged on it (`_retired_keys`, #4338).
     drift.record_all(cfg, relations, run=run)
+    # A full re-baseline rebuilt every copy: nothing it read stays quarantined (#4346).
+    _clear_rebuilt_quarantine(cfg, bound, relations)
     for r in relations:
         lc.ensure(r.schema, r.table, CATCHING_UP, reason)
         lc.ensure(r.schema, r.table, STREAMING, reason)
@@ -239,13 +545,20 @@ def _take_baseline(cfg: RuntimeConfig, rel, *, run, owner, pipelines: _Pipelines
     LSN, persisted before the lifecycle moves on: a baseline whose boundary was not recorded
     would let the drain re-land what it just read."""
     pipe = pipelines.get(targets(rel.schema, rel.table))
+    bound = _baseline_capture()
     with snapshot.consistent_baseline(cfg.source_dsn, cfg.slot, (rel.schema, rel.table),
                                       list(rel.key), key_policy=rel.key_policy,
-                                      baseline_wait_s=cfg.baseline_wait_s) as (resource,
-                                                                                boundary):
+                                      baseline_wait_s=cfg.baseline_wait_s,
+                                      deny_columns=_denied(cfg, [rel]).get(
+                                          (rel.schema, rel.table), ()),
+                                      **bound,
+                                      deny_by_oid=cfg.deny_oids, deny_attnums_by_oid=cfg.deny_attnums) as (resource, boundary):
+        _persist_bound(cfg, bound)   # before the load: an interruption must not lose it
+        _pending_safe(cfg, pipe, targets(rel.schema, rel.table))
         pipe.run(resource, **BASELINE_KWARGS)
     owner.assert_held()   # the load blocked for a while; the lock may be gone
     cfg.destination.write_baseline_lsns(cfg.registration, {(rel.schema, rel.table): boundary})
+    _clear_rebuilt_quarantine(cfg, bound, [rel])   # rebuilt
     _emit_table_events(run, pipe, unit, {rel.table: rel.schema}, {rel.table},
                        {**extra, "boundary_lsn": boundary})
     return boundary
@@ -387,12 +700,66 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines,
 
     batches = rows = 0
     reported_key_problems: set = set()
+    reported_unreviewed: set = set()
+    quarantined_now: set = set()
+    # The reviewed shape of each relation that carries a deny (#4346, Sonnet F1): its stored
+    # signature's columns. Anything else the decoder meets there is withheld until reviewed.
+    signatures = cfg.destination.read_signatures(cfg.registration) if cfg.deny_columns else {}
+    # Keyed by the relation's OID where the signature records one (it follows a table rename);
+    # by name only for a signature written before the OID was recorded.
+    approved_by_oid = {int(sig["oid"]): list(sig.get("columns", {}))
+                       for sig in signatures.values() if sig and sig.get("oid")}
+    approved = {k: list((sig or {}).get("columns", {})) for k, sig in signatures.items()
+                if sig and not sig.get("oid")}
+    # The proof inputs (#4346, Codex round 16): each relation's reviewed layout (its baseline),
+    # the OIDs whose deny was bound at a trusted moment (this run's start, or a baseline), and
+    # the relations already quarantined, whose changes stay skipped until a resnapshot.
+    deny_on = bool(cfg.deny_columns)
+    layouts = cfg.destination.read_reviewed_layouts(cfg.registration) if deny_on else {}
+    held = cfg.destination.read_quarantined_oids(cfg.registration) if deny_on else set()
     for batch in stream.drain(cfg.source_dsn, cfg.slot, cfg.publication, start_lsn,
                               target_batch_size=cfg.target_batch_size,
                               keys_by_relation=keys,
                               policies_by_relation=policies,
-                              baseline_lsn_by_relation=baselines):
+                              baseline_lsn_by_relation=baselines,
+                              deny_columns_by_relation=_denied(cfg, relations),
+                              deny_columns_by_oid=cfg.deny_oids,
+                              approved_columns_by_relation=approved,
+                              approved_columns_by_oid=approved_by_oid,
+                              deny_attnums_by_oid=cfg.deny_attnums,
+                              reviewed_layout_by_oid=layouts,
+                              bound_oids=(set(cfg.deny_oids) | set(cfg.deny_attnums)
+                                          if deny_on else None),
+                              quarantined_oids=held):
         owner.assert_held()
+        for oid, (schema, table, why) in sorted(batch.quarantined.items()):
+            run.event(entity=f"{schema}.{table}", status=cp_status.EV_ERROR, unit="deny_columns",
+                      error_detail=(f"changes NOT loaded: {why}. The table carries denied "
+                                    "columns, so nothing of it loads until a resnapshot "
+                                    "re-reviews it; bronze is stale for it until then"),
+                      extra={"action": "quarantined", "oid": oid,
+                             "remedy": drift.remedy(cfg.manifest_path, f"{schema}.{table}")})
+        for (schema, table), cols in sorted(batch.unreviewed.items()):
+            if (schema, table) not in reported_unreviewed:
+                reported_unreviewed.add((schema, table))
+                run.event(entity=f"{schema}.{table}", status=cp_status.EV_ERROR,
+                          unit="deny_columns",
+                          error_detail=(f"column(s) {', '.join(cols)} on a table with denied "
+                                        "columns are not in its reviewed signature and were "
+                                        "WITHHELD: add them to source.deny.columns, or "
+                                        "resnapshot the table to approve"),
+                          extra={"withheld_columns": cols,
+                                 "remedy": drift.remedy(cfg.manifest_path, f"{schema}.{table}")})
+        if batch.denied_seen:
+            # FIRST, before any destination change: an OID the decoder matched to a denied name
+            # keeps its deny even if this batch's load fails and the name moves before the
+            # retry (#4346, Codex round 10).
+            _record_denied(cfg, batch.denied_seen)
+        if batch.quarantined:
+            # Before the checkpoint passes the skipped changes: the relation stays marked
+            # (and reported every tick) until a resnapshot rebuilds it (Codex round 14).
+            cfg.destination.record_quarantine(cfg.registration, batch.quarantined)
+            quarantined_now |= set(batch.quarantined)   # OIDs
         # TRUNCATEs first: the consumer already discarded a keyed relation's earlier rows of
         # this batch, so "empty, then load what followed" is the source's own order. A replay
         # after a crash deletes again and re-merges — idempotent.
@@ -414,7 +781,7 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines,
         # truncates below, which then remove it again — after them it would resurrect rows.
         for target in sorted(set(by_target) | {targets(t["namespace"], t["table"])
                                                for t in batch.truncates}):
-            if Destination.finish_pending(pipelines.get(target)):
+            if _pending_safe(cfg, pipelines.get(target), target):
                 owner.assert_held()
         for t in batch.truncates:
             keyed = policies.get((t["namespace"], t["table"])) != APPEND_ONLY
@@ -447,7 +814,8 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines,
                                              batch.last_commit_lsn, load_ids)
             stream.advance(cfg.source_dsn, cfg.slot, batch.last_commit_lsn)
         batches += 1
-    return {"batches": batches, "rows": rows, "start_lsn": start_lsn}
+    return {"batches": batches, "rows": rows, "start_lsn": start_lsn,
+            "quarantined": quarantined_now}
 
 
 # --------------------------------------------------------------------------- entry points
@@ -495,6 +863,26 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
     relations = list(relations)
     run = _Tally(run)
     cfg.destination.ensure_runtime_tables()
+    cfg = _with_inherited_denies(cfg, relations)
+    refused = _refuse_denied_keys(cfg, relations)
+    if refused:
+        run.event(entity="_deny_columns", status=cp_status.EV_ERROR, unit="deny_columns",
+                  error_detail="a merge key includes a denied column (inherited through a "
+                               f"rename): {'; '.join(refused)} — nothing was replicated",
+                  extra={"refused": refused})
+        return {"paused": True,
+                "outcome": _outcome(relations, [], errors=run.errors, paused=True)}
+    if cfg.deny_unbound:
+        # Fail closed (Codex round 16): a denied column that binds to no attnum may have been
+        # renamed before it was ever bound — any column of its table could be the secret.
+        run.event(entity="_deny_columns", status=cp_status.EV_ERROR, unit="deny_columns",
+                  error_detail=("denied column(s) bound to no column of their table: "
+                                f"{', '.join(cfg.deny_unbound)} — nothing was replicated. "
+                                "If the column was renamed, add the new name to "
+                                "source.deny.columns; if it does not exist, remove the entry"),
+                  extra={"unbound": list(cfg.deny_unbound)})
+        return {"paused": True,
+                "outcome": _outcome(relations, [], errors=run.errors, paused=True)}
     lc = Lifecycle(cfg.destination, cfg.registration, run)
     targets = _Targets(cfg, relations)
     pipelines = _Pipelines(cfg, targets.all())
@@ -548,6 +936,19 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
     result = _drain(cfg, active, run=run, owner=owner, pipelines=pipelines, targets=targets,
                     retired_keys=_retired_keys(cfg, lc, active))
     result["drift_blocked"] = sorted(blocked)
+    # Re-resolved: OIDs bound during this run may now sit under a name the startup map lacks.
+    cfg = _with_inherited_denies(cfg, relations)
+    for oid, (schema, table, why, since) in sorted(
+            cfg.destination.read_quarantine(cfg.registration).items()):
+        if oid in result["quarantined"]:
+            continue   # already reported by this run's drain
+        run.event(entity=f"{schema}.{table}", status=cp_status.EV_ERROR, unit="deny_columns",
+                  error_detail=(f"changes were skipped since {since} ({why}); bronze is stale "
+                                "for this table until it is resnapshotted"),
+                  extra={"action": "quarantine_pending", "oid": oid,
+                         "remedy": drift.remedy(cfg.manifest_path, f"{schema}.{table}")})
+    result["denied_columns_at_destination"] = _check_denied_columns(
+        cfg, relations, run=run, targets=targets, pipelines=pipelines)
 
     probe = telemetry.slot_probe(cfg.source_dsn, cfg.slot)
     checkpoint = cfg.destination.read_checkpoint(cfg.registration)
@@ -559,6 +960,7 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
         "published_tables": len(published),
         "destination_tables": len(dest_tables),
         "drift_blocked_tables": len(blocked),
+        "denied_columns_at_destination": result["denied_columns_at_destination"],
         "checkpoint_lsn": checkpoint[0] if checkpoint else None,
         "checkpoint_age_s": telemetry.checkpoint_age_s(_checkpoint_time(cfg)),
     }, pull_ms=int((time.monotonic() - t0) * 1000))
@@ -678,6 +1080,8 @@ def config_from_manifest(m, *, dsn: str, destination: Destination,
         slot_loss_policy=m.replication.slot_loss_policy,
         retirement_policy=m.destination.retirement_policy,
         reconcile_exclude=list(m.control.reconcile_exclude),
+        deny_columns={tuple(q.split(".", 1)): tuple(sorted(set(cols)))
+                      for q, cols in m.source.deny_columns.items() if cols},
     )
 
 
@@ -846,6 +1250,14 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
             sys.exit("another run owns this registration — try again after its tick")
         try:
             cfg.destination.ensure_runtime_tables()
+            cfg = _with_inherited_denies(cfg, plan.relations)
+            refused = _refuse_denied_keys(cfg, plan.relations)
+            if refused:
+                raise RuntimeError("a merge key includes a denied column (inherited through a "
+                                   f"rename): {'; '.join(refused)}")
+            if cfg.deny_unbound:
+                raise RuntimeError("denied column(s) bound to no column of their table: "
+                                   f"{', '.join(cfg.deny_unbound)} (#4346)")
             lc = Lifecycle(cfg.destination, cfg.registration, run_ctx)
             targets = _Targets(cfg, plan.relations)
             pipelines = _Pipelines(cfg, targets.all())
@@ -869,20 +1281,28 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
                     if r in wanted_relations
                     or lc.state_of(r.schema, r.table) != RESNAPSHOT_REQUIRED])
                 pipe = pipelines.get(targets(rel.schema, rel.table))
+                bound = _baseline_capture()
                 with snapshot.consistent_baseline(
                         cfg.source_dsn, cfg.slot, (rel.schema, rel.table), list(rel.key),
                         key_policy=rel.key_policy,
-                        baseline_wait_s=cfg.baseline_wait_s) as (res, boundary):
+                        baseline_wait_s=cfg.baseline_wait_s,
+                        deny_columns=_denied(cfg, [rel]).get(
+                            (rel.schema, rel.table), ()),
+                        **bound,
+                        deny_by_oid=cfg.deny_oids, deny_attnums_by_oid=cfg.deny_attnums) as (res, boundary):
                     # `drop_resources` again here: the drop above went through OUR duckdb
                     # connection, and MotherDuck's catalog can still serve the dropped table
                     # to dlt's own connection for tens of seconds (gotcha
                     # `motherduck-catalog-lags-a-write`) — dlt would then skip the CREATE and
                     # the load would die. Doing the drop inside the same dlt client removes the
                     # cross-session read entirely.
+                    _persist_bound(cfg, bound)   # before the load (see _take_baseline)
+                    _pending_safe(cfg, pipe, targets(rel.schema, rel.table))
                     pipe.run(res, **BASELINE_KWARGS)
                 owner.assert_held()
                 cfg.destination.write_baseline_lsns(cfg.registration,
                                                     {(rel.schema, rel.table): boundary})
+                _clear_rebuilt_quarantine(cfg, bound, [rel])
                 _emit_table_events(run_ctx, pipe, "snapshot", {rel.table: rel.schema}, {rel.table},
                                    {"reason": "operator resnapshot", "boundary_lsn": boundary})
                 # The refreshed signature is what clears a key_change block: without it the

@@ -145,3 +145,195 @@ def test_the_baseline_slot_is_temporary_and_dies_with_its_session(seeded, names,
         with snapshot.consistent_baseline(seeded, names["slot"], ("public", "t1"), ["id"]):
             raise RuntimeError("killed mid-baseline")
     assert slot_row("1") is None
+
+
+# --------------------------------------------------------------------------- deny.columns (#4346)
+
+
+def _person(dsn):
+    with psycopg.connect(dsn, autocommit=True) as c:
+        c.execute("create table public.person (id int primary key, email text, password_hash text)")
+        c.execute("insert into public.person values (1, 'a@x', 'h1'), (2, 'b@x', 'h2')")
+
+
+def test_a_denied_column_is_neither_hinted_nor_read_by_the_baseline(fresh_db, names, duckdb_path,
+                                                                   tmp_path):
+    _person(fresh_db)
+    with psycopg.connect(fresh_db) as conn:
+        hints = snapshot.column_hints(conn, "public", "person", ["id"], ["password_hash"])
+        assert set(hints) == {"id", "email"}
+        select_list = snapshot._select_list(conn, "public", "person", ["password_hash"])
+        assert "password_hash" not in select_list.as_string(conn)
+
+    dest = _dest(duckdb_path, tmp_path)
+    with snapshot.consistent_baseline(fresh_db, names["slot"], ("public", "person"), ["id"],
+                                      deny_columns=["password_hash"]) as (res, _boundary):
+        dest.pipeline_for_target("public").run(res)
+    con = duckdb.connect(duckdb_path)
+    cols = {r[0] for r in con.execute(
+        "select column_name from information_schema.columns "
+        "where table_schema = 'public' and table_name = 'person'").fetchall()}
+    assert "password_hash" not in cols and {"id", "email"} <= cols
+    assert con.execute("select id, email from public.person order by id").fetchall() == [
+        (1, "a@x"), (2, "b@x")]
+    con.close()
+
+
+def test_a_deny_that_would_empty_the_select_list_raises_instead_of_selecting_star(fresh_db):
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.only_secret (secret text)")
+    with psycopg.connect(fresh_db) as conn:
+        with pytest.raises(ValueError, match="every column is denied"):
+            snapshot._select_list(conn, "public", "only_secret", ["secret"])
+
+
+def test_an_oid_deny_on_a_key_column_refuses_the_baseline_before_reading(fresh_db, names):
+    _person(fresh_db)
+    with psycopg.connect(fresh_db) as c:
+        oid = int(c.execute("select 'public.person'::regclass::oid").fetchone()[0])
+    with pytest.raises(ValueError, match="merge key"):
+        with snapshot.consistent_baseline(fresh_db, names["slot"], ("public", "person"), ["id"],
+                                          deny_by_oid={oid: ["id"]}):
+            pass
+
+
+def test_a_rename_cannot_slip_in_between_the_oid_binding_and_the_read(fresh_db, names):
+    """Codex round 8 (#4346): names resolve against the CURRENT catalogue in each statement, so
+    the baseline pins its relations (ACCESS SHARE) before binding OIDs; a swap must wait until
+    the read is over, never land between resource construction and extraction."""
+    _person(fresh_db)
+    handle = snapshot.create_slot_with_snapshot(fresh_db, names["slot"])
+    try:
+        with snapshot.snapshot_resources(fresh_db, handle.snapshot_name, [("public", "person")],
+                                         {("public", "person"): ["id"]},
+                                         deny_columns={("public", "person"): ["password_hash"]}
+                                         ) as by_schema:
+            handle.close()
+            with psycopg.connect(fresh_db, autocommit=True) as other:
+                other.execute("set lock_timeout = '500ms'")
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    other.execute("alter table public.person rename to member")
+            (res,) = by_schema["public"]
+            rows = list(res)
+        assert rows and all("password_hash" not in r for r in rows)
+    finally:
+        handle.close()
+
+
+def test_a_swap_between_snapshot_export_and_import_projects_by_the_current_relation(
+        fresh_db, names):
+    """Codex round 9 (#4346): `person` (protected OID) and `member` swap names AFTER the slot
+    exported its snapshot but BEFORE the baseline imports it. A catalogue join by name inside
+    the imported snapshot still sees the OLD names; `LOCK`/`SELECT` see the new ones. Every
+    lookup must agree with what is read."""
+    _person(fresh_db)
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.member (id int primary key, email text, password_hash text)")
+        protected = int(c.execute("select 'public.person'::regclass::oid").fetchone()[0])
+    handle = snapshot.create_slot_with_snapshot(fresh_db, names["slot"])
+    try:
+        with psycopg.connect(fresh_db, autocommit=True) as c:
+            c.execute("alter table public.person rename to tmp_swap")
+            c.execute("alter table public.member rename to person")
+            c.execute("alter table public.tmp_swap rename to member")
+        oids: dict = {}
+        with snapshot.snapshot_resources(fresh_db, handle.snapshot_name, [("public", "member")],
+                                         {("public", "member"): ["id"]}, oids_out=oids,
+                                         deny_by_oid={protected: ["password_hash"]}) as by_schema:
+            handle.close()
+            (res,) = by_schema["public"]
+            rows = list(res)
+        assert oids[("public", "member")] == protected
+        assert rows and all("password_hash" not in r for r in rows)
+    finally:
+        handle.close()
+
+
+def test_a_column_swap_between_export_and_import_never_reads_the_secret(fresh_db, names):
+    """Codex round 14 (#4346): swap `email` and `password_hash` NAMES after the slot exported
+    its snapshot. Inside the snapshot the catalogue still shows the old names, but the SELECT
+    resolves current ones — so names must come from a fresh read taken under the locks."""
+    _person(fresh_db)
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        oid = int(c.execute("select 'public.person'::regclass::oid").fetchone()[0])
+    handle = snapshot.create_slot_with_snapshot(fresh_db, names["slot"])
+    try:
+        with psycopg.connect(fresh_db, autocommit=True) as c:
+            c.execute("alter table public.person rename column email to tmp_swap")
+            c.execute("alter table public.person rename column password_hash to email")
+            c.execute("alter table public.person rename column tmp_swap to password_hash")
+        with snapshot.snapshot_resources(fresh_db, handle.snapshot_name, [("public", "person")],
+                                         {("public", "person"): ["id"]},
+                                         deny_columns={("public", "person"): ["password_hash"]},
+                                         deny_attnums_by_oid={oid: [3]}) as by_schema:
+            handle.close()
+            (res,) = by_schema["public"]
+            rows = list(res)
+        values = {v for r in rows for v in r.values()}
+        assert rows and not ({"h1", "h2"} & values), "the secret column was read"
+    finally:
+        handle.close()
+
+
+def _baseline_outputs(dsn, slot, ddl=(), **kw):
+    """Run one snapshot_resources over public.person with `ddl` applied between the export and
+    the import; return (layouts_out, bound_out)."""
+    layouts, bound = {}, {}
+    handle = snapshot.create_slot_with_snapshot(dsn, slot)
+    try:
+        with psycopg.connect(dsn, autocommit=True) as c:
+            for s in ddl:
+                c.execute(s)
+        with snapshot.snapshot_resources(dsn, handle.snapshot_name, [("public", "person")],
+                                         {("public", "person"): ["id"]},
+                                         deny_columns={("public", "person"): ["password_hash"]},
+                                         layouts_out=layouts, bound_out=bound, **kw) as by_schema:
+            handle.close()
+            list(by_schema["public"][0])
+    finally:
+        handle.close()
+    return layouts, bound
+
+
+def test_a_baseline_records_its_reviewed_layout_and_binds_the_denied_attnum(fresh_db, names):
+    """Codex round 16 (#4346): the layout later descriptions are proven against, and the denied
+    name's attnum, both read under the baseline's locks."""
+    _person(fresh_db)
+    with psycopg.connect(fresh_db) as c:
+        oid = int(c.execute("select 'public.person'::regclass::oid").fetchone()[0])
+    layouts, bound = _baseline_outputs(fresh_db, names["slot"])
+    # The full published description (Codex round 17): name, type OID, typmod and key flag per
+    # attnum — what every later Relation message of the table must equal.
+    oid_, layout = layouts[("public", "person")]
+    assert oid_ == oid and layout.hidden == frozenset()
+    assert [(a, n) for a, n, *_ in layout.columns] == [(1, "id"), (2, "email"),
+                                                       (3, "password_hash")]
+    assert [(t, m) for _a, _n, t, m, _k in layout.columns] == [(23, -1), (25, -1), (25, -1)]
+    assert bound[("public", "person")] == [("password_hash", 3)]
+
+
+def test_a_column_dropped_between_export_and_lock_leaves_no_reviewed_layout(fresh_db, names):
+    """Codex round 16 (#4346): WAL written in the export-to-lock window, before a drop, cannot
+    be proven against the layout read after it — so the baseline records none, and the decoder
+    then quarantines the table (no reviewed layout) rather than trust today's names."""
+    _person(fresh_db)
+    layouts, _ = _baseline_outputs(fresh_db, names["slot"],
+                                   ddl=["alter table public.person drop column email"])
+    (_oid, layout), = layouts.values()
+    assert layout is None
+
+
+def test_a_denied_name_bound_to_no_column_refuses_the_baseline(fresh_db, names):
+    """Codex round 16 (#4346): `password_hash` renamed before anything bound it. Under the
+    locks the name is not a column and the table has no bound attnum: which column holds the
+    secret is unknown, so the baseline refuses rather than read `pw`."""
+    _person(fresh_db)
+    with pytest.raises(ValueError, match="never bound"):
+        _baseline_outputs(fresh_db, names["slot"],
+                          ddl=["alter table public.person rename column password_hash to pw"])
+    # A bound attnum covers the same rename: the baseline reads, without `pw`.
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        oid = int(c.execute("select 'public.person'::regclass::oid").fetchone()[0])
+    snapshot.drop_slot_if_exists(fresh_db, names["slot"])
+    layouts, _ = _baseline_outputs(fresh_db, names["slot"], deny_attnums_by_oid={oid: [3]})
+    assert layouts[("public", "person")][1].columns[2][:2] == (3, "pw")

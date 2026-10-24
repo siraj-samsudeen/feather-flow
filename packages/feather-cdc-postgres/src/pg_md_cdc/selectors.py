@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -36,6 +37,9 @@ _SOURCE_SYSTEM = frozenset(
     }
 )
 _SOURCE_OPERATIONAL = frozenset({"background_job", "job_execution"})
+# A selected column whose NAME looks secret-bearing and is not in `deny.columns` (#4346). A
+# warning, never an error: the name is a hint, and `validate` must stay green on a false hit.
+_SECRET_LIKE = re.compile(r"password|_hash$|token|secret", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -50,6 +54,8 @@ class Relation:
     key_index: Optional[str] = None  # the unique index a UNIQUE_INDEX key came from
     description: Optional[str] = None
     origin: Optional[str] = None  # adapters.USER_CREATED | NAMED_SYSTEM | None
+    # Columns that never leave the CDC process (`source.deny.columns`, #4346), sorted.
+    deny_columns: Tuple[str, ...] = ()
 
     @property
     def qualified(self) -> str:
@@ -238,6 +244,9 @@ def compile(
         if not keep:
             continue
         meta = adapter_meta.get(rel.qualified)
+        deny_cols = _deny_columns_for(m, rel, key, problems)
+        if deny_cols is None:
+            continue
         relations.append(
             Relation(
                 schema=rel.schema,
@@ -250,6 +259,7 @@ def compile(
                 key_index=idx_name,
                 description=meta.description if meta else None,
                 origin=meta.origin if meta else None,
+                deny_columns=deny_cols,
             )
         )
 
@@ -285,10 +295,45 @@ def compile(
     )
 
 
+def _deny_columns_for(
+    m: Manifest, rel: SourceRelation, key: Tuple[str, ...], problems: List[Problem]
+) -> Optional[Tuple[str, ...]]:
+    """The relation's column projection (#4346), or None when it cannot be honoured: a denied
+    merge-key column would leave the mirror unable to merge, so the relation is refused. A name
+    the catalogue does not carry is a warning (it may be dropped, or not yet added) and is still
+    withheld, so a column added later can never flow before the manifest is re-read."""
+    denied = sorted(set(m.source.deny_columns.get(rel.qualified, [])))
+    present = {c.name for c in rel.columns}
+    for col in denied:
+        if col in key:
+            problems.append(Problem(
+                "deny_column_is_key", "error",
+                f"{rel.qualified}.{col} is part of the merge key and cannot be withheld — "
+                "the mirror could not merge without it"))
+            return None
+        if col not in present:
+            problems.append(Problem(
+                "deny_column_absent", "warning",
+                f"{rel.qualified}.{col} is denied but not in the source catalogue — still withheld "
+                "if it appears"))
+    for col in sorted(present - set(denied)):
+        if _SECRET_LIKE.search(col):
+            problems.append(Problem(
+                "secret_like_column", "warning",
+                f"{rel.qualified}.{col} looks secret-bearing and is replicated — add it to "
+                "source.deny.columns if it should never leave the source"))
+    return tuple(denied)
+
+
 def selection_hash(relations: Iterable[Relation]) -> str:
     """Stable over the selection AND its key policy — a table that silently changed from
-    merge to append-only must produce a different hash in the control plane."""
-    lines = sorted(f"{r.schema}.{r.table}|{','.join(r.key)}|{r.key_policy}" for r in relations)
+    merge to append-only must produce a different hash in the control plane. A column
+    projection (#4346) is part of the selection; it is appended only when present, so a
+    registration with no column deny keeps the hash it always had."""
+    lines = sorted(
+        f"{r.schema}.{r.table}|{','.join(r.key)}|{r.key_policy}"
+        + (f"|deny={','.join(r.deny_columns)}" if r.deny_columns else "")
+        for r in relations)
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
 
 

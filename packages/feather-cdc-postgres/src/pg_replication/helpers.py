@@ -7,6 +7,9 @@ from typing import (
     List,
     Sequence,
     Any,
+    Tuple,
+    FrozenSet,
+    NamedTuple,
 )
 from dataclasses import dataclass, field
 
@@ -632,6 +635,64 @@ def _get_pk(
     return result
 
 
+class ReviewedLayout(NamedTuple):
+    """Local patch (#4346, Codex round 17): a relation's published columns exactly as a
+    pgoutput Relation message describes them, plus what the message cannot carry.
+
+    `columns`: ((attnum, name, type oid, typmod, replica-identity key flag), ...) in attnum
+    order — the message lists the same columns in the same order, minus the attnum.
+    `hidden`: attnums of live columns pgoutput does not publish (generated columns before
+    PG 18, virtual ones on 18). The message omits them, so a hidden column that becomes
+    published (`ALTER COLUMN ... DROP EXPRESSION`) is caught by the catalogue, not the message."""
+    columns: Tuple[Tuple[int, str, int, int, int], ...]
+    hidden: FrozenSet[int] = frozenset()
+
+    def described(self) -> List[Tuple[str, int, int, int]]:
+        """What a Relation message of this layout must say, column by column."""
+        return [(n, t, m, k) for _a, n, t, m, k in self.columns]
+
+    def to_json(self) -> Dict[str, Any]:
+        return {"columns": [list(c) for c in self.columns], "hidden": sorted(self.hidden)}
+
+    @classmethod
+    def from_json(cls, raw: Any) -> Optional["ReviewedLayout"]:
+        """None for anything but the full description (an older [[attnum, name], ...] row
+        cannot be compared exactly, so the relation has no reviewed layout: quarantined)."""
+        if not isinstance(raw, dict) or "columns" not in raw:
+            return None
+        return cls(tuple((int(a), str(n), int(t), int(m), int(k)) for a, n, t, m, k in raw["columns"]),
+                   frozenset(int(a) for a in raw.get("hidden", ())))
+
+
+def published_shape(cur: Any, relid: int) -> Tuple[ReviewedLayout, bool]:
+    """Local patch (#4346): this relation's `ReviewedLayout` in whatever snapshot `cur` reads,
+    and whether the table has EVER dropped a column (`attisdropped` rows stay for good).
+    Stored generated columns are published on PG 18 (publication.py), virtual ones never.
+    The key flag is pgoutput's: every column under REPLICA IDENTITY FULL, the identity index's
+    columns under DEFAULT (the primary key) or USING INDEX, none otherwise.
+    Works on a psycopg2 or a psycopg 3 cursor."""
+    cur.execute("select current_setting('server_version_num')::int >= 180000")
+    pg18 = bool(cur.fetchone()[0])
+    published = "a.attgenerated in ('', 's')" if pg18 else "a.attgenerated = ''"
+    cur.execute(
+        f"""select a.attnum, a.attname, a.atttypid::bigint, a.atttypmod, a.attisdropped,
+                   ({published}) as published,
+                   case when c.relreplident = 'f' then 1
+                        when exists (select 1 from pg_index i
+                                     where i.indrelid = c.oid and a.attnum = any(i.indkey)
+                                       and ((c.relreplident = 'd' and i.indisprimary)
+                                            or (c.relreplident = 'i' and i.indisreplident)))
+                        then 1 else 0 end
+            from pg_attribute a join pg_class c on c.oid = a.attrelid
+            where a.attrelid = %s and a.attnum > 0 order by a.attnum""", (relid,))
+    rows = cur.fetchall()
+    columns = tuple((int(a), n, int(t), int(m), int(k))
+                    for a, n, t, m, dropped, pub, k in rows if not dropped and pub)
+    hidden = frozenset(int(a) for a, _n, _t, _m, dropped, pub, _k in rows
+                       if not dropped and not pub)
+    return ReviewedLayout(columns, hidden), any(r[4] for r in rows)
+
+
 @dataclass
 class ItemGenerator:
     credentials: ConnectionStringCredentials
@@ -650,6 +711,27 @@ class ItemGenerator:
     # (schema, table) -> boundary LSN of that relation's current baseline (#3079 review): a
     # transaction with commit LSN below it is already in the baseline and is dropped here.
     baseline_lsn_by_relation: Optional[Dict[Any, int]] = None
+    # Local patch (#4346): (schema, table) -> columns that never leave the CDC process.
+    exclude_columns: Optional[Dict[Any, Sequence[str]]] = None
+    # Local patch (#4346): relation OID -> denied columns. SHARED and MUTATED (the caller passes
+    # one dict to every batch of a drain): a deny follows the table's OID through a rename.
+    exclude_columns_by_relid: Optional[Dict[int, Any]] = None
+    # Local patch (#4346, Sonnet F1): (schema, table) -> the columns its last reviewed signature
+    # names. On a relation that carries a deny, any other column is withheld until reviewed.
+    approved_columns: Optional[Dict[Any, Any]] = None
+    # relation OID -> reviewed columns (the signature's `oid`), and relation OID -> denied
+    # attnums. Both SHARED across the drain's batches and follow a table rename.
+    approved_by_relid: Optional[Dict[int, Any]] = None
+    exclude_attnums_by_relid: Optional[Dict[int, Any]] = None
+    # relation OID -> `ReviewedLayout` (#4346), recorded by the relation's baseline under its
+    # locks. A description of a deny-carrying relation must match it exactly. Read-only.
+    reviewed_layout_by_relid: Optional[Dict[int, Any]] = None
+    # OIDs whose deny was bound at a trusted moment (run start, or a baseline under its locks).
+    # None = not tracked (library use). SHARED, not mutated.
+    bound_relids: Optional[Any] = None
+    # OIDs whose changes are skipped (quarantined) — seeded with the persisted marks, SHARED and
+    # MUTATED, so a quarantine holds across every batch of the drain.
+    quarantined_relids: Optional[set] = None
     last_commit_lsn: Optional[int] = field(default=None, init=False)
     generated_all: bool = False
     # TRUNCATEs seen in this batch, in WAL order: {namespace, table, lsn, commit_ts}.
@@ -708,6 +790,14 @@ class ItemGenerator:
                 keys_by_relation=self.keys_by_relation,
                 policies_by_relation=self.policies_by_relation,
                 baseline_lsn_by_relation=self.baseline_lsn_by_relation,
+                exclude_columns=self.exclude_columns,  # Local patch (#4346)
+                exclude_columns_by_relid=self.exclude_columns_by_relid,
+                approved_columns=self.approved_columns,
+                approved_by_relid=self.approved_by_relid,
+                exclude_attnums_by_relid=self.exclude_attnums_by_relid,
+                reviewed_layout_by_relid=self.reviewed_layout_by_relid,
+                bound_relids=self.bound_relids,
+                quarantined_relids=self.quarantined_relids,
             )
             cur.consume_stream(consumer)
         except StopReplication:  # completed batch or reached `upto_lsn`
@@ -719,6 +809,9 @@ class ItemGenerator:
         self.generated_all = consumer.consumed_all
         self.truncates = consumer.truncates
         self.key_problems = consumer.key_problems
+        self.denied_seen = getattr(consumer, "denied_seen", set())  # Local patch (#4346)
+        self.unreviewed = getattr(consumer, "unreviewed", {})
+        self.quarantined = getattr(consumer, "quarantine_report", {})
         return consumer
 
     def __iter__(self) -> Iterator[Union[TDataItem, DataItemWithMeta]]:
@@ -746,8 +839,46 @@ class MessageConsumer:
         keys_by_relation: Optional[Dict[Any, Sequence[str]]] = None,
         policies_by_relation: Optional[Dict[Any, str]] = None,
         baseline_lsn_by_relation: Optional[Dict[Any, int]] = None,
+        exclude_columns: Optional[Dict[Any, Sequence[str]]] = None,
+        exclude_columns_by_relid: Optional[Dict[int, Any]] = None,
+        approved_columns: Optional[Dict[Any, Any]] = None,
+        approved_by_relid: Optional[Dict[int, Any]] = None,
+        exclude_attnums_by_relid: Optional[Dict[int, Any]] = None,
+        reviewed_layout_by_relid: Optional[Dict[int, Any]] = None,
+        bound_relids: Optional[Any] = None,
+        quarantined_relids: Optional[set] = None,
     ) -> None:
         self.keys_by_relation = keys_by_relation or {}
+        # Local patch (#4346): (schema, table) -> denied columns, dropped BY NAME from the
+        # hints and every data item. Exclusion, not an allow-list: a column added at the source
+        # mid-run still flows; `last_table_schema` keeps every column (positional zip).
+        self.exclude_columns = exclude_columns or {}
+        # relation OID (pgoutput relation_id) -> denied columns, kept by reference: once a
+        # relation was seen under a denied name its deny sticks to the OID, so a rename (the
+        # new name has no entry) cannot release the column — in this batch or a later one.
+        self.exclude_by_relid = (
+            exclude_columns_by_relid if exclude_columns_by_relid is not None else {})
+        # Local patch (#4346, Sonnet F1): reviewed columns per (schema, table), and the
+        # (schema, table) -> columns withheld because no review has seen them yet.
+        self.approved_columns = approved_columns or {}
+        self.approved_by_relid = approved_by_relid if approved_by_relid is not None else {}
+        self.exclude_attnums = (
+            exclude_attnums_by_relid if exclude_attnums_by_relid is not None else {})
+        self.unreviewed: Dict[Any, List[str]] = {}
+        self.reviewed_layout = (
+            reviewed_layout_by_relid if reviewed_layout_by_relid is not None else {})
+        self.bound_relids = None if bound_relids is None else frozenset(bound_relids)
+        # Relation ids whose changes are skipped — sticky: once a row of a relation was met
+        # under an unprovable description, nothing more of it loads until a resnapshot.
+        self.quarantined_relids: set = (
+            quarantined_relids if quarantined_relids is not None else set())
+        # relation id -> why its CURRENT description is unprovable. It becomes a quarantine
+        # only when a change past the relation's baseline arrives under it (a description
+        # older than a fresh baseline carries no rows to load, and must not re-flag it).
+        self._unproven: Dict[int, str] = {}
+        # relation id -> (schema, table, why), for the runner to report and persist. Keyed by
+        # the OID (Codex round 17): two relations met under one name are two quarantines.
+        self.quarantine_report: Dict[int, Tuple[str, str, str]] = {}
         # (schema, table) -> compiled key policy (#3079 D-8). "append_only" merges on `lsn`.
         self.policies_by_relation = policies_by_relation or {}
         self.baseline_lsn_by_relation = baseline_lsn_by_relation or {}
@@ -911,13 +1042,14 @@ class MessageConsumer:
 
         # apply user input
         # 1) exclude columns
-        include_columns = (
-            None
-            if self.include_columns is None
-            else self.include_columns.get(table_name)
-        )
+        # Local patch (#4346): looked up by (namespace, table) — the bare name let a projection
+        # on a.t reach b.t — and the deny-list is applied on top.
+        self._withhold_unreviewed(decoded_msg, table_name)
+        include_columns, exclude_columns = self._projection(
+            decoded_msg.relation_id, decoded_msg.namespace, table_name)
         if include_columns is not None:
             columns = {k: v for k, v in columns.items() if k in include_columns}
+        columns = {k: v for k, v in columns.items() if k not in exclude_columns}
         # 2) override source hints
         column_hints: TTableSchemaColumns = (
             dict() if self.columns is None else self.columns.get(table_name, dict())
@@ -968,6 +1100,142 @@ class MessageConsumer:
         self.groups.append(
             (decoded_msg.relation_id, self.last_table_schema[decoded_msg.relation_id], items))
 
+    def _current_shape(self, relation_id: int):
+        """Local patch (#4346): `published_shape` of this relation in the CURRENT catalogue, or
+        None when it cannot be read (then nothing can be proven)."""
+        if self.credentials is None:
+            return None
+        try:
+            conn = _get_conn(self.credentials)
+            try:
+                with conn.cursor() as cur:
+                    return published_shape(cur, relation_id)
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001 — unknown identity is handled as "quarantine"
+            return None
+
+    def _prove_layout(self, relid: int, key, decoded_msg: Relation, exclude, denied_attnums):
+        """Local patch (#4346, Codex round 17): (why, layout). `why` says why this description
+        cannot be trusted; else `layout` is the relation's reviewed layout, which the
+        description matches EXACTLY, so each position is the reviewed attnum at that position.
+
+        The rule, with no inference: the description's columns — count, names in order, type
+        OIDs, typmods and replica-identity key flags — must equal the layout the relation's
+        baseline recorded under its locks, and the catalogue must still hold every reviewed
+        attnum and publish no column the review saw hidden. Anything else, of any kind (an
+        added column included), is unproven and quarantines the relation until a resnapshot.
+
+        Why the catalogue half is needed. The message carries no attnums. A dropped attnum is
+        never reused and a new column always gets a higher one, so while every reviewed attnum
+        is live and nothing hidden surfaced, a message of exactly the reviewed length IS the
+        reviewed attnums in order. Drop `email`, rename `password_hash` to `email`, add a new
+        `password_hash`: the message reads exactly like the review, and only the dropped
+        attnum gives it away. A generated column whose expression is dropped joins the
+        published set below a reviewed attnum (Codex round 17) — the count catches it, the
+        hidden set too."""
+        if self.bound_relids is not None and relid not in self.bound_relids:
+            # A table renamed onto a denied name mid-run: which of its columns is the denied
+            # one was never bound at a trusted moment (Codex round 16, P1).
+            return ("met under a denied name mid-run; its deny was not bound at run start or "
+                    "by a baseline, so the denied column's identity is unknown", None)
+        layout = self.reviewed_layout.get(relid)
+        if layout is None:
+            return ("no reviewed layout: the table was not baselined with its deny, so its "
+                    "column identities are unknown until a resnapshot", None)
+        described = [(c.name, int(c.type_id), int(c.atttypmod), 1 if c.part_of_pkey else 0)
+                     for c in decoded_msg.columns]
+        if described != layout.described():
+            return ("the column description differs from the reviewed layout (a column added, "
+                    "dropped, renamed, reordered or retyped, or the replica identity changed): "
+                    "any DDL on a table with denied columns needs a resnapshot", None)
+        shape = self._current_shape(relid)
+        if shape is None:
+            return "column identity unreadable (catalogue lookup failed)", None
+        current, _ever_dropped = shape
+        live = {c[0] for c in current.columns} | set(current.hidden)
+        if any(c[0] not in live for c in layout.columns):
+            return ("a reviewed column was dropped since the review: identity unprovable",
+                    None)
+        if layout.hidden & {c[0] for c in current.columns}:
+            return ("a column that was hidden at the review (generated) is published now: "
+                    "identity unprovable", None)
+        attnum_of = {c[1]: c[0] for c in layout.columns}
+        denied = set(denied_attnums) | {attnum_of[c] for c in exclude if c in attnum_of}
+        for k in self.keys_by_relation.get(key) or ():
+            if k in attnum_of and attnum_of[k] in denied:
+                return f"merge-key column {k!r} is a denied column", None
+        return None, layout
+
+    def _withhold_unreviewed(self, decoded_msg: Relation, table_name: str) -> None:
+        """Local patch (#4346): judge a description of a relation that carries a deny. Proven
+        (`_prove_layout`): withhold each column whose attnum is denied and each reviewed column
+        the stored signature does not approve. Unproven: mark it; a change under it quarantines
+        the relation (`process_change`) — withholding columns instead would merge NULLs over
+        good bronze values. Merge-key columns are never withheld (a key cannot be denied)."""
+        relid = decoded_msg.relation_id
+        key = (decoded_msg.namespace or "", table_name)
+        self._unproven.pop(relid, None)   # a new description is judged afresh
+        _include, exclude = self._projection(relid, decoded_msg.namespace, table_name)
+        denied_attnums = set(self.exclude_attnums.get(relid, ()))
+        if not exclude and not denied_attnums:
+            return
+        why, layout = self._prove_layout(relid, key, decoded_msg, exclude, denied_attnums)
+        if why:
+            self._unproven[relid] = why
+            return
+        attnum_of = {c[1]: c[0] for c in layout.columns}
+        # Bound by POSITION, which is proven — the identity the runner persists (#4346).
+        learned = {c: attnum_of[c] for c in exclude if c in attnum_of}
+        denied_attnums |= set(learned.values())
+        self.exclude_attnums[relid] = frozenset(denied_attnums)
+        if not hasattr(self, "denied_seen"):
+            self.denied_seen = set()
+        self.denied_seen.update((relid, key[0], key[1], c, a) for c, a in learned.items())
+        approved = self.approved_by_relid.get(relid)
+        if approved is None:
+            approved = self.approved_columns.get(key)
+            if approved is not None:
+                self.approved_by_relid[relid] = approved
+        keys = set(self.keys_by_relation.get(key) or ())
+        withheld, unreviewed = set(), set()
+        for c in decoded_msg.columns:
+            n = c.name
+            if n in exclude or n in keys:
+                continue
+            if attnum_of[n] in denied_attnums:
+                withheld.add(n)            # the denied column, by its attnum
+            elif approved is None or n not in approved:
+                withheld.add(n)
+                unreviewed.add(n)          # not in the reviewed signature
+        if withheld:
+            self.exclude_by_relid[relid] = exclude | frozenset(withheld)
+        if unreviewed:
+            self.unreviewed[key] = sorted(set(self.unreviewed.get(key, [])) | unreviewed)
+
+    def _projection(self, relation_id: int, namespace: str, table_name: str):
+        """Local patch (#4346): (include, exclude) for one relation description. Include is
+        keyed by (schema, table); exclude is the name's deny UNION the OID's, and the union is
+        written back to the OID so it survives a rename."""
+        key = (namespace or "", table_name)
+        include = None
+        include_map = getattr(self, "include_columns", None)
+        if include_map is not None:
+            # (schema, table) first; the bare name is upstream's documented contract for the
+            # single-schema `replication_resource` wrapper, kept so its callers do not widen.
+            include = include_map.get(key, include_map.get(table_name))
+        by_relid = getattr(self, "exclude_by_relid", None)
+        if by_relid is None:
+            by_relid = self.exclude_by_relid = {}
+        by_name = frozenset(getattr(self, "exclude_columns", {}).get(key, ()))
+        exclude = by_name | frozenset(by_relid.get(relation_id, ()))
+        if exclude:
+            by_relid[relation_id] = exclude
+        # (The (oid, schema, table, column, attnum) the runner persists is recorded only by
+        # `_withhold_unreviewed`, from a PROVEN position — never by a name lookup that a rename
+        # can race, Codex round 16.)
+        return include, exclude
+
     def _relation_key(self, relation_id: int):
         schema = self.last_table_schema[relation_id]
         return schema.get("namespace") or "", schema["name"]
@@ -990,6 +1258,8 @@ class MessageConsumer:
                 continue  # not a published relation of ours (never seen a Relation message)
             if self._in_baseline(relation_id):
                 continue
+            if relation_id in getattr(self, "quarantined_relids", ()):
+                continue   # Local patch (#4346): nothing of a quarantined relation applies
             namespace, table_name = self._relation_key(relation_id)
             keyed = self.policies_by_relation.get((namespace, table_name)) != "append_only"
             if keyed:
@@ -1016,7 +1286,20 @@ class MessageConsumer:
         """
         if self._in_baseline(decoded_msg.relation_id):
             return
+        # Local patch (#4346): a change under an unproven description quarantines the relation,
+        # and a quarantine is sticky — nothing more of it loads (this batch, later batches of
+        # the drain, later runs via the persisted mark) until a resnapshot re-reviews it.
+        relid = decoded_msg.relation_id
+        why = getattr(self, "_unproven", {}).get(relid)
+        if why is not None and relid not in self.quarantined_relids:
+            self.quarantined_relids.add(relid)
+            self.quarantine_report[relid] = (*self._relation_key(relid), why)
+        if relid in getattr(self, "quarantined_relids", ()):
+            return
         table_name = self.last_table_schema[decoded_msg.relation_id]["name"]
+        # Local patch (#4346): schema-qualified projection, deny-list included.
+        include_columns, exclude_columns = self._projection(
+            decoded_msg.relation_id, *self._relation_key(decoded_msg.relation_id))
         if isinstance(decoded_msg, (Insert, Update)):
             column_data = decoded_msg.new_tuple.column_data
             if isinstance(decoded_msg, Update):
@@ -1035,11 +1318,8 @@ class MessageConsumer:
             lsn=msg_start_lsn,
             commit_ts=self.last_commit_ts,
             for_delete=isinstance(decoded_msg, Delete),
-            include_columns=(
-                None
-                if self.include_columns is None
-                else self.include_columns.get(table_name)
-            ),
+            include_columns=include_columns,
+            exclude_columns=exclude_columns,
         )
         if isinstance(decoded_msg, Update):
             old_key_delete = self._old_key_delete(decoded_msg, data_item, msg_start_lsn)
@@ -1055,6 +1335,7 @@ class MessageConsumer:
         commit_ts: pendulum.DateTime,
         for_delete: bool,
         include_columns: Optional[Sequence[str]] = None,
+        exclude_columns: Sequence[str] = (),  # Local patch (#4346)
     ) -> TDataItem:
         """Generates data item from replication message data and corresponding metadata."""
         data_item = {
@@ -1066,6 +1347,9 @@ class MessageConsumer:
             )
             for (schema, data) in zip(column_schema.values(), data)
             if (True if include_columns is None else schema["name"] in include_columns)
+            # Local patch (#4346): filtered by NAME after the positional zip pairs each column
+            # with its value — dropping a column before the zip would shift every later value.
+            and schema["name"] not in exclude_columns
         }
         data_item["lsn"] = lsn
         if for_delete:
@@ -1089,6 +1373,14 @@ class MessageConsumer:
         columns = table["columns"]
         pk = [name for name, col in columns.items() if col.get("primary_key")]
         if not pk:
+            return None
+        # Local patch (#4346): a key that falls back to REPLICA IDENTITY FULL's flags names every
+        # column, denied ones included — a tombstone keyed on them would carry the denied value.
+        _include, exclude = self._projection(relation_id, namespace, table_name)
+        if exclude & set(pk):
+            self.key_problems[(namespace, table_name)] = (
+                "a key-changing UPDATE's merge key includes a denied column; no tombstone was "
+                "emitted — resnapshot this table")
             return None
         # A 'K' tuple carries only the REPLICA IDENTITY columns, which need not be the merge
         # key (an identity on a secondary unique index): a key field missing from the raw tuple

@@ -517,3 +517,516 @@ def test_a_large_transaction_ending_a_batch_is_delivered_once(fresh_db, names):
                 stream.advance(fresh_db, names["slot"], batch.last_commit_lsn)
         assert [n for _, n in seen] == [20, 20, 20, 1]
         assert [lsn for lsn, _ in seen] == sorted({lsn for lsn, _ in seen})
+
+
+# --------------------------------------------------------------------------- deny.columns (#4346)
+
+
+def _all_rows(batches, namespace, table):
+    return [r for b in batches for r in _rows(b, namespace, table)]
+
+
+def _hint_columns(batches, namespace, table):
+    out = set()
+    for b in batches:
+        for item in b.items_by_namespace.get(namespace, []):
+            hints = getattr(getattr(item, "meta", None), "hints", None)
+            if hints and hints.get("table_name") == table:
+                out |= set(hints["columns"])
+    return out
+
+
+# The reviewed shape (a stored signature's columns): on a table that carries a deny, any column
+# outside it is withheld until reviewed (#4346), so a test of other behaviour declares it.
+REVIEWED = {("public", "person"): ["id", "email"]}
+
+
+def _review(dsn, *qualified):
+    """What a baseline records under its locks (#4346): each table's `ReviewedLayout`, by OID.
+    Every description of a table that carries a deny must match it exactly."""
+    from pg_replication.helpers import published_shape
+    out = {}
+    with psycopg.connect(dsn, autocommit=True) as c:
+        for q in qualified:
+            oid = int(c.execute("select %s::regclass::oid", (q,)).fetchone()[0])
+            out[oid] = published_shape(c.cursor(), oid)[0]
+    return out
+
+
+def _person_stream(dsn, names, schemas=("public",)):
+    with psycopg.connect(dsn, autocommit=True) as c:
+        for s in schemas:
+            if s != "public":
+                c.execute(f'create schema "{s}"')
+            c.execute(f'create table "{s}".person (id int primary key, email text, '
+                      "password_hash text)")
+    rels = [(s, "person") for s in schemas]
+    publication.reconcile(dsn, names["publication"], rels)
+    publication.ensure_replica_identity(dsn, rels, "full")
+    _slot(dsn, names["slot"])
+    return rels
+
+
+def test_insert_update_delete_land_without_the_denied_column(fresh_db, names):
+    _person_stream(fresh_db, names)
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("insert into public.person values (1, 'a@x', 'h1'), (2, 'b@x', 'h2')")
+        c.execute("update public.person set email = 'a2@x', password_hash = 'h1b' where id = 1")
+        c.execute("delete from public.person where id = 2")
+    batches = list(stream.drain(fresh_db, names["slot"], names["publication"], 0,
+                                keys_by_relation={("public", "person"): ["id"]},
+                                deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                                approved_columns_by_relation=REVIEWED,
+                                reviewed_layout_by_oid=_review(fresh_db, "public.person")))
+    rows = _all_rows(batches, "public", "person")
+    assert len(rows) == 4                       # 2 inserts, 1 update, 1 delete
+    assert all("password_hash" not in r for r in rows)
+    assert [r["email"] for r in rows if "deleted_ts" not in r] == ["a@x", "b@x", "a2@x"]
+    assert [r["id"] for r in rows if "deleted_ts" in r] == [2]
+    hinted = _hint_columns(batches, "public", "person")
+    assert "password_hash" not in hinted and {"id", "email", "lsn"} <= hinted
+
+
+def test_a_deny_on_a_t_does_not_strip_b_t(fresh_db, names):
+    """The vendored consumer looked `include_columns` up by BARE table name; a projection keyed
+    that way would reach every schema's `person`. Identity is (schema, table)."""
+    _person_stream(fresh_db, names, schemas=("a", "b"))
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("insert into a.person values (1, 'a@x', 'ha')")
+        c.execute("insert into b.person values (1, 'b@x', 'hb')")
+    batches = list(stream.drain(fresh_db, names["slot"], names["publication"], 0,
+                                keys_by_relation={("a", "person"): ["id"], ("b", "person"): ["id"]},
+                                deny_columns_by_relation={("a", "person"): ["password_hash"]},
+                                reviewed_layout_by_oid=_review(fresh_db, "a.person")))
+    (a_row,) = _all_rows(batches, "a", "person")
+    (b_row,) = _all_rows(batches, "b", "person")
+    assert "password_hash" not in a_row
+    assert b_row["password_hash"] == "hb"
+    assert "password_hash" in _hint_columns(batches, "b", "person")
+
+
+def test_an_update_of_only_the_denied_column_is_a_row_version_with_no_visible_change(
+        fresh_db, names):
+    _person_stream(fresh_db, names)
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("insert into public.person values (1, 'a@x', 'h1')")
+        c.execute("update public.person set password_hash = 'rotated' where id = 1")
+    batches = list(stream.drain(fresh_db, names["slot"], names["publication"], 0,
+                                keys_by_relation={("public", "person"): ["id"]},
+                                deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                                reviewed_layout_by_oid=_review(fresh_db, "public.person")))
+    insert, update = _all_rows(batches, "public", "person")
+    assert update["lsn"] > insert["lsn"]
+    assert {k: v for k, v in update.items() if k != "lsn"} == \
+           {k: v for k, v in insert.items() if k != "lsn"}
+
+
+def test_a_key_change_tombstone_carries_no_denied_column(fresh_db, names):
+    _person_stream(fresh_db, names)
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("insert into public.person values (1, 'a@x', 'h1')")
+        c.execute("update public.person set id = 7 where id = 1")
+    batches = list(stream.drain(fresh_db, names["slot"], names["publication"], 0,
+                                keys_by_relation={("public", "person"): ["id"]},
+                                deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                                reviewed_layout_by_oid=_review(fresh_db, "public.person")))
+    rows = _all_rows(batches, "public", "person")
+    tombstones = [r for r in rows if "deleted_ts" in r]
+    assert [t["id"] for t in tombstones] == [1]
+    assert all("password_hash" not in r for r in rows)
+
+
+def test_the_deny_holds_in_every_group_of_a_mid_transaction_relation_change(fresh_db, names):
+    """#4345 splits a batch into one group per relation description; each group builds its own
+    hints and rows, so each must carry the projection — including a group written under a
+    table's OLD name (the `user` -> `person` rename), denied in its own right. A table rename
+    leaves the column description as reviewed, so it loads (a column change would quarantine,
+    Codex round 17)."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute('create table public."user" (id int primary key, email text, password_hash text)')
+    publication.reconcile(fresh_db, names["publication"], [("public", "user")])
+    publication.ensure_replica_identity(fresh_db, [("public", "user")], "full")
+    _slot(fresh_db, names["slot"])
+    reviewed = _review(fresh_db, 'public."user"')
+    with psycopg.connect(fresh_db) as c:   # ONE transaction across two descriptions
+        c.execute("insert into public.\"user\" values (1, 'a@x', 'h1')")
+        c.execute("insert into public.\"user\" values (2, 'b@x', 'h2')")
+        c.execute('alter table public."user" rename to person')
+        c.execute("update public.person set password_hash = 'h2b', email = 'b2@x' where id = 2")
+        c.commit()
+    deny = {("public", "user"): ["password_hash"], ("public", "person"): ["password_hash"]}
+    batches = list(stream.drain(fresh_db, names["slot"], names["publication"], 0,
+                                keys_by_relation={("public", "user"): ["id"],
+                                                  ("public", "person"): ["id"]},
+                                deny_columns_by_relation=deny,
+                                reviewed_layout_by_oid=reviewed))
+    rows = _all_rows(batches, "public", "user") + _all_rows(batches, "public", "person")
+    assert len(rows) == 3
+    assert all("password_hash" not in r for r in rows)
+    for table in ("user", "person"):
+        hinted = _hint_columns(batches, "public", table)
+        assert hinted and "password_hash" not in hinted
+
+
+def _drain_all(dsn, names, **kw):
+    return list(stream.drain(dsn, names["slot"], names["publication"], 0, **kw))
+
+
+def test_any_column_added_mid_batch_quarantines_a_denied_table(fresh_db, names):
+    """Codex round 17 (#4346): an added column changes the description, so the table is
+    quarantined at the first change under it — added columns are no longer withheld. The row
+    written under the reviewed description still loads; nothing after it does."""
+    _person_stream(fresh_db, names)
+    reviewed = _review(fresh_db, "public.person")
+    with psycopg.connect(fresh_db) as c:
+        c.execute("insert into public.person values (1, 'a@x', 'h1')")
+        c.execute("alter table public.person add column reset_token text")
+        c.execute("insert into public.person values (2, 'b@x', 'h2', 'tok')")
+        c.commit()
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "person"): ["id"]},
+                         deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                         approved_columns_by_relation=REVIEWED, reviewed_layout_by_oid=reviewed)
+    rows = _all_rows(batches, "public", "person")
+    assert [r["email"] for r in rows] == ["a@x"]
+    assert all("password_hash" not in r and "reset_token" not in r for r in rows)
+    (why,) = [w for b in batches for _s, _t, w in b.quarantined.values()]
+    assert "differs from the reviewed layout" in why
+
+
+def test_a_rename_mid_transaction_cannot_release_a_denied_column(fresh_db, names):
+    """(b) Privacy-critical: `person` renamed mid-transaction to a name with NO deny entry. The
+    rows after the rename arrive in a group under the new name; the deny follows the OID."""
+    _person_stream(fresh_db, names)
+    reviewed = _review(fresh_db, "public.person")
+    with psycopg.connect(fresh_db) as c:
+        c.execute("insert into public.person values (1, 'a@x', 'h1')")
+        c.execute("alter table public.person rename to member")
+        c.execute("insert into public.member values (2, 'b@x', 'h2')")
+        c.execute("update public.member set password_hash = 'h1b' where id = 1")
+        c.commit()
+    with psycopg.connect(fresh_db, autocommit=True) as c:   # and a LATER batch, same drain
+        c.execute("insert into public.member values (3, 'c@x', 'h3')")
+    batches = _drain_all(fresh_db, names, target_batch_size=1,
+                         keys_by_relation={("public", "person"): ["id"],
+                                           ("public", "member"): ["id"]},
+                         deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                         reviewed_layout_by_oid=reviewed)
+    assert len(batches) == 2
+    rows = _all_rows(batches, "public", "person") + _all_rows(batches, "public", "member")
+    assert len(rows) == 4
+    assert all("password_hash" not in r for r in rows)
+    assert "password_hash" not in _hint_columns(batches, "public", "member")
+
+
+def test_a_rename_before_the_drain_is_caught_by_the_seeded_oid(fresh_db, names):
+    """(b) Across runs: the rename committed before this drain, so `person` never appears by
+    name — only the OID the runner seeds (catalogue now, or the stored signature) catches it."""
+    _person_stream(fresh_db, names)
+    reviewed = _review(fresh_db, "public.person")
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        oid = c.execute("select 'public.person'::regclass::oid").fetchone()[0]
+        c.execute("alter table public.person rename to member")
+        c.execute("insert into public.member values (1, 'a@x', 'h1')")
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "member"): ["id"]},
+                         deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                         deny_columns_by_oid={int(oid): ["password_hash"]},
+                         approved_columns_by_oid={int(oid): ["id", "email"]},
+                         reviewed_layout_by_oid=reviewed)
+    (row,) = _all_rows(batches, "public", "member")
+    assert "password_hash" not in row and row["email"] == "a@x"
+
+
+def test_a_denied_column_in_the_middle_does_not_shift_the_later_values(fresh_db, names):
+    """(c) The filter runs by NAME after the positional zip; filtering first would shift every
+    later value one column left."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.p (id int primary key, password_hash text, email text, "
+                  "age int)")
+    publication.reconcile(fresh_db, names["publication"], [("public", "p")])
+    publication.ensure_replica_identity(fresh_db, [("public", "p")], "full")
+    _slot(fresh_db, names["slot"])
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("insert into public.p values (1, 'h1', 'a@x', 30)")
+        c.execute("update public.p set age = 31 where id = 1")
+        c.execute("delete from public.p where id = 1")
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "p"): ["id"]},
+                         deny_columns_by_relation={("public", "p"): ["password_hash"]},
+                         approved_columns_by_relation={("public", "p"): ["id", "email", "age"]},
+                         reviewed_layout_by_oid=_review(fresh_db, "public.p"))
+    ins, upd, dele = _all_rows(batches, "public", "p")
+    assert (ins["id"], ins["email"], ins["age"]) == (1, "a@x", 30)
+    assert (upd["email"], upd["age"]) == ("a@x", 31)
+    assert dele["id"] == 1 and "password_hash" not in dele
+
+
+def test_a_fallback_full_identity_key_never_puts_a_denied_column_in_a_tombstone(fresh_db, names):
+    """Codex adversarial (#4346): a relation whose key resolves nowhere merges on REPLICA
+    IDENTITY FULL's flags — every column, the denied one too. A key-changing UPDATE must not
+    emit a tombstone keyed on (and carrying) the denied value; it is reported instead."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.nokey (id int, email text, password_hash text)")
+    publication.reconcile(fresh_db, names["publication"], [("public", "nokey")])
+    publication.ensure_replica_identity(fresh_db, [("public", "nokey")], "full")
+    _slot(fresh_db, names["slot"])
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("insert into public.nokey values (1, 'a@x', 'h1')")
+        c.execute("update public.nokey set id = 2 where id = 1")
+    batches = _drain_all(fresh_db, names,
+                         deny_columns_by_relation={("public", "nokey"): ["password_hash"]},
+                         reviewed_layout_by_oid=_review(fresh_db, "public.nokey"))
+    rows = _all_rows(batches, "public", "nokey")
+    assert rows and all("password_hash" not in r for r in rows)
+    assert not any("deleted_ts" in r for r in rows), "no tombstone keyed on a denied column"
+    problems = {k: v for b in batches for k, v in b.key_problems.items()}
+    assert "denied column" in problems[("public", "nokey")]
+
+
+def test_a_column_renamed_away_from_a_denied_name_quarantines_the_table(fresh_db, names):
+    """Sonnet review F1, Codex round 16 (#4346): `password_hash` renamed to `pw`. A renamed
+    column on a table that carries a deny breaks the layout proof (a name proves nothing), so
+    the table is quarantined: none of its changes load, the hash least of all."""
+    _person_stream(fresh_db, names)
+    reviewed = _review(fresh_db, "public.person")
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("insert into public.person values (1, 'a@x', 'h1')")
+        c.execute("alter table public.person rename column password_hash to pw")
+        c.execute("insert into public.person values (2, 'b@x', 'h2')")
+        c.execute("update public.person set pw = 'h1b' where id = 1")
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "person"): ["id"]},
+                         deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                         approved_columns_by_relation={("public", "person"): ["id", "email"]},
+                         reviewed_layout_by_oid=reviewed)
+    rows = _all_rows(batches, "public", "person")
+    assert [r["id"] for r in rows] == [1], "only the row under the reviewed description"
+    assert ("public", "person") in {k for b in batches for k in b.quarantined_names}
+
+
+def _oid(dsn, qualified):
+    with psycopg.connect(dsn) as c:
+        return int(c.execute("select %s::regclass::oid", (qualified,)).fetchone()[0])
+
+
+def test_the_decoder_follows_a_table_rename_by_oid_and_quarantines_a_column_rename(
+        fresh_db, names):
+    """The deny follows the OID through a table rename (the description is unchanged, so it
+    loads); a column rename changes the description, so the table is quarantined (Codex round
+    17: any DDL on a denied table needs a resnapshot)."""
+    _person_stream(fresh_db, names)
+    oid = _oid(fresh_db, "public.person")
+    reviewed = _review(fresh_db, "public.person")
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("alter table public.person rename to member")
+        c.execute("insert into public.member values (1, 'a@x', 'h1')")
+        c.execute("alter table public.member rename column password_hash to pw")
+        c.execute("insert into public.member values (2, 'b@x', 'h2')")
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "member"): ["id"]},
+                         deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                         deny_columns_by_oid={oid: ["password_hash"]},
+                         deny_attnums_by_oid={oid: [3]},
+                         approved_columns_by_oid={oid: ["id", "email"]},
+                         reviewed_layout_by_oid=reviewed)
+    (row,) = _all_rows(batches, "public", "member")
+    assert "pw" not in row and "password_hash" not in row and row["email"] == "a@x"
+    assert {o for b in batches for o in b.quarantined} == {oid}
+
+
+def test_a_denied_column_renamed_onto_a_reviewed_name_quarantines_the_table(fresh_db, names):
+    """Drop `email`, rename `password_hash` onto it: the description no longer matches the
+    reviewed layout, so nothing of it loads."""
+    _person_stream(fresh_db, names)
+    oid = _oid(fresh_db, "public.person")
+    reviewed = _review(fresh_db, "public.person")
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("alter table public.person drop column email")
+        c.execute("alter table public.person rename column password_hash to email")
+        c.execute("insert into public.person values (1, 'h1')")
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "person"): ["id"]},
+                         deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                         deny_attnums_by_oid={oid: [3]},
+                         approved_columns_by_oid={oid: ["id", "email"]},
+                         reviewed_layout_by_oid=reviewed)
+    assert _all_rows(batches, "public", "person") == []
+    assert ("public", "person") in {k for b in batches for k in b.quarantined_names}
+
+
+def test_a_swap_and_restore_of_column_names_quarantines_the_historical_description(
+        fresh_db, names):
+    """Codex round 13 (#4346): swap `email` and `password_hash` names, write, swap back, THEN
+    drain. The queued Relation message names the secret `email`, and today's catalogue says
+    `email` is the safe column — names cannot prove identity. Column ORDER can: the description
+    does not line up with the run-start layout, so none of its rows are emitted."""
+    _person_stream(fresh_db, names)
+    oid = _oid(fresh_db, "public.person")
+    reviewed = _review(fresh_db, "public.person")
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("insert into public.person values (1, 'a@x', 'h1')")
+        c.execute("alter table public.person rename column email to tmp_swap")
+        c.execute("alter table public.person rename column password_hash to email")
+        c.execute("alter table public.person rename column tmp_swap to password_hash")
+        # by NAME: under the swapped names, `email` is the secret column (attnum 3)
+        c.execute("insert into public.person (id, email, password_hash) "
+                  "values (2, 'HASH_SENTINEL', 'b@x')")
+        c.execute("alter table public.person rename column password_hash to tmp_swap")
+        c.execute("alter table public.person rename column email to password_hash")
+        c.execute("alter table public.person rename column tmp_swap to email")
+        c.execute("insert into public.person values (3, 'c@x', 'h3')")
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "person"): ["id"]},
+                         deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                         deny_attnums_by_oid={oid: [3]},
+                         approved_columns_by_oid={oid: ["id", "email"]},
+                         reviewed_layout_by_oid=reviewed)
+    rows = _all_rows(batches, "public", "person")
+    assert all(r.get("email") != "HASH_SENTINEL" for r in rows)
+    assert all("password_hash" not in r for r in rows)
+    # The unprovable description quarantines the relation, and a quarantine is sticky: the
+    # row written after the names were restored does not load either (Codex round 16).
+    assert sorted(r["id"] for r in rows) == [1]
+    assert {o for b in batches for o in b.quarantined} == {oid}
+
+
+def test_a_denied_column_renamed_onto_the_merge_key_is_quarantined(fresh_db, names):
+    """Codex round 13 (#4346): drop the text key, rename `password_hash` to its name. A merge key
+    is never withheld — so a key that resolves to the denied identity stops the description."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.tok (code text primary key, email text, password_hash text)")
+    publication.reconcile(fresh_db, names["publication"], [("public", "tok")])
+    publication.ensure_replica_identity(fresh_db, [("public", "tok")], "full")
+    _slot(fresh_db, names["slot"])
+    oid = _oid(fresh_db, "public.tok")
+    reviewed = _review(fresh_db, "public.tok")
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("alter table public.tok drop column code")
+        c.execute("alter table public.tok rename column password_hash to code")
+        c.execute("insert into public.tok values ('e@x', 'HASH_SENTINEL')")
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "tok"): ["code"]},
+                         deny_columns_by_relation={("public", "tok"): ["password_hash"]},
+                         deny_attnums_by_oid={oid: [3]},
+                         approved_columns_by_oid={oid: ["code", "email"]},
+                         reviewed_layout_by_oid=reviewed)
+    # (the description mismatch catches it; the next test isolates the merge-key guard)
+    assert _all_rows(batches, "public", "tok") == []
+    assert ("public", "tok") in {k for b in batches for k in b.quarantined_names}
+
+
+def test_a_merge_key_on_the_denied_attnum_is_quarantined_even_when_the_layout_proves(
+        fresh_db, names):
+    """No DDL, so the description matches its reviewed layout; but the merge key the decoder is
+    handed names the denied attnum. A key is never withheld, so the guard must quarantine."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.tok (code text primary key, email text, password_hash text)")
+    publication.reconcile(fresh_db, names["publication"], [("public", "tok")])
+    publication.ensure_replica_identity(fresh_db, [("public", "tok")], "full")
+    _slot(fresh_db, names["slot"])
+    oid = _oid(fresh_db, "public.tok")
+    reviewed = _review(fresh_db, "public.tok")
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("insert into public.tok values ('k1', 'e@x', 'HASH_SENTINEL')")
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "tok"): ["password_hash"]},
+                         deny_columns_by_relation={("public", "tok"): ["password_hash"]},
+                         deny_attnums_by_oid={oid: [3]}, reviewed_layout_by_oid=reviewed)
+    assert _all_rows(batches, "public", "tok") == []
+    assert ("public", "tok") in {k for b in batches for k in b.quarantined_names}
+
+
+def test_a_table_renamed_onto_a_denied_name_mid_run_is_quarantined_as_unbound(fresh_db, names):
+    """Codex round 16 P1 (#4346): `member` takes the denied name `person` mid-run and its text
+    merge key and `password_hash` swap names (left swapped). The catalogue read now agrees with
+    the swapped WAL, so a layout adopted now would bind the KEY as the denied column and emit
+    the hash as the key. Its deny was bound at no trusted moment, so it is quarantined."""
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("create table public.person (id int primary key, email text, password_hash text)")
+        c.execute("create table public.member (code text primary key, email text, "
+                  "password_hash text)")
+    rels = [("public", "person"), ("public", "member")]
+    publication.reconcile(fresh_db, names["publication"], rels)
+    publication.ensure_replica_identity(fresh_db, rels, "full")
+    _slot(fresh_db, names["slot"])
+    person, member = _oid(fresh_db, "public.person"), _oid(fresh_db, "public.member")
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("alter table public.person rename to person_old")
+        c.execute("alter table public.member rename to person")
+        c.execute("alter table public.person rename column code to tmp_swap")
+        c.execute("alter table public.person rename column password_hash to code")
+        c.execute("alter table public.person rename column tmp_swap to password_hash")
+        c.execute("insert into public.person (code, email, password_hash) "
+                  "values ('HASH_SENTINEL', 'x@x', 'k2')")
+    batches = _drain_all(fresh_db, names,
+                         keys_by_relation={("public", "person"): ["code"],
+                                           ("public", "member"): ["code"]},
+                         deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                         deny_columns_by_oid={person: ["password_hash"]},
+                         deny_attnums_by_oid={person: [3]},
+                         bound_oids={person})
+    rows = _all_rows(batches, "public", "person")
+    assert all("HASH_SENTINEL" not in map(str, r.values()) for r in rows)
+    assert rows == []
+    assert {o: (s, t) for b in batches for o, (s, t, _w) in b.quarantined.items()} == {
+        member: ("public", "person")}
+
+
+def test_a_drop_rename_readd_that_reproduces_the_reviewed_description_is_caught_by_the_drop(
+        fresh_db, names):
+    """Codex round 17 (#4346): drop `email`, rename `password_hash` to `email`, add a new
+    `password_hash`. The Relation message then reads exactly like the review — same count,
+    names, types and key flags — but its `email` is the secret's attnum. Only the catalogue
+    shows it: a reviewed attnum was dropped, so the table is quarantined."""
+    _person_stream(fresh_db, names)
+    oid = _oid(fresh_db, "public.person")
+    reviewed = _review(fresh_db, "public.person")
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("alter table public.person drop column email")
+        c.execute("alter table public.person rename column password_hash to email")
+        c.execute("alter table public.person add column password_hash text")
+        c.execute("insert into public.person values (1, 'HASH_SENTINEL', 'x')")
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "person"): ["id"]},
+                         deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                         deny_attnums_by_oid={oid: [3]},
+                         approved_columns_by_oid={oid: ["id", "email"]},
+                         reviewed_layout_by_oid=reviewed)
+    assert _all_rows(batches, "public", "person") == []
+    (why,) = [w for b in batches for _s, _t, w in b.quarantined.values()]
+    assert "reviewed column was dropped" in why
+
+
+def test_a_retyped_column_quarantines_a_denied_table(fresh_db, names):
+    """Codex round 17 (#4346): the type OID is part of the description, so a type change on a
+    table that carries a deny quarantines it too."""
+    _person_stream(fresh_db, names)
+    reviewed = _review(fresh_db, "public.person")
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("alter table public.person alter column email type varchar(40)")
+        c.execute("insert into public.person values (1, 'a@x', 'h1')")
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "person"): ["id"]},
+                         deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                         approved_columns_by_relation=REVIEWED, reviewed_layout_by_oid=reviewed)
+    assert _all_rows(batches, "public", "person") == []
+    assert ("public", "person") in {k for b in batches for k in b.quarantined_names}
+
+
+def test_a_table_with_no_reviewed_layout_is_quarantined(fresh_db, names):
+    """Codex round 17 (#4346): no layout recorded at a baseline means no reference to compare
+    with — the table is quarantined at its first change, never adopted from today's catalogue."""
+    _person_stream(fresh_db, names)
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("insert into public.person values (1, 'a@x', 'h1')")
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "person"): ["id"]},
+                         deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                         approved_columns_by_relation=REVIEWED)
+    assert _all_rows(batches, "public", "person") == []
+    (why,) = [w for b in batches for _s, _t, w in b.quarantined.values()]
+    assert "no reviewed layout" in why
+
+
+def test_a_replica_identity_change_quarantines_a_denied_table(fresh_db, names):
+    """Codex round 17 (#4346): the per-column key flags are part of the description (FULL flags
+    every column, DEFAULT only the primary key), so changing the replica identity quarantines."""
+    _person_stream(fresh_db, names)
+    reviewed = _review(fresh_db, "public.person")
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute("alter table public.person replica identity default")
+        c.execute("insert into public.person values (1, 'a@x', 'h1')")
+    batches = _drain_all(fresh_db, names, keys_by_relation={("public", "person"): ["id"]},
+                         deny_columns_by_relation={("public", "person"): ["password_hash"]},
+                         approved_columns_by_relation=REVIEWED, reviewed_layout_by_oid=reviewed)
+    assert _all_rows(batches, "public", "person") == []
+    assert ("public", "person") in {k for b in batches for k in b.quarantined_names}

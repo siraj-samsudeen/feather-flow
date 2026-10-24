@@ -93,3 +93,35 @@ def test_the_baseline_succeeds_once_the_blocker_commits(seeded, names):
     assert not worker.is_alive()
     assert result["boundary"] > 0
     assert sorted(r["id"] for r in result["rows"]) == [1]
+
+
+def test_the_blocker_diagnostic_never_carries_the_blockers_sql(seeded, names):
+    """#4346 (Codex round 9): the blocking session's last statement may be an
+    `UPDATE person SET password_hash = '…'` — BaselineBlocked (which reaches control.event and
+    the log) names the session, never its SQL."""
+    blocker_ready = threading.Event()
+    release_blocker = threading.Event()
+
+    def hold_open():
+        conn = psycopg.connect(seeded)
+        conn.execute("begin")
+        conn.execute("update public.t1 set v = 'SYNTHETIC_HASH_4346' where id = 1")
+        blocker_ready.set()
+        release_blocker.wait(timeout=30)
+        conn.commit()
+        conn.close()
+
+    th = threading.Thread(target=hold_open, daemon=True)
+    th.start()
+    blocker_ready.wait(timeout=10)
+    time.sleep(0.2)
+    try:
+        with pytest.raises(snapshot.BaselineBlocked) as info:
+            with snapshot.consistent_baseline(seeded, names["slot"], ("public", "t1"), ["id"],
+                                              baseline_wait_s=2):
+                pass
+        assert "SYNTHETIC_HASH_4346" not in str(info.value)
+        assert "oldest blocker pid=" in str(info.value)
+    finally:
+        release_blocker.set()
+        th.join(timeout=10)

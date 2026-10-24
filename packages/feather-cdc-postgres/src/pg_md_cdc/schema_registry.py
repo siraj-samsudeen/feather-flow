@@ -9,8 +9,8 @@ Constraints:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, replace
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from pg_replication.schema_types import _PG_TYPES, _to_dlt_column_type
 
@@ -115,15 +115,38 @@ def known_oids() -> Tuple[int, ...]:
 # --------------------------------------------------------------------------- signatures
 
 
-def signature(relation: SourceRelation, key: Tuple[str, ...] = ()) -> dict:
+def project(relation: SourceRelation, exclude: Sequence[str] = ()) -> SourceRelation:
+    """The relation as the destination sees it: denied columns (#4346) removed. Every
+    registry row, signature and drift diff runs on this, so a deny is never a `drop_column`."""
+    if not exclude:
+        return relation
+    denied = set(exclude)
+    return replace(relation, columns=[c for c in relation.columns if c.name not in denied])
+
+
+def project_signature(sig: dict, exclude: Sequence[str] = ()) -> dict:
+    """A STORED signature projected the same way — one written before the deny existed still
+    names the column, and diffing it raw would report the deny as a breaking drop."""
+    if not exclude or not sig:
+        return sig
+    denied = set(exclude)
+    return {**sig, "columns": {k: v for k, v in sig.get("columns", {}).items() if k not in denied}}
+
+
+def signature(relation: SourceRelation, key: Tuple[str, ...] = (),
+              exclude: Sequence[str] = ()) -> dict:
     """The inspectable shape a drift comparison runs on. Plain dicts so it can be stored in
     `_cdc_runtime.schema_registry` and diffed across runs without unpickling anything."""
+    relation = project(relation, exclude)
     cols, _ = compile_relation(relation, key)
     return {
         "schema": relation.schema,
         "table": relation.table,
         "key": list(key),
         "replica_identity": relation.replica_identity,
+        # Not compared by classify_drift: it keys the reviewed shape to the relation's OID, so
+        # the decoder's column guard (#4346) follows a table rename.
+        "oid": relation.oid,
         "columns": {
             c.name: {
                 "type_oid": c.type_oid,

@@ -208,3 +208,48 @@ def test_the_featherbase_registration_is_a_clean_run_with_per_table_targets():
     assert set(routed) == set(m.source.discovery.options["system_tables"]) | {"user"}
     assert "user" not in m.source.discovery.options["system_tables"]
     assert m.destination.target_schema("tasker", "anything_the_app_made") == "application"
+
+
+# --------------------------------------------------------------------------- deny.columns (#4346)
+
+
+def _deny(columns, tables=None):
+    deny = {"columns": columns}
+    if tables is not None:
+        deny["tables"] = tables
+    return _m(source={"dsn_env": "DEMO_PG_DSN", "deny": deny})
+
+
+def test_deny_columns_parse_beside_the_table_tripwire():
+    m = _deny({"public.person": ["password_hash"]}, tables=["public.access_token"])
+    assert m.source.deny_columns == {"public.person": ["password_hash"]}
+    assert m.source.deny.tables == ["public.access_token"]
+    assert _codes(mf.validate_static(m), "error") == set()
+
+
+@pytest.mark.parametrize("key", ["person", "public.*", "public.pers?n", "a.b.c"])
+def test_a_deny_column_key_must_be_an_exact_schema_table(key):
+    assert "deny_column_key" in _codes(mf.validate_static(_deny({key: ["password_hash"]})), "error")
+
+
+@pytest.mark.parametrize("cols", [[], ["Password Hash"], ["password;drop"]])
+def test_a_deny_column_list_must_name_valid_columns(cols):
+    assert "deny_column_name" in _codes(mf.validate_static(_deny({"public.person": cols})), "error")
+
+
+@pytest.mark.parametrize("bad", ["password_hash", {"x": 1}])
+def test_a_deny_column_value_that_is_not_a_list_is_refused(bad):
+    with pytest.raises(mf.ManifestError):
+        _deny({"public.person": bad})
+
+
+def test_an_unknown_key_in_the_deny_block_is_still_refused():
+    with pytest.raises(mf.ManifestError):
+        _m(source={"dsn_env": "DEMO_PG_DSN", "deny": {"tables": [], "colums": {}}})
+
+
+def test_the_shipped_featherbase_registration_denies_the_password_hash():
+    m = mf.load(str(REGISTRATIONS / "featherbase.yml"))
+    assert m.source.deny_columns["featherbase.person"] == ["password_hash"]
+    assert m.source.deny_columns["featherbase.user"] == ["password_hash"]
+    assert _codes(mf.validate_static(m), "error") == set()

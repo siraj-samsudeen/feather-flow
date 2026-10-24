@@ -64,6 +64,10 @@ class Source:
     exclude: Selection = field(default_factory=lambda: Selection(schemas=[], tables=[]))
     deny: Selection = field(default_factory=lambda: Selection(schemas=[], tables=[]))
     discovery: Optional[Discovery] = None
+    # `deny.columns` (#4346): exact "schema.table" -> column names that never leave the CDC
+    # process. A projection, not a publication column list: under REPLICA IDENTITY FULL a list
+    # must cover every column, so leaving one out makes UPDATE/DELETE fail at the SOURCE.
+    deny_columns: Dict[str, List[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -163,6 +167,21 @@ def _sel(raw: Any, *, default_schemas: List[str]) -> Selection:
     )
 
 
+def _deny_columns(raw: Any) -> Dict[str, List[str]]:
+    """`source.deny.columns`: a mapping of "schema.table" to a list of column names. Shape
+    only — names and keys are policed by validate_static so every finding is listed at once."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ManifestError("source.deny.columns must be a mapping of 'schema.table' to a list of columns")
+    out: Dict[str, List[str]] = {}
+    for rel, cols in raw.items():
+        if isinstance(cols, str) or not isinstance(cols, list):
+            raise ManifestError(f"source.deny.columns[{rel}] must be a list of column names")
+        out[str(rel)] = [str(c) for c in cols]
+    return out
+
+
 def _reject_unknown(raw: Dict[str, Any], allowed: set, where: str) -> None:
     extra = sorted(set(raw) - allowed)
     if extra:
@@ -181,6 +200,11 @@ def parse(raw: Dict[str, Any], *, path: Optional[str] = None) -> Manifest:
     )
     src = raw.get("source") or {}
     _reject_unknown(src, {"dsn_env", "include", "exclude", "deny", "discovery"}, "source")
+    deny_raw = src.get("deny")
+    deny_columns_raw = None
+    if isinstance(deny_raw, dict) and "columns" in deny_raw:
+        deny_columns_raw = deny_raw["columns"]
+        deny_raw = {k: v for k, v in deny_raw.items() if k != "columns"}
     disc_raw = src.get("discovery")
     discovery = None
     if disc_raw:
@@ -231,8 +255,9 @@ def parse(raw: Dict[str, Any], *, path: Optional[str] = None) -> Manifest:
             dsn_env=str(src.get("dsn_env", "")),
             include=_sel(src.get("include"), default_schemas=["*"]),
             exclude=_sel(src.get("exclude"), default_schemas=[]),
-            deny=_sel(src.get("deny"), default_schemas=[]),
+            deny=_sel(deny_raw, default_schemas=[]),
             discovery=discovery,
+            deny_columns=_deny_columns(deny_columns_raw),
         ),
         destination=Destination(
             token_env=str(dest.get("token_env", "")),
@@ -393,6 +418,16 @@ def validate_static(m: Manifest) -> List[Problem]:
         for t in sel.tables:
             if not _QUALIFIED.match(t):
                 err("pattern_qualified", f"source.{label}.tables entry {t!r} must be 'schema.table'")
+
+    for rel, cols in sorted(m.source.deny_columns.items()):
+        if not _QUALIFIED.match(rel) or any(ch in rel for ch in "*?[]"):
+            err("deny_column_key", f"source.deny.columns key {rel!r} must be an exact 'schema.table' (no globs)")
+        if not cols:
+            err("deny_column_name", f"source.deny.columns[{rel}] is empty — name the column(s) to withhold")
+        for col in cols:
+            if not _PG_IDENT.match(col) or len(col) > 63:
+                err("deny_column_name",
+                    f"source.deny.columns[{rel}] entry {col!r} is not a valid unquoted column name")
 
     if m.source.discovery is not None and not m.source.discovery.adapter:
         err("adapter", "source.discovery.adapter is required when a discovery block is present")

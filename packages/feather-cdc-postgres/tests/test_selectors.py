@@ -221,3 +221,73 @@ def test_a_user_created_relation_is_application_whatever_it_is_called():
     m2 = _m(source={"dsn_env": "DEMO_PG_DSN", "discovery": {"adapter": "featherbase", "options": {}}},
             classification={"rules": [{"match": "public.share", "table_class": "source_system"}]})
     assert sel.table_class(m2, "public", "share", USER_CREATED) == "source_system"
+
+
+# --------------------------------------------------------------------------- deny.columns (#4346)
+
+
+PERSON_COLS = [("id", 23, True), ("email", 25, False), ("password_hash", 25, False)]
+
+
+def _deny_m(columns):
+    return _m(source={"dsn_env": "DEMO_PG_DSN", "deny": {"columns": columns}})
+
+
+def test_a_column_deny_lands_on_the_compiled_relation():
+    plan = sel.compile(_deny_m({"public.person": ["password_hash"]}),
+                       [rel("public", "person", pk=["id"], cols=PERSON_COLS)])
+    (person,) = plan.relations
+    assert person.deny_columns == ("password_hash",)
+    assert codes(plan, "error") == set()
+    assert "secret_like_column" not in codes(plan)
+
+
+def test_a_deny_on_a_key_column_is_an_error_and_the_relation_is_refused():
+    plan = sel.compile(_deny_m({"public.person": ["id"]}),
+                       [rel("public", "person", pk=["id"], cols=PERSON_COLS)])
+    assert "deny_column_is_key" in codes(plan, "error")
+    assert plan.relations == []
+
+
+def test_a_deny_on_a_unique_index_key_is_an_error_too():
+    cols = [("code", 25, True), ("secret", 25, False)]
+    plan = sel.compile(_deny_m({"public.t": ["code"]}),
+                       [rel("public", "t", cols=cols, uniq=[("t_code_key", ["code"])], ri="f")])
+    assert "deny_column_is_key" in codes(plan, "error")
+
+
+def test_a_denied_column_absent_from_the_catalogue_is_a_warning_and_still_withheld():
+    plan = sel.compile(_deny_m({"public.person": ["password_hash", "legacy_pin"]}),
+                       [rel("public", "person", pk=["id"], cols=PERSON_COLS)])
+    assert "deny_column_absent" in codes(plan, "warning")
+    assert codes(plan, "error") == set()
+    assert plan.relations[0].deny_columns == ("legacy_pin", "password_hash")
+
+
+def test_a_deny_on_a_table_outside_the_compiled_set_does_nothing():
+    plan = sel.compile(_deny_m({"public.not_selected": ["password_hash"]}),
+                       [rel("public", "person", pk=["id"])])
+    assert plan.relations[0].deny_columns == ()
+    assert codes(plan) == set()
+
+
+def test_a_deny_on_a_t_does_not_reach_b_t():
+    plan = sel.compile(_deny_m({"a.t": ["payload"]}),
+                       [rel("a", "t", pk=["id"]), rel("b", "t", pk=["id"])])
+    assert {r.qualified: r.deny_columns for r in plan.relations} == {"a.t": ("payload",), "b.t": ()}
+
+
+def test_a_secret_looking_column_that_is_replicated_is_a_warning():
+    plan = sel.compile(_m(), [rel("public", "person", pk=["id"], cols=PERSON_COLS)])
+    assert "secret_like_column" in codes(plan, "warning")
+    assert codes(plan, "error") == set()
+
+
+def test_the_selection_hash_moves_with_a_deny_and_not_without_one():
+    disc = [rel("public", "person", pk=["id"], cols=PERSON_COLS)]
+    plain = sel.compile(_m(), disc).selection_hash
+    denied = sel.compile(_deny_m({"public.person": ["password_hash"]}), disc).selection_hash
+    assert plain != denied
+    # no deny: the hash is exactly what it was before #4346
+    import hashlib
+    assert plain == hashlib.sha256(b"public.person|id|primary_key").hexdigest()

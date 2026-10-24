@@ -18,11 +18,16 @@ from . import discovery, publication
 from .lifecycle import (
     DISCOVERED, DRIFT_REVIEW, RESNAPSHOT_REQUIRED, RETIRED, SNAPSHOTTING, Lifecycle,
 )
-from .schema_registry import TEXT_FALLBACK, classify_drift, compile_relation, signature
+from .schema_registry import (
+    TEXT_FALLBACK, classify_drift, compile_relation, project, project_signature, signature,
+)
 
 KEY_CHANGE = "key_change"
 # Reported and marked, but the table keeps loading (Appendix C: dlt never destroys a column).
 BREAKING_KINDS = frozenset({"drop_column", "rename_column", "type_incompatible"})
+# A column the reviewed signature does not name (#4346): on a table with denied columns it is
+# withheld until an operator decides — it may be the secret renamed.
+NEW_COLUMN_KINDS = frozenset({"add_nullable_column", "add_not_null_column", "rename_column"})
 # States whose next step this tick is a full baseline (runner._adopt_streaming routes a
 # re-selected RETIRED or DISCOVERED relation to SNAPSHOTTING; an unpublished one is added and
 # baselined).
@@ -60,6 +65,8 @@ def _compile_all(cfg, relations, *, run, sources) -> tuple[list[dict], dict]:
                       error_detail="selected relation does not exist at the source")
             continue
         key = tuple(rel.key)
+        denied = _denied(cfg, rel, src)
+        src = project(src, denied)   # #4346: a denied column is not part of what lands
         cols, _problems = compile_relation(src, key)
         rows += [{"registration": cfg.registration, "schema": rel.schema, "table": rel.table,
                   "column": c.name, "type_oid": c.type_oid, "typmod": c.typmod,
@@ -73,6 +80,20 @@ def _compile_all(cfg, relations, *, run, sources) -> tuple[list[dict], dict]:
                              "detail": "no declared OID mapping — landing as text"})
         sigs[(rel.schema, rel.table)] = signature(src, key)
     return rows, sigs
+
+
+def _denied(cfg, rel, src=None) -> tuple:
+    """The relation's column deny-list (#4346): the compiled Relation's plus the manifest map
+    the runtime carries (both come from `source.deny.columns`; a relation built outside the
+    compiler carries none of its own) — plus, given the catalogue relation `src`, every column
+    whose attnum is a denied one: a denied column renamed after the run resolved its names
+    must not be recorded as a reviewed, approved column (Codex round 12)."""
+    own = set(getattr(rel, "deny_columns", ()) or ())
+    own |= set((getattr(cfg, "deny_columns", None) or {}).get((rel.schema, rel.table), ()))
+    if src is not None:
+        attnums = set((getattr(cfg, "deny_attnums", None) or {}).get(src.oid, ()))
+        own |= {c.name for c in src.columns if c.attnum in attnums}
+    return tuple(sorted(own))
 
 
 def record_all(cfg, relations, *, run) -> dict:
@@ -90,7 +111,7 @@ def record_signature(cfg, rel, *, run=None) -> dict | None:
     src = _sources(cfg).get(rel.qualified)
     if src is None:
         return None
-    sig = signature(src, tuple(rel.key))
+    sig = signature(src, tuple(rel.key), _denied(cfg, rel, src))
     cfg.destination.write_signature(cfg.registration, rel.schema, rel.table, sig)
     return sig
 
@@ -100,7 +121,8 @@ def scan(cfg, relations, *, run, lc: Lifecycle, owner,
     """Compile every desired relation, persist the registry, and act on the diff vs last run."""
     cfg.destination.ensure_runtime_tables()
     stored = cfg.destination.read_signatures(cfg.registration)
-    rows, sigs = _compile_all(cfg, relations, run=run, sources=_sources(cfg))
+    sources = _sources(cfg)
+    rows, sigs = _compile_all(cfg, relations, run=run, sources=sources)
     cfg.destination.write_registry_rows(rows)
     out = DriftOutcome()
 
@@ -109,12 +131,15 @@ def scan(cfg, relations, *, run, lc: Lifecycle, owner,
         new_sig = sigs.get(pair)
         if new_sig is None:
             continue
-        old_sig = stored.get(pair)
+        # Projected like the new one: a signature stored before a deny was added still names the
+        # column, and must not read as a breaking `drop_column` (#4346).
+        old_sig = project_signature(stored.get(pair),
+                                    _denied(cfg, rel, sources.get(rel.qualified)))
         drifts = classify_drift(old_sig, new_sig) if old_sig is not None else []
         if not drifts:
             # Identical → nothing to write: each write is a MotherDuck round trip, and fifty of
             # them every tick for a schema that did not move is the cost of an idle registration.
-            if old_sig != new_sig:
+            if stored.get(pair) != new_sig:
                 cfg.destination.write_signature(cfg.registration, rel.schema, rel.table, new_sig)
             continue
 
@@ -144,6 +169,24 @@ def scan(cfg, relations, *, run, lc: Lifecycle, owner,
             lc.ensure(rel.schema, rel.table, RESNAPSHOT_REQUIRED, "key change")
             continue
 
+        added = kinds & NEW_COLUMN_KINDS
+        if added and _denied(cfg, rel, sources.get(rel.qualified)):
+            # Fail closed on a table that carries a deny (#4346, Sonnet F1): a new or renamed
+            # column may be the secret under another name. The OLD signature stands — it is the
+            # reviewed shape the decoder withholds everything else against — until an operator
+            # denies the column or resnapshots to approve it.
+            new_cols = sorted(d.column for d in drifts if d.kind in NEW_COLUMN_KINDS and d.column)
+            out.review.add(pair)
+            # unit `deny_columns`, every tick until resolved: the daily-loading privacy alarm
+            # reads that unit, and must stay red while the review is pending (Codex round 12).
+            run.event(entity=rel.qualified, status=cp_status.EV_ERROR, unit="deny_columns",
+                      error_detail=(f"new or renamed column(s) {', '.join(new_cols)} on a table "
+                                    "with denied columns — withheld until reviewed"),
+                      extra={"drifts": payload, "action": "withheld_pending_review",
+                             "remedy": "add the column(s) to source.deny.columns, or "
+                                       + remedy(manifest_path, rel.qualified) + " to approve"})
+            lc.ensure(rel.schema, rel.table, DRIFT_REVIEW, "new column on a denied table")
+            continue
         cfg.destination.write_signature(cfg.registration, rel.schema, rel.table, new_sig)
         breaking = kinds & BREAKING_KINDS
         if breaking:

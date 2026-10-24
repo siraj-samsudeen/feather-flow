@@ -30,6 +30,15 @@ source:
       - "featherbase.person_identifier"
       - "featherbase.person_identifier_fingerprint"
       - "featherbase.person_merge"
+    columns:
+      # Never leaves the CDC process (#4346): dropped from the baseline select list, from every
+      # decoded record and from the dlt hints; a copy at the destination fails the run. NOT a
+      # publication column list — under replica_identity: full that list must name every
+      # column, or every UPDATE/DELETE of the table fails at the source (sign-in breaks).
+      "featherbase.person": [password_hash]
+      # The frozen pre-rename copy (access.user, #4338): projects any queued WAL still written
+      # under the old name, and keeps the destination tripwire watching that copy.
+      "featherbase.user": [password_hash]
   discovery:
     adapter: featherbase
     options:

@@ -88,9 +88,11 @@ def _relation_lines(plan: CompiledPlan) -> List[str]:
         key = ",".join(r.key) or "-"
         idx = f" via {r.key_index}" if r.key_index else ""
         origin = f"  origin={r.origin}" if r.origin else ""
+        # The column projection (#4346): these never leave the CDC process.
+        deny = f"  deny={','.join(r.deny_columns)}" if r.deny_columns else ""
         out.append(
             f"  {r.qualified:<{width}}  -> {r.target:<{width}}  {r.key_policy:<12} key={key}{idx}  "
-            f"class={r.table_class}{origin}"
+            f"class={r.table_class}{origin}{deny}"
         )
     return out
 

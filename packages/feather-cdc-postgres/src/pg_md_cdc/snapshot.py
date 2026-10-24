@@ -26,6 +26,7 @@ from psycopg import sql
 from psycopg2.extras import LogicalReplicationConnection
 
 from pg_replication.decoders import ColumnType
+from pg_replication.helpers import published_shape
 from pg_replication.schema_types import _PG_TYPES, _to_dlt_column_schema
 
 Relation = tuple[str, str]
@@ -38,6 +39,14 @@ class BaselineBlocked(RuntimeError):
     because it is waiting for every in-flight source transaction to finish. See
     `create_slot_with_snapshot` for why `statement_timeout` cannot be used here, and
     docs/agents/pg-md-cdc-runbook.md §c for the remedy."""
+
+
+def _regclass(schema: str, table: str) -> str:
+    """A quoted `schema.table` for `to_regclass`. Every catalogue read of a baseline resolves the
+    name the way `LOCK`/`SELECT` do — through CURRENT name resolution — never by joining
+    `pg_class` on the name, which an imported REPEATABLE READ snapshot answers from older
+    catalogue rows: after a swap the two disagree about which table a name means (#4346)."""
+    return '"' + schema.replace('"', '""') + '"."' + table.replace('"', '""') + '"'
 
 
 def lsn_hex_to_int(lsn: str) -> int:
@@ -88,15 +97,19 @@ def _describe_blocker(dsn: str, waiting_pid: int) -> str:
     try:
         with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as c:
             rows = c.execute(
-                "select pid, state, xact_start, query from pg_stat_activity "
+                # NOT `query`: the blocker's last statement is arbitrary source SQL — an
+                # `UPDATE person SET password_hash = '…'` would carry the hash into the
+                # exception, control.event and the log (#4346, Codex round 9).
+                "select pid, state, xact_start, usename, application_name from pg_stat_activity "
                 "where pid = any(pg_blocking_pids(%s)) order by xact_start asc nulls last",
                 (waiting_pid,)).fetchall()
     except Exception as exc:  # noqa: BLE001 — context only, the timeout itself is the finding
         return f"could not identify the blocking session: {type(exc).__name__}: {exc}"
     if not rows:
         return "no blocking session found in pg_stat_activity (it may have just ended)"
-    pid, state, xact_start, query = rows[0]
-    return f"oldest blocker pid={pid} state={state!r} xact_start={xact_start} query={query!r}"
+    pid, state, xact_start, user, app = rows[0]
+    return (f"oldest blocker pid={pid} state={state!r} xact_start={xact_start} "
+            f"user={user!r} application={app!r}")
 
 
 def create_slot_with_snapshot(dsn: str, slot: str, *, temporary: bool = False,
@@ -161,48 +174,55 @@ def create_slot_with_snapshot(dsn: str, slot: str, *, temporary: bool = False,
     return ExportedSnapshot(slot, lsn_hex_to_int(consistent_point), snapshot_name, conn)
 
 
-def column_hints(conn: psycopg.Connection, schema: str, table: str, keys: Sequence[str]) -> dict:
+def column_hints(conn: psycopg.Connection, schema: str, table: str, keys: Sequence[str],
+                 exclude: Sequence[str] = ()) -> dict:
     """Destination column types compiled from the source catalog through the SAME
     OID→dlt mapper the CDC path uses — otherwise int4 lands BIGINT on one path and INTEGER
-    on the other (observed live in bronze_featherbase, plan Appendix A)."""
+    on the other (observed live in bronze_featherbase, plan Appendix A). A denied column
+    (`exclude`, #4346) is not even declared to dlt."""
     rows = conn.execute(
         "select a.attname, a.atttypid, a.atttypmod from pg_attribute a "
-        "join pg_class c on c.oid = a.attrelid "
-        "join pg_namespace n on n.oid = c.relnamespace "
-        "where n.nspname = %s and c.relname = %s and a.attnum > 0 and not a.attisdropped "
+        "where a.attrelid = to_regclass(%s) and a.attnum > 0 and not a.attisdropped "
         "order by a.attnum",
-        (schema, table),
+        (_regclass(schema, table),),
     ).fetchall()
     key_set = set(keys or ())
+    denied = set(exclude or ())
     return {
         name: _to_dlt_column_schema(ColumnType(int(name in key_set), name, type_id, typmod))
         for name, type_id, typmod in rows
+        if name not in denied
     }
 
 
-def _select_list(conn: psycopg.Connection, schema: str, table: str):
+def _select_list(conn: psycopg.Connection, schema: str, table: str, exclude: Sequence[str] = ()):
     """`select *` except that every column with no declared OID mapping is cast to text.
 
     Those columns compile to `text_fallback` (schema_registry), and the CDC path already
     receives pgoutput's text rendering — but psycopg hands the SNAPSHOT path a native object
     (`inet` → IPv4Address), which dlt cannot serialise. Casting here makes both paths agree.
+    A denied column (`exclude`, #4346) is never read; a list the deny would leave empty raises
+    rather than fall back to `select *`, which would read exactly what was denied.
     """
     rows = conn.execute(
         "select a.attname, a.atttypid, t.typcategory = 'A' as is_array from pg_attribute a "
-        "join pg_class c on c.oid = a.attrelid "
-        "join pg_namespace n on n.oid = c.relnamespace "
         "join pg_type t on t.oid = a.atttypid "
-        "where n.nspname = %s and c.relname = %s and a.attnum > 0 and not a.attisdropped "
+        "where a.attrelid = to_regclass(%s) and a.attnum > 0 and not a.attisdropped "
         "order by a.attnum",
-        (schema, table),
+        (_regclass(schema, table),),
     ).fetchall()
+    denied = set(exclude or ())
     parts = []
     for name, type_oid, is_array in rows:
+        if name in denied:
+            continue
         if is_array or int(type_oid) not in _PG_TYPES:
             parts.append(sql.SQL("{}::text as {}").format(sql.Identifier(name),
                                                           sql.Identifier(name)))
         else:
             parts.append(sql.Identifier(name))
+    if not parts and rows:
+        raise ValueError(f"{schema}.{table}: every column is denied — nothing to baseline")
     return sql.SQL(", ").join(parts) if parts else sql.SQL("*")
 
 
@@ -222,9 +242,12 @@ def _rows(conn: psycopg.Connection, schema: str, table: str, cursor_name: str, i
     return gen
 
 
-def _resource(conn, schema, table, keys, key_policy, cursor_name, itersize):
-    hints = column_hints(conn, schema, table, keys)
-    select_list = _select_list(conn, schema, table)
+def _resource(conn, schema, table, keys, key_policy, cursor_name, itersize, exclude=(),
+              catalog=None):
+    """`catalog`: the connection column names are read from — a fresh one taken under the
+    relation locks for a snapshot read (see snapshot_resources); else `conn` itself."""
+    hints = column_hints(catalog or conn, schema, table, keys, exclude)
+    select_list = _select_list(catalog or conn, schema, table, exclude)
     merge = bool(keys) and key_policy != "append_only"
     return dlt.resource(
         _rows(conn, schema, table, cursor_name, itersize, select_list),
@@ -244,22 +267,106 @@ def snapshot_resources(
     *,
     key_policies: dict[Relation, str] | None = None,
     itersize: int = 5000,
+    deny_columns: dict[Relation, Sequence[str]] | None = None,
+    oids_out: dict | None = None,
+    deny_by_oid: dict[int, Sequence[str]] | None = None,
+    deny_attnums_by_oid: dict[int, Sequence[int]] | None = None,
+    layouts_out: dict | None = None,
+    bound_out: dict | None = None,
 ) -> Iterator[dict[str, list]]:
     """Yields {source_schema: [dlt resources]} reading the exported snapshot. The importing
     transaction is opened EAGERLY (before this returns) so the caller may then close the
-    exporting replication connection; the reads themselves stay lazy."""
+    exporting replication connection; the reads themselves stay lazy.
+
+    #4346: `layouts_out[(schema, table)] = (oid, ReviewedLayout | None)` — the description
+    every later Relation message of the table must match exactly, read under the locks; None
+    when a column was dropped between the export and the lock.
+    `bound_out[(schema, table)] = [(column, attnum)]` binds each denied name under the locks.
+    A denied name that is not a column there, on a table with no bound attnum, refuses."""
     conn = psycopg.connect(dsn, connect_timeout=10)
+    cat = None
     try:
         conn.execute("begin isolation level repeatable read")
         conn.execute(sql.SQL("set transaction snapshot {}").format(sql.Literal(snapshot_name)))
         by_schema: dict[str, list] = {}
         policies = key_policies or {}
+        # Pin each name to its relation for the whole read (#4346, Codex round 8): PostgreSQL
+        # resolves a name in every later statement against the CURRENT catalogue, not this
+        # snapshot, so a rename/swap between the OID lookup below and the lazy SELECTs would
+        # hand a protected table's rows to an unprotected projection. ACCESS SHARE conflicts
+        # with the ACCESS EXCLUSIVE a rename needs, so the rename waits for this transaction.
+        for schema, table in relations:
+            conn.execute(sql.SQL("lock table {}.{} in access share mode").format(
+                sql.Identifier(schema), sql.Identifier(table)))
+        # Column NAMES come from a fresh catalogue read, taken while the locks are held (#4346,
+        # Codex round 14): the SELECT resolves names against the CURRENT catalogue, but a
+        # pg_attribute query inside this snapshot answers with the snapshot's names — a column
+        # swap between export and lock would split them. The locks forbid any later rename, so
+        # these names are exactly the ones the SELECT will use.
+        cat = psycopg.connect(dsn, autocommit=True, connect_timeout=10)
+        denied = {k: set(v) for k, v in (deny_columns or {}).items()}
+        # The OID each name has INSIDE the snapshot the baseline reads (#4346): exactly the
+        # relation whose rows are read. Its OID deny is unioned in HERE, so a rename or swap
+        # after the run resolved its map cannot hand a protected relation's rows to a name
+        # with no deny; the OID is also reported for the caller to persist.
+        for schema, table in relations:
+            row = conn.execute("select to_regclass(%s)::oid",
+                               (_regclass(schema, table),)).fetchone()
+            if not row or row[0] is None:
+                continue
+            oid = int(row[0])
+            if oids_out is not None:
+                oids_out[(schema, table)] = oid
+            if deny_by_oid and deny_by_oid.get(oid):
+                denied.setdefault((schema, table), set()).update(deny_by_oid[oid])
+            if deny_attnums_by_oid and deny_attnums_by_oid.get(oid):
+                # A denied COLUMN's identity (Sonnet review F1): whatever it is called in the
+                # catalogue this read uses, the column at that attnum is withheld.
+                names = cat.execute(
+                    "select attname from pg_attribute where attrelid = %s "
+                    "and attnum = any(%s) and not attisdropped",
+                    (oid, list(deny_attnums_by_oid[oid]))).fetchall()
+                denied.setdefault((schema, table), set()).update(n for (n,) in names)
+            # The reviewed layout (#4346, Codex rounds 16-17): the full published description,
+            # fresh, under the locks — every later description of the table must match it
+            # exactly. A column live in the snapshot (the boundary) but dropped by now went in
+            # the window, and WAL written before that drop could carry it: no layout.
+            fresh, _ = published_shape(cat.cursor(), oid)
+            at_boundary, _ = published_shape(conn.cursor(), oid)
+            vanished = {c[0] for c in at_boundary.columns} - {c[0] for c in fresh.columns}
+            if layouts_out is not None:
+                layouts_out[(schema, table)] = (oid, None if vanished else fresh)
+            want = denied.get((schema, table), set())
+            if want:
+                got = dict(cat.execute(
+                    "select attname, attnum from pg_attribute where attrelid = %s "
+                    "and attnum > 0 and not attisdropped and attname = any(%s)",
+                    (oid, sorted(want))).fetchall())
+                missing = sorted(want - set(got))
+                if missing and not (deny_attnums_by_oid or {}).get(oid):
+                    # Never bound, and not there under its name: it may have been renamed
+                    # before anyone bound it, so no column can be read safely (Codex round 16).
+                    raise ValueError(
+                        f"{schema}.{table}: denied column(s) {missing} are not columns of the "
+                        "table and were never bound to one — refusing to baseline (#4346)")
+                if bound_out is not None:
+                    bound_out[(schema, table)] = sorted((c, int(a)) for c, a in got.items())
+        for (schema, table) in relations:
+            clash = set(keys.get((schema, table), [])) & denied.get((schema, table), set())
+            if clash:
+                raise ValueError(f"{schema}.{table}: merge key column(s) {sorted(clash)} are "
+                                 "denied — refusing to baseline (#4346)")
         for i, (schema, table) in enumerate(relations):
             res = _resource(conn, schema, table, keys.get((schema, table), []),
-                            policies.get((schema, table), "merge"), f"cdc_snap_{i}", itersize)
+                            policies.get((schema, table), "merge"), f"cdc_snap_{i}", itersize,
+                            denied.get((schema, table), ()), catalog=cat)
             by_schema.setdefault(schema, []).append(res)
+        cat.close()
         yield by_schema
     finally:
+        if cat is not None:
+            with contextlib.suppress(Exception):
+                cat.close()
         with contextlib.suppress(Exception):
             conn.rollback()
         with contextlib.suppress(Exception):
@@ -276,6 +383,12 @@ def consistent_baseline(
     key_policy: str = "merge",
     itersize: int = 5000,
     baseline_wait_s: float = BASELINE_WAIT_S_DEFAULT,
+    deny_columns: Sequence[str] = (),
+    oids_out: dict | None = None,
+    deny_by_oid: dict[int, Sequence[str]] | None = None,
+    deny_attnums_by_oid: dict[int, Sequence[int]] | None = None,
+    layouts_out: dict | None = None,
+    bound_out: dict | None = None,
 ) -> Iterator[tuple[object, int]]:
     """Yields (resource, boundary_lsn) for ONE relation that is already published.
 
@@ -296,7 +409,11 @@ def consistent_baseline(
                                        baseline_wait_s=baseline_wait_s)
     try:
         with snapshot_resources(dsn, handle.snapshot_name, [relation], {relation: list(keys)},
-                                key_policies={relation: key_policy}, itersize=itersize) as by_schema:
+                                key_policies={relation: key_policy}, itersize=itersize,
+                                deny_columns={relation: list(deny_columns)},
+                                oids_out=oids_out, deny_by_oid=deny_by_oid,
+                                deny_attnums_by_oid=deny_attnums_by_oid,
+                                layouts_out=layouts_out, bound_out=bound_out) as by_schema:
             handle.close()  # the import already happened; the exporter is no longer needed
             (resource,) = by_schema[schema]
             yield resource, handle.consistent_point_lsn
@@ -313,6 +430,7 @@ def baseline_resource(
     *,
     key_policy: str = "merge",
     itersize: int = 5000,
+    deny_columns: Sequence[str] = (),
 ) -> Iterator[object]:
     """Plain REPEATABLE READ read of one table — a reader for tests and telemetry. The runtime
     never baselines with it: a row committed between the publication add and this read would
@@ -321,7 +439,8 @@ def baseline_resource(
     conn = psycopg.connect(dsn, connect_timeout=10)
     try:
         conn.execute("begin isolation level repeatable read")
-        yield _resource(conn, schema, table, keys, key_policy, "cdc_base_0", itersize)
+        yield _resource(conn, schema, table, keys, key_policy, "cdc_base_0", itersize,
+                        deny_columns)
     finally:
         with contextlib.suppress(Exception):
             conn.rollback()
