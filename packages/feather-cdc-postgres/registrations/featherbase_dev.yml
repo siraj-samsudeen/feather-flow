@@ -73,6 +73,8 @@ source:
 
 destination:
   token_env: MOTHERDUCK_TOKEN
+  # The MotherDuck account the token must sign in as (#4427); run/resnapshot refuse otherwise.
+  owner: featherbase_cdc_service_account
   # Never bronze_featherbase. Written by featherbase_cdc_service_account — production's owner, by
   # Siraj's ruling (23-Oct-2026) — so the separation is in code: validate requires the `_dev`
   # suffix, and run/resnapshot refuse any database a production registration writes.

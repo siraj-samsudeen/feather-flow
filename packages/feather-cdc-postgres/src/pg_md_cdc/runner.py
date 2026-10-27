@@ -1155,6 +1155,7 @@ def _destination(m) -> Destination:
                                            path=path, pipelines_dir=pipelines_dir))
     return Destination(DestinationSpec(kind="motherduck", database=m.destination.database,
                                        token_env=m.destination.token_env,
+                                       owner=m.destination.owner,
                                        pipelines_dir=pipelines_dir))
 
 
@@ -1201,9 +1202,28 @@ def _refuse_wrong_environment(manifest) -> None:
                      f"{db!r}, the database of production registration {prod[db]!r} — refusing")
 
 
+def _check_owner(manifest) -> BaseException | None:
+    """#4427: the token must sign in as `destination.owner` before anything is created or
+    written. A mismatch exits here, before the run log is opened. A check that could not run
+    (MotherDuck unreachable) is returned for the caller to record as a failed tick."""
+    from .destination import WrongOwner
+    _refuse_static_errors(manifest)   # a missing or malformed owner never reaches a connection
+    try:
+        _destination(manifest).verify_owner()
+    except WrongOwner as exc:
+        sys.exit(f"FATAL: {exc}")
+    except Exception as exc:  # noqa: BLE001 — already token-free (Destination._on_bare_md)
+        return exc
+    return None
+
+
 def run(manifest, *, dev: bool = False, manifest_path: str = "<manifest>") -> int:
     _refuse_wrong_environment(manifest)
+    owner_error = _check_owner(manifest)
     cp = _control_plane(manifest, dev)
+    if owner_error is not None:
+        _record_failed_run(cp, "_destination", "owner_check", owner_error)
+        raise owner_error
     try:
         dsn, plan = _compile(manifest)
     except SystemExit:
@@ -1218,6 +1238,12 @@ def run(manifest, *, dev: bool = False, manifest_path: str = "<manifest>") -> in
     cfg.manifest_path = manifest_path
     if not plan.relations:
         _refuse_empty_selection(cfg, cp=cp)
+    try:
+        # A new registration's database may not exist yet (#4426): every refusal is behind us.
+        cfg.destination.ensure_database()
+    except Exception as exc:
+        _record_failed_run(cp, "_destination", "create_database", exc)
+        raise
     return execute(cfg, plan.relations, cp=cp)
 
 
@@ -1282,6 +1308,11 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
     if not yes:
         sys.exit("resnapshot DROPS destination tables — re-run with --yes to confirm")
     _refuse_wrong_environment(manifest)
+    owner_error = _check_owner(manifest)
+    if owner_error is not None:
+        _record_failed_run(_control_plane(manifest, dev=dev), "_resnapshot", "owner_check",
+                           owner_error)
+        raise owner_error
     dsn, plan = _compile(manifest)
     wanted = set(tables or [])
     wanted_relations = [r for r in plan.relations if not wanted or r.qualified in wanted]
@@ -1295,6 +1326,7 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
             run_ctx.finish(cp_status.RUN_OK, stop_reason=cp_status.STOP_CLEAN, n_skipped=1)
             sys.exit("another run owns this registration — try again after its tick")
         try:
+            cfg.destination.ensure_database()   # #4426: after every refusal, before any table
             cfg.destination.ensure_runtime_tables()
             cfg = _with_inherited_denies(cfg, plan.relations)
             refused = _refuse_denied_keys(cfg, plan.relations)

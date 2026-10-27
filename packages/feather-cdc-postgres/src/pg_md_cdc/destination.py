@@ -33,6 +33,11 @@ class DestinationSpec:
     token_env: str | None = None   # motherduck: env var NAME holding the token (never the value)
     path: str | None = None        # duckdb: file path
     pipelines_dir: str | None = None
+    owner: str | None = None       # motherduck: the account the token must sign in as (#4427)
+
+
+class WrongOwner(RuntimeError):
+    """The token signs in as a different MotherDuck account than the registration declares."""
 
 
 class Destination:
@@ -66,6 +71,53 @@ class Destination:
         if self.spec.kind == "duckdb":
             return dlt.destinations.duckdb(credentials=self.credentials())
         return dlt.destinations.motherduck(credentials=self.credentials())
+
+    def ensure_database(self) -> None:
+        """MotherDuck: create the destination database if it is missing (#4426).
+
+        `md:<db>` will not open a database that does not exist, so a new registration's first
+        run would die on attach. The create runs on bare `md:` under the run's own token, so that
+        account owns what it will write (write = ownership). Call it only from `run`/`resnapshot`,
+        after every refusal; `validate`/`plan`/`status` must never create.
+        """
+        if self.spec.kind != "motherduck":
+            return
+        from .manifest import database_name_problem
+        why = database_name_problem(self.spec.database)
+        if why:
+            raise ValueError(why)
+        self._on_bare_md(f"could not create MotherDuck database {self.spec.database!r}",
+                         lambda con: con.execute(
+                             f"create database if not exists {q(self.spec.database)}"))
+
+    def verify_owner(self) -> None:
+        """MotherDuck: refuse unless the token signs in as the declared owner (#4427).
+
+        Read-only (`select current_user()` on bare `md:`). Without it, a valid token for the
+        wrong account would create the database in that account and load into it."""
+        if self.spec.kind != "motherduck":
+            return
+        if not self.spec.owner:
+            raise ValueError("destination.owner is not set: no account to check the token against")
+        row = self._on_bare_md("could not read the MotherDuck account the token signs in as",
+                               lambda con: con.execute("select current_user()").fetchone())
+        actual = str(row[0]) if row else ""
+        if actual != self.spec.owner:
+            raise WrongOwner(f"the MotherDuck token signs in as {actual!r}, but the registration "
+                             f"declares destination.owner {self.spec.owner!r} — refusing to "
+                             "create or write anything")
+
+    def _on_bare_md(self, what: str, fn):
+        """Run `fn(con)` on a bare `md:` connection, the token in `config=` only. Any failure is
+        re-raised as a RuntimeError with the token scrubbed and no chained cause."""
+        token = self._token()
+        try:
+            with duckdb.connect("md:", config={"motherduck_token": token}) as con:
+                return fn(con)
+        except Exception as exc:  # noqa: BLE001 — re-raised below without the token
+            detail = f"{type(exc).__name__}: {exc}".replace(token, "***redacted***")
+            # `from None`: a chained cause would carry the unredacted text into the traceback.
+            raise RuntimeError(f"{what}: {detail}") from None
 
     def connect(self) -> duckdb.DuckDBPyConnection:
         if self.spec.kind == "duckdb":

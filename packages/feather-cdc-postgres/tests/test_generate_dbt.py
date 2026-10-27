@@ -117,7 +117,7 @@ def test_two_target_schemas_produce_two_disambiguated_sources():
             "api_version": "pg-md-cdc/v1",
             "source_id": "featherbase",
             "source": {"dsn_env": "DEMO_PG_DSN", "include": {"schemas": ["*"]}},
-            "destination": {"token_env": "MOTHERDUCK_TOKEN", "database": "bronze_featherbase"},
+            "destination": {"token_env": "MOTHERDUCK_TOKEN", "owner": "demo_cdc_service_account", "database": "bronze_featherbase"},
             "replication": {"slot": "s", "publication": "p"},
             "control": {"extractor": "featherbase"},
         }

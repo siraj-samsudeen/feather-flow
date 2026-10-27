@@ -12,7 +12,7 @@ BASE = {
     "api_version": "pg-md-cdc/v1",
     "source_id": "demo",
     "source": {"dsn_env": "DEMO_PG_DSN"},
-    "destination": {"token_env": "MOTHERDUCK_TOKEN", "database": "bronze_demo"},
+    "destination": {"token_env": "MOTHERDUCK_TOKEN", "owner": "demo_cdc_service_account", "database": "bronze_demo"},
     "replication": {"slot": "demo_slot", "publication": "demo_pub"},
     "control": {"extractor": "demo"},
 }

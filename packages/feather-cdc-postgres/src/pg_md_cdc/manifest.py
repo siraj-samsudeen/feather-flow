@@ -96,6 +96,9 @@ class Destination:
     table_schemas: List[TableSchema] = field(default_factory=list)
     pipeline_name: Optional[str] = None
     retirement_policy: str = "freeze"  # freeze | archive
+    # The MotherDuck account `token_env`'s token must sign in as (#4427). Required: run and
+    # resnapshot check `current_user()` against it before creating or writing anything.
+    owner: str = ""
 
     def target_schema(self, source_schema: str, table: Optional[str] = None) -> str:
         if table is not None:
@@ -224,7 +227,8 @@ def parse(raw: Dict[str, Any], *, path: Optional[str] = None) -> Manifest:
     dest = raw.get("destination") or {}
     _reject_unknown(
         dest,
-        {"token_env", "database", "schema_mapping", "table_schemas", "pipeline_name", "retirement_policy"},
+        {"token_env", "owner", "database", "schema_mapping", "table_schemas", "pipeline_name",
+         "retirement_policy"},
         "destination",
     )
     table_schemas = []
@@ -276,6 +280,7 @@ def parse(raw: Dict[str, Any], *, path: Optional[str] = None) -> Manifest:
             table_schemas=table_schemas,
             pipeline_name=dest.get("pipeline_name"),
             retirement_policy=str(dest.get("retirement_policy", "freeze")),
+            owner=str(dest.get("owner") or ""),
         ),
         replication=Replication(
             slot=str(rep.get("slot", "")),
@@ -389,6 +394,9 @@ def validate_static(m: Manifest) -> List[Problem]:
         why = database_name_problem(m.destination.database)
         if why:
             err("destination_database", why)
+    why = owner_problem(m.destination.owner)
+    if why:
+        err("destination_owner", why)
     _check_enum(p, "destination.retirement_policy", m.destination.retirement_policy, ("freeze", "archive"))
 
     sm = m.destination.schema_mapping
@@ -552,6 +560,16 @@ def database_name_problem(database: str) -> Optional[str]:
     if not re.fullmatch(r"[a-z][a-z0-9_]*", database or "") or len(database) > 63:
         return (f"destination.database must be a bare identifier ([a-z][a-z0-9_]*), "
                 f"got {database!r}")
+    return None
+
+
+def owner_problem(owner: str) -> Optional[str]:
+    """Why `owner` is not a usable MotherDuck account name, or None (#4427)."""
+    if not owner:
+        return ("destination.owner is required: the MotherDuck account the token must sign in "
+                "as (dbt_runner/dbt/seeds/access_control/layer_access_registry.csv)")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@+-]*", owner) or len(owner) > 255:
+        return f"destination.owner must be a MotherDuck account name, got {owner!r}"
     return None
 
 

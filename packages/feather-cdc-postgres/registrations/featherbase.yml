@@ -66,6 +66,8 @@ source:
 
 destination:
   token_env: MOTHERDUCK_TOKEN
+  # The MotherDuck account the token must sign in as (#4427); run/resnapshot refuse otherwise.
+  owner: featherbase_cdc_service_account
   database: bronze_featherbase
   schema_mapping: preserve_source
   # Per-table bronze schemas, first match wins. Platform tables live in `featherbase`; app

@@ -30,6 +30,7 @@ source:
       system_tables: [table_def, {people_table}, has_role]
 destination:
   token_env: FB_DEMO_MD_TOKEN
+  owner: demo_cdc_service_account
   database: bronze_fb_demo
   schema_mapping: preserve_source
   table_schemas:

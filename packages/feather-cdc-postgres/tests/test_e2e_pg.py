@@ -1326,6 +1326,7 @@ source:
 {deny}
 destination:
   token_env: DEMO_MD_TOKEN
+  owner: demo_cdc_service_account
   database: bronze_demo
 replication:
   slot: {slot}

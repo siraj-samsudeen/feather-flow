@@ -54,7 +54,7 @@ redacted, never as a raw traceback), `2` a malformed manifest.
 |---|---|
 | `environment` | `production` (default) or `dev`: must equal Railway's `RAILWAY_ENVIRONMENT_NAME` where it is set, or `run`/`resnapshot` exit before any connection (#4340) |
 | `source` | which relations: `include`/`exclude`/`deny` globs on `schema.table`, plus an optional catalog `discovery.adapter` |
-| `destination` | MotherDuck database, `schema_mapping` (default: source schemas preserved), **`table_schemas`** (per-table target schema, `[{match: "schema.table" glob, schema: target}]`, first match wins, unmatched → `schema_mapping`; D-13), dlt pipeline name (only with a single target schema), retirement policy |
+| `destination` | MotherDuck database, **`owner`** (required: the MotherDuck account the token must sign in as, from `layer_access_registry.csv`; `run`/`resnapshot` check `current_user()` against it before creating the database on a first run or writing anything, #4426/#4427), `schema_mapping` (default: source schemas preserved), **`table_schemas`** (per-table target schema, `[{match: "schema.table" glob, schema: target}]`, first match wins, unmatched → `schema_mapping`; D-13), dlt pipeline name (only with a single target schema), retirement policy |
 | `replication` | slot, publication, cadence (generated from `config/schedules.yml`), key policy for unkeyed tables, replica identity, batch size |
 | `control` | the extractor identity, control-plane availability policy, event durability, `reconcile_exclude` |
 | `classification` | optional first-match rules overriding the default `table_class` |
