@@ -41,3 +41,8 @@ control:
   extractor: petpooja_webhook_cdc
   availability_policy: pause_if_control_unreachable
   event_durability: direct_postgres
+  # The receiver inserts a bill every ~18 s, so source-now never ties destination-now within a
+  # run: the reconcile would report an error, the run would finish `partial`, and the #4024
+  # trigger (which fires only on a finish `ok`) would never notify the dbt-runner (D30).
+  reconcile_exclude:
+    - "petpooja.bills"

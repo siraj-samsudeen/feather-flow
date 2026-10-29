@@ -78,6 +78,9 @@ def test_registration_static_shape():
     assert MANIFEST.destination.owner == "petpooja_extract"
     assert MANIFEST.destination.target_schema("petpooja", "bills") == "webhook"
     assert MANIFEST.control.extractor == "petpooja_webhook_cdc"   # the runner listens for it
+    # a live-written table never reconciles mid-run; a failed reconcile finishes the run
+    # `partial`, and only an `ok` finish fires the #4024 notification
+    assert "petpooja.bills" in MANIFEST.control.reconcile_exclude
     assert set(MANIFEST.source.deny_columns["petpooja.bills"]) == set(_store().POSTGRES_ONLY_COLUMNS)
 
 
@@ -121,3 +124,32 @@ def test_bills_land_as_webhook_bills_without_the_postgres_only_columns(fresh_db,
         assert con.execute("select count(*) from webhook._dlt_loads").fetchone()[0] >= 2
     finally:
         con.close()
+
+
+def test_a_push_arriving_mid_run_still_finishes_ok(fresh_db, names, tmp_path, monkeypatch):
+    """D30: only an `ok` finish fires the #4024 notification. Live, a bill arrives every ~18 s, so
+    one lands between the drain and the reconcile count of most runs (first live run, 29-Oct:
+    source 12,879 vs destination 12,878 -> `partial`). The run must still finish `ok`."""
+    store = _store()
+    with psycopg.connect(fresh_db, autocommit=True) as c:
+        c.execute(store.SCHEMA_DDL)
+    _insert(fresh_db, store, 1)
+    dest = Destination(DestinationSpec(kind="duckdb", database="bronze_petpooja",
+                                       path=str(tmp_path / "dest.duckdb"),
+                                       pipelines_dir=str(tmp_path / "dlt")))
+    cfg = dataclasses.replace(runner.config_from_manifest(MANIFEST, dsn=fresh_db, destination=dest),
+                              slot=names["slot"], publication=names["publication"],
+                              registration=names["registration"])
+    plan = compile_selection(MANIFEST, discovery.discover(fresh_db), [])
+
+    real = runner.telemetry.reconcile_counts
+    arrivals = iter(range(100, 200))
+
+    def push_then_count(*a, **k):
+        _insert(fresh_db, store, next(arrivals))   # a bill lands after the drain, before the count
+        return real(*a, **k)
+
+    monkeypatch.setattr(runner.telemetry, "reconcile_counts", push_then_count)
+    for _ in range(2):                              # the snapshot run and a streaming run
+        result = _tick(cfg, plan.relations)
+        assert result["outcome"]["status"] == "ok", result
