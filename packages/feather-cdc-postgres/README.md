@@ -19,8 +19,8 @@ is always `pg_md_cdc`. Env vars, matching `registrations/*.yml`:
 
 | var | set to | source |
 |---|---|---|
-| `CDC_REGISTRATION` | the registration id, e.g. `featherbase`, `featherbase_dev` (the dev mirror, runbook §m) or `control_plane` | selects `registrations/<id>.yml` |
-| `<manifest source.dsn_env>` | the source Postgres DSN (`FEATHERBASE_PG_DSN` / `CONTROL_PG_DSN`) | Railway reference var |
+| `CDC_REGISTRATION` | the registration id, e.g. `featherbase`, `featherbase_dev` (the dev mirror, runbook §m), `control_plane` or `petpooja_webhook` | selects `registrations/<id>.yml` |
+| `<manifest source.dsn_env>` | the source Postgres DSN (`FEATHERBASE_PG_DSN` / `CONTROL_PG_DSN` / `WEBHOOK_PG_DSN`) | Railway reference var |
 | `<manifest destination.token_env>` | the MotherDuck token (`MOTHERDUCK_TOKEN` in both shipped manifests) | Railway reference var |
 | `CDC_LOG_PG_DSN` | the customer's **CDC log DB** (Railway `<customer>-cdc-log-db` in project `<customer>-cdc`, e.g. `jeyarama-cdc-log-db`) — where its runs and events are logged (#4078) | Railway reference var — hard dependency unless `--dev`. `CONTROL_PG_DSN` is accepted for one release; for the control-plane CDC it is also the source, so set `CDC_LOG_PG_DSN` |
 | `CONTROL_WAL_DIR` | a mounted (non-ephemeral) path | only needed if `control.event_durability: persistent_local_wal`; neither shipped manifest uses it |

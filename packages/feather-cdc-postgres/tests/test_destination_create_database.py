@@ -343,4 +343,5 @@ def test_every_shipped_registration_declares_its_registry_owner():
               for p in sorted(REGISTRATIONS.glob("*.yml"))}
     assert owners == {"control_plane": "control_plane_cdc_service_account",
                       "featherbase": "featherbase_cdc_service_account",
-                      "featherbase_dev": "featherbase_cdc_service_account"}
+                      "featherbase_dev": "featherbase_cdc_service_account",
+                      "petpooja_webhook": "petpooja_extract"}
