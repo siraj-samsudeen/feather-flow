@@ -22,6 +22,7 @@ TARGETS=(
   "ptp_extract/src"        # Railway cron; three PTP instances (#2826)
   "stylehr_bronze/src"     # Railway cron; StyleHR bronze (#2826)
   "pg_md_cdc/src"          # Railway cron; generic PG→MD CDC runtime (#3079)
+  "ax_retail_bronze/src"   # on-prem box (rides ssh_box.py put src/); AX Retail history (#3809)
   "petpooja_extract/src"   # Railway cron; Petpooja nightly (#36, on main since #4249)
 )
 
