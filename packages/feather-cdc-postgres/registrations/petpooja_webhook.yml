@@ -30,7 +30,7 @@ destination:
 replication:
   slot: petpooja_webhook_cdc_slot
   publication: petpooja_webhook_cdc_pub
-  cadence_minutes: 5        # generated from config/schedules.yml (pg-md-cdc)
+  cadence_minutes: 30        # generated from config/schedules.yml (pg-md-cdc)
   tables_without_key: reject
   replica_identity: full
   slot_loss_policy: resnapshot
