@@ -14,6 +14,7 @@ from __future__ import annotations
 import filecmp
 import pathlib
 import re
+import subprocess
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CANONICAL = REPO / "control_plane/src/control_plane"
@@ -21,8 +22,23 @@ VENDOR_SYNC = REPO / "control_plane/vendor-sync.sh"
 
 
 def _discovered() -> set[pathlib.Path]:
-    """Every vendored copy in the repo: `<top-level dir>/src/control_plane`, canonical excluded."""
-    return {p for p in REPO.glob("*/src/control_plane") if p.is_dir() and p != CANONICAL}
+    """Every vendored copy the repo CARRIES: `<top-level dir>/src/control_plane`, canonical excluded.
+
+    Discovery is `git ls-files`, not a disk walk (#4576). A retired service leaves its vendored copy
+    behind — `featherbase_extract/` was deleted in #3156 and its copy sat on disk for two months,
+    failing this guard on every working machine while CI, which clones fresh, stayed green. A guard
+    that is red where it cannot help and green where it cannot catch anything teaches people to
+    ignore it.
+    """
+    try:
+        out = subprocess.run(["git", "-C", str(REPO), "ls-files", "*/src/control_plane/*"],
+                             capture_output=True, text=True, encoding="utf-8", check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return {p for p in REPO.glob("*/src/control_plane") if p.is_dir() and p != CANONICAL}
+    # ls-files lists files; the copy is their `.../src/control_plane` parent directory.
+    found = {REPO / line.split("/src/control_plane/")[0] / "src" / "control_plane"
+             for line in out.splitlines() if "/src/control_plane/" in line}
+    return {p for p in found if p != CANONICAL}
 
 
 def _sync_targets() -> set[pathlib.Path]:
