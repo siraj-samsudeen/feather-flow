@@ -72,7 +72,10 @@ Every **Railway** project and service (and any cloud resource that cannot carry 
    (CLI `-s <name>`, skills, runbooks). A reference variable follows the service id; a name lookup silently
    returns nothing (the stale `-s Postgres` lookup, fixed in data-warehouse #4083).
 
-Packages follow the product family: `feather-cdc`, `feather-control-plane` (feather-flow #80).
+Packages follow the product family: `feather-control-plane`, `feather-cdc-postgres` (feather-flow #80).
+Name a package after the half that is **fixed**, not the half that is pluggable: the CDC engine is
+bound to PostgreSQL as a source (it speaks logical replication) while its destination is already
+behind an interface, so `feather-cdc` would over-claim on exactly the axis that will fork.
 
 ## The local-vs-global tension — flag it
 
