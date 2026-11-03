@@ -244,6 +244,45 @@ branch coverage (one side of an `if` never ran); that's why `cov` uses
 
 ---
 
+## Continuous integration
+
+[`.github/workflows/ci.yaml`](../.github/workflows/ci.yaml) runs on every pull
+request and on every push to `main`.
+
+| Job | Runs | Blocking? |
+|---|---|---|
+| `Interpreter pin is a version we claim` | `scripts/check_pinned_python_version.py` | Yes |
+| `pytest (Python 3.11 / 3.12 / 3.13)` | `uv sync --all-extras` + `uv run pytest -q` | Yes |
+| `pytest (Python 3.10) - non-blocking` | same | **No** — `continue-on-error` |
+
+**Why 3.10 is non-blocking.** The package advertises 3.10 (`requires-python = ">=3.10"`
+plus a 3.10 classifier) but the suite is not green there: 22 failures, all in
+`tests/unit/sources/test_sqlserver.py`, all `AttributeError: module
+'feather_flow.sources' has no attribute 'sqlserver'`. The file passes when run alone on
+3.10 and fails when `tests/unit/sources/` runs as a directory — import-order pollution
+between test modules, not a language incompatibility. Keeping it visible but
+non-blocking avoids a permanently-red required check, which teaches people to ignore
+every check. Fix the pollution, then delete the `experimental` flag.
+
+**The interpreter guard.** `.python-version` must name a version the project claims, in
+*both* halves of `[project]`: inside `requires-python`, and carried by a `Programming
+Language :: Python :: X.Y` classifier. Both are needed —
+`requires-python = ">=3.10"` is open-ended upward, so it alone would accept the 3.14 pin
+that broke the suite (issue #83). Run it yourself:
+
+```bash
+uv run --no-project --python 3.13 scripts/check_pinned_python_version.py
+```
+
+**Bumping `.python-version`** therefore means widening the classifiers in the same
+commit, which is the deliberate decision the guard exists to force.
+
+**Not covered yet:** per-member workspace jobs. `packages/` does not exist on `main`; it
+arrives with #82, which brings its own member job and the PostgreSQL service container
+its tests need.
+
+---
+
 ## Current open reviews
 
 | File | Slice | Status |

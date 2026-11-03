@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import ClassVar
@@ -10,6 +11,31 @@ from typing import ClassVar
 import yaml
 
 from feather_flow.sources import ChangeResult, StreamSchema
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def cli_text(output: str) -> str:
+    """CLI output with the presentation removed, for substring assertions.
+
+    Typer renders errors inside a Rich panel that hard-wraps to the terminal
+    width, so a phrase can be split across lines by a newline, padding and a
+    `|` border. Whether it splits depends on how long the surrounding text is —
+    which, for a message quoting a temp path, means it depends on the operating
+    system. `tests/e2e/test_16_view.py::test_invalid_path_fails` asserted
+    `"does not exist" in result.output` and so passed on macOS, whose
+    `/var/folders/...` paths pushed the wrap elsewhere, and failed on Linux CI:
+
+        | Invalid value for '[PATH]': Directory                   |
+        | '/tmp/pytest-of-runner/.../missing' does not            |
+        | exist.                                                  |
+
+    Asserting against this function instead of `result.output` makes the test
+    about what the CLI *said*, not about where Rich happened to break a line.
+    """
+    text = _ANSI.sub("", output)
+    text = re.sub(r"^\s*[│|]|[│|]\s*$", " ", text, flags=re.MULTILINE)
+    return " ".join(text.split())
 
 
 def write_config(tmp_path: Path, config: dict, directory: Path | None = None) -> Path:
