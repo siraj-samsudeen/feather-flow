@@ -87,7 +87,15 @@ All three strategies are idempotent — safe to re-run after partial failures.
 
 ## This Repo vs Client Projects
 
-**feather-flow** (this repo) is a Python package only — no client config, no client data. See [Installation](#installation) for install options.
+**feather-flow** (this repo) is Python packages only — no client config, no client data. See [Installation](#installation) for install options.
+
+The repo is a [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/). `src/feather_flow/` is the `feather-flow` distribution; `packages/` holds sibling distributions in the Feather family, released on their own and **not** dependencies of feather-flow:
+
+| Package | Import as | What it is |
+|---|---|---|
+| [`packages/feather-control-plane`](packages/feather-control-plane/README.md) | `control_plane` | Durable failure observability for an extractor fleet — write-ahead log, Postgres control plane, liveness lease. |
+
+Run a sibling's tests with `uv run --package <name> pytest packages/<dir>/tests`; `uv run pytest` at the root is feather-flow's own suite.
 
 Each client lives in its own GitHub repository, scaffolded with `feather init`:
 
