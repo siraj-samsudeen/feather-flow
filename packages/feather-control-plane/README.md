@@ -66,8 +66,15 @@ provenance is worse than no load.
 ## Tests
 
 ```bash
+cd packages/feather-control-plane && uv run --package feather-control-plane pytest
+# or, from the repo root, naming the path:
 uv run --package feather-control-plane pytest packages/feather-control-plane/tests
 ```
+
+`--package` picks the *environment*; it does not pick the tests. pytest takes its config from the
+nearest `pyproject.toml` above the working directory, so a bare `pytest` run from the repo root
+collects feather-flow's suite no matter what `--package` says — green, 1050 tests, and not one of
+them this package's. Either `cd` in or name the path.
 
 The pure-logic tests (WAL framing, status vocabulary, business day) run anywhere. The rest need a
 real Postgres and find one in this order: `CONTROL_PG_DSN` if set → a `postgres:16` Docker

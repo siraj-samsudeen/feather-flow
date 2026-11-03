@@ -95,7 +95,7 @@ The repo is a [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspa
 |---|---|---|
 | [`packages/feather-control-plane`](packages/feather-control-plane/README.md) | `control_plane` | Durable failure observability for an extractor fleet — write-ahead log, Postgres control plane, liveness lease. |
 
-Run a sibling's tests with `uv run --package <name> pytest packages/<dir>/tests`; `uv run pytest` at the root is feather-flow's own suite.
+Run a sibling's tests with `uv run --package <name> pytest packages/<dir>/tests`; `uv run pytest` at the root is feather-flow's own suite. `--package` selects the environment, not the tests — a bare `pytest` from the root always collects `tests/`, so name the path or `cd` into the member.
 
 Each client lives in its own GitHub repository, scaffolded with `feather init`:
 

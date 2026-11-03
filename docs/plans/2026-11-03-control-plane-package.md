@@ -142,14 +142,21 @@ reaches all of them. The resulting tree is byte-identical to the source (`diff -
 |---|---|---|
 | feather-flow suite | `uv run pytest -q` | 1050 passed, 15 skipped |
 | package suite | `uv run --package feather-control-plane pytest packages/feather-control-plane/tests -q` | 44 passed |
+| wheel, adoption path | `uv run --isolated --with 'dist/…whl[postgres]' python -c …` | facade imports, WAL-only run completes |
 | A, with psycopg absent | `uv run --isolated --no-project --with . python -c …` | `ist_today()` works, psycopg not in `sys.modules` |
 | B, against the old tree | the guard run on a `git archive` copy | fails, naming the shadow |
 | 3.10 – 3.13 | `uv run --isolated --python <v> --with './[postgres]' python -m pytest tests/test_unit.py` | 5 passed on each |
 | build | `uv build --package feather-control-plane` | wheel + sdist |
 
-The integration tests need a real Postgres and find one via `CONTROL_PG_DSN` → Docker
-`postgres:16` → a local `pg_ctl`. All 44 ran against Docker here; with none of the three
-available they skip and the pure-logic tests still run.
+33 of the 44 need a real Postgres and find one via `CONTROL_PG_DSN` → Docker `postgres:16` → a
+local `pg_ctl` (`shutil.which`, then a direct glob of `/opt/homebrew/opt/postgresql@*/bin`, which
+is why stripping `PATH` does not disable it). All 33 ran against a real server here; with none of
+the three routes available they skip and the 11 pure-logic tests still run.
+
+**`--package` selects the environment, not the tests.** pytest reads its config from the nearest
+`pyproject.toml` above the working directory, so `uv run --package feather-control-plane pytest`
+from the repo root collects feather-flow's 1050 tests and reports green without touching this
+package. Name the path, or `cd` into the member.
 
 ## Not done here (step 2+)
 
