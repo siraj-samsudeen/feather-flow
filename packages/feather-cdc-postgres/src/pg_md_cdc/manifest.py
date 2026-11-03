@@ -29,7 +29,7 @@ _QUALIFIED = re.compile(r"^[^.]+\.[^.]+$")
 # environment the worker runs in, so a dev instance copied from production's settings refuses
 # to start production's registration (and the reverse) instead of mixing the two.
 PRODUCTION = "production"
-ENVIRONMENTS = (PRODUCTION, "dev")
+ENVIRONMENTS = (PRODUCTION, "dev", "staging")
 RAILWAY_ENVIRONMENT_VAR = "RAILWAY_ENVIRONMENT_NAME"
 
 TABLE_CLASSES = (

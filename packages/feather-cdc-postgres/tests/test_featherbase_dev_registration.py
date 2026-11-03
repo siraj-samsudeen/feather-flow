@@ -22,7 +22,9 @@ ALL = [mf.load(str(p)) for p in sorted(REGISTRATIONS.glob("*.yml"))]
 def test_dev_validates_and_is_marked_dev():
     assert mf.errors(mf.validate_static(DEV)) == []
     assert DEV.environment == "dev"
-    assert {m.environment for m in ALL if m.source_id != "featherbase_dev"} == {"production"}
+    # Staging (#4617) is the other non-production mirror; its own file checks it the same way.
+    assert {m.environment for m in ALL
+            if m.source_id not in ("featherbase_dev", "featherbase_staging")} == {"production"}
 
 
 @pytest.mark.parametrize("identity", [
@@ -99,7 +101,7 @@ def test_environment_mismatch(m, railway_env, refused):
 
 
 def test_an_unknown_environment_is_a_static_error():
-    m = dataclasses.replace(DEV, environment="staging")
+    m = dataclasses.replace(DEV, environment="qa")
     assert "enum" in {p.code for p in mf.errors(mf.validate_static(m))}
 
 
