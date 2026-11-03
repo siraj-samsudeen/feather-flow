@@ -1,0 +1,67 @@
+[project]
+name = "feather-control-plane"
+version = "0.1.0"
+description = "Durable failure observability for an extractor fleet: WAL + Postgres control plane + liveness lease"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Siraj Samsudeen", email = "mailsiraj@gmail.com" }
+]
+# The distribution is `feather-control-plane`; the IMPORT name stays `control_plane`.
+# ~40 call sites across nine services already say `from control_plane import ControlPlane`, so
+# keeping the import name makes adopting this package a dependency substitution with no code edits.
+# `>=3.10`, matching feather-flow, NOT the `>=3.12` this carried in its old home. That pin was the
+# host repo's interpreter, not a constraint of this code — nothing here uses 3.11+ syntax, and the
+# suite passes on 3.10 through 3.13. It matters because uv locks a workspace at the INTERSECTION of
+# its members' ranges, so a `>=3.12` here would silently strip 3.10/3.11 out of feather-flow's lock.
+requires-python = ">=3.10"
+keywords = ["observability", "etl", "postgres", "write-ahead-log", "control-plane"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: System :: Monitoring",
+]
+dependencies = [
+    # business_day.py builds ZoneInfo("Asia/Kolkata") AT IMPORT. psycopg already requires tzdata but
+    # ONLY under `sys_platform == 'win32'`, so on Linux it is absent and `zoneinfo` would be left
+    # depending on the image's /usr/share/zoneinfo — which bookworm-slim does not guarantee.
+    "tzdata>=2026.1",
+]
+
+[project.optional-dependencies]
+# psycopg is NOT a base dependency: `control_plane.business_day` and `control_plane.status` are
+# pure-stdlib and are imported on their own by consumers that have no database. Everything that
+# actually talks to Postgres lives behind this extra, which the lazy `__getattr__` in
+# `__init__.py` makes reachable without eagerly importing a driver.
+postgres = ["psycopg[binary]>=3.1"]
+
+[project.urls]
+Homepage = "https://github.com/siraj-samsudeen/feather-flow"
+Repository = "https://github.com/siraj-samsudeen/feather-flow"
+Issues = "https://github.com/siraj-samsudeen/feather-flow/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/control_plane"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/", "tests/", "README.md", "pyproject.toml"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "psycopg[binary]>=3.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

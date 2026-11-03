@@ -82,7 +82,49 @@ jobs:
         run: uv sync --all-extras
 
       # The PostgreSQL- and MySQL-gated tests skip here (no local servers on the
-      # runner) and the suite still exits 0 — see docs/CONTRIBUTING.md. A service
-      # container arrives with the workspace members in #82.
+      # runner) and the suite still exits 0 — see docs/CONTRIBUTING.md. The
+      # workspace members get a real PostgreSQL in the job below.
       - name: Run tests
         run: uv run pytest -q
+
+  # Workspace members are gated separately: they version and release on their own
+  # cadence, and most of their tests need a real database, which feather-flow's
+  # own suite does not. Path-filtered via `paths` would skip the job entirely and
+  # leave a required check pending, so the filter lives in the step condition.
+  feather-control-plane:
+    name: pytest (feather-control-plane)
+    runs-on: ubuntu-latest
+    services:
+      # `conftest.py` prefers CONTROL_PG_DSN over spawning Docker or a local
+      # pg_ctl, so handing it a service container is the one path that needs no
+      # privileged runner. 33 of the 44 tests exercise real SQL — schema
+      # creation, concurrent writers and LISTEN/NOTIFY — and prove nothing
+      # against a mock.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: control_plane_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      # `working-directory`, NOT `uv run --package … pytest` from the repo root:
+      # pytest takes its config from the nearest pyproject.toml above the CWD, so
+      # from the root `--package` selects the environment and still runs
+      # feather-flow's 1094 tests. A green run that tested the wrong thing is
+      # worse than a red one.
+      - name: Run the package's suite against a real PostgreSQL
+        working-directory: packages/feather-control-plane
+        env:
+          CONTROL_PG_DSN: postgresql://postgres:postgres@localhost:5432/control_plane_test
+        run: uv run --package feather-control-plane pytest -q

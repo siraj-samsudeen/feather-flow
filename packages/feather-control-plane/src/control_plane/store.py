@@ -1,0 +1,447 @@
+"""Postgres control plane: schema, idempotent upserts, the liveness lease (issue #204).
+
+This is the *control* plane — run lifecycle, the event log, budget telemetry, and the lease.
+The *data* plane stays in MotherDuck. Control is a transactional/concurrent/locking workload
+(the opposite of columnar analytics), and you cannot durably log a MotherDuck failure into
+MotherDuck — hence a separate Postgres (supersedes ADR 0005 + #65).
+
+All writes are idempotent so the WAL shipper can replay at-least-once and converge:
+- `event` keyed `(extractor, run_id, seq)` → ON CONFLICT DO NOTHING
+- `run` keyed `run_id` → start DO NOTHING, finish is an UPDATE
+- `budget_usage` keyed `(run_id, extractor, budget_name)` → ON CONFLICT DO UPDATE
+
+`ran_at` is the canonical run-health timestamp (ADR 0027). `limit_val` avoids the reserved
+word `limit`.
+"""
+from __future__ import annotations
+
+import psycopg
+from psycopg.types.json import Json
+
+from . import status
+
+SCHEMA_DDL = """
+CREATE SCHEMA IF NOT EXISTS control;
+
+CREATE TABLE IF NOT EXISTS control.run (
+    run_id        TEXT PRIMARY KEY,
+    extractor     TEXT NOT NULL,
+    mode          TEXT,
+    host          TEXT,
+    pid           INTEGER,
+    started_at    TIMESTAMPTZ NOT NULL,
+    finished_at   TIMESTAMPTZ,
+    status        TEXT NOT NULL,
+    stop_reason   TEXT,
+    n_ok          INTEGER,
+    n_err         INTEGER,
+    n_skipped     INTEGER,
+    reconciled_by TEXT,
+    wal_path      TEXT,
+    extra         JSONB
+);
+CREATE INDEX IF NOT EXISTS run_extractor_unfinished
+    ON control.run (extractor) WHERE finished_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS control.lease (
+    extractor        TEXT PRIMARY KEY,
+    run_id           TEXT NOT NULL,
+    lease_expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS control.event (
+    extractor       TEXT NOT NULL,
+    run_id          TEXT NOT NULL,
+    seq             BIGINT NOT NULL,
+    ran_at          TIMESTAMPTZ NOT NULL,
+    entity          TEXT,
+    unit            TEXT,
+    business_date   DATE,
+    status          TEXT NOT NULL,
+    http_status     INTEGER,
+    rows            BIGINT,
+    source_attempts INTEGER,
+    sink_attempts   INTEGER,
+    pull_ms         INTEGER,
+    load_ms         INTEGER,
+    error_detail    TEXT,
+    extra           JSONB,
+    PRIMARY KEY (extractor, run_id, seq)
+);
+CREATE INDEX IF NOT EXISTS event_run ON control.event (run_id);
+
+CREATE TABLE IF NOT EXISTS control.budget_usage (
+    run_id      TEXT NOT NULL,
+    extractor   TEXT NOT NULL,
+    budget_name TEXT NOT NULL,
+    limit_val   BIGINT,
+    used        BIGINT,
+    remaining   BIGINT,
+    hit         BOOLEAN,
+    ran_at      TIMESTAMPTZ,
+    PRIMARY KEY (run_id, extractor, budget_name)
+);
+"""
+
+
+# Advisory-lock key serializing the DDL path across processes (#3091). An arbitrary but FIXED
+# 64-bit constant: every writer must pick the same number or the lock serializes nothing. Recorded
+# here so a future advisory lock in this repo picks a different one.
+_SCHEMA_ADVISORY_LOCK = 3_204_198_401
+
+# The shape ensure_schema guarantees. Checked as a READ before any DDL runs, because DDL on this
+# path is what deadlocked the fleet: `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` takes an
+# AccessExclusiveLock *even when the column already exists*, so running it on every startup gave
+# every pair of concurrently-starting writers a chance to deadlock (#3091).
+_REQUIRED_TABLES = ("run", "lease", "event", "budget_usage")
+_REQUIRED_COLUMNS = (("event", "extra"), ("run", "extra"))
+
+# The dbt-ready notification (#3884). dbt-runner's worker LISTENs on this channel and runs a tick
+# the moment Zakya's coherent-batch marker is recorded, instead of waiting for its next slot.
+# AFTER INSERT ... FOR EACH ROW fires only for a row actually inserted, so a WAL replay that hits
+# `ON CONFLICT DO NOTHING` notifies nobody; a duplicate would be harmless anyway (the tick is
+# idempotent). NOTIFY is delivered at COMMIT, and the shipper commits each shipped tail at once
+# (ship-as-you-go), so the listener hears it seconds after the marker lands. Not durable: a
+# listener that is down misses it, which is why the worker also ticks on its registry slots.
+# To CHANGE the function body or filter, rename the trigger (the presence check below is by name).
+DBT_READY_CHANNEL = "dbt_ready"  # @spec ready_event_notify
+DBT_READY_TRIGGER = "event_dbt_ready_notify"
+DBT_READY_SOURCE = ("zakya", "transform_ready", status.EV_OK)  # extractor, entity, status
+DBT_READY_DDL = f"""
+CREATE OR REPLACE FUNCTION control.notify_dbt_ready() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+    PERFORM pg_notify('{DBT_READY_CHANNEL}', json_build_object(
+        'extractor', NEW.extractor, 'run_id', NEW.run_id,
+        'business_date', NEW.business_date)::text);
+    RETURN NULL;
+END
+$fn$;
+DO $do$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'control' AND c.relname = 'event' AND t.tgname = '{DBT_READY_TRIGGER}'
+    ) THEN
+        CREATE TRIGGER {DBT_READY_TRIGGER}
+            AFTER INSERT ON control.event FOR EACH ROW
+            WHEN (NEW.extractor = '{DBT_READY_SOURCE[0]}' AND NEW.entity = '{DBT_READY_SOURCE[1]}'
+                  AND NEW.status = '{DBT_READY_SOURCE[2]}')
+            EXECUTE FUNCTION control.notify_dbt_ready();
+    END IF;
+END
+$do$;
+"""
+
+# The run-finish notification (#4024), for every OTHER source. GoFrugal and SAP have no marker
+# event; their proof of a complete load is their own `control.run` row finishing `ok`, which the
+# worker used to find only at its 15-minute check. This trigger fires on the TRANSITION into
+# (status ok, finished_at set) -- on the INSERT a `run_finish` makes when no `run_start` landed, or
+# on the UPDATE from running/died -- and never again for that row: a WAL replay of `run_finish` is
+# `ON CONFLICT DO UPDATE` on a row already `ok`, so the body drops it. Every extractor except `dbt`
+# (the listener's own rows) notifies; the WORKER owns which extractors it acts on
+# (listen_worker.RUN_NOTIFY_EXTRACTORS, derived from the admitted sources), so admitting a source
+# never needs this trigger renamed. Its OWN channel, not `dbt_ready`: a worker from before #4024
+# treats every `dbt_ready` payload as a Zakya marker and exits 76 for a run_id it cannot find, and
+# with the CDC instances finishing a run every 5 minutes that retry chain never runs out -- so on
+# the shared channel a rolled-back or not-yet-redeployed dbt-runner would stop building while any
+# other writer had installed this trigger (review of #4025). On its own channel an old worker
+# never hears it. The payload carries `kind: run` as well, so a listener on both channels can route
+# by payload alone.
+DBT_RUN_FINISHED_CHANNEL = "dbt_run_finished"  # @spec run_finish_notify
+RUN_FINISH_TRIGGER = "run_dbt_ready_notify"
+RUN_FINISH_DDL = f"""
+CREATE OR REPLACE FUNCTION control.notify_dbt_run_finished() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+    IF TG_OP = 'UPDATE' AND OLD.status = '{status.RUN_OK}' AND OLD.finished_at IS NOT NULL THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_notify('{DBT_RUN_FINISHED_CHANNEL}', json_build_object(
+        'kind', 'run', 'extractor', NEW.extractor, 'run_id', NEW.run_id,
+        'finished_at', NEW.finished_at)::text);
+    RETURN NULL;
+END
+$fn$;
+DO $do$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'control' AND c.relname = 'run' AND t.tgname = '{RUN_FINISH_TRIGGER}'
+    ) THEN
+        CREATE TRIGGER {RUN_FINISH_TRIGGER}
+            AFTER INSERT OR UPDATE ON control.run FOR EACH ROW
+            WHEN (NEW.status = '{status.RUN_OK}' AND NEW.finished_at IS NOT NULL
+                  AND NEW.extractor <> 'dbt')
+            EXECUTE FUNCTION control.notify_dbt_run_finished();
+    END IF;
+END
+$do$;
+"""
+# (trigger name, table) for every notification trigger a current plane carries; the presence check
+# in `_schema_state` and the create-if-absent DDL are both by name, so changing a body means a
+# new name here.
+_NOTIFY_TRIGGERS = ((DBT_READY_TRIGGER, "event"), (RUN_FINISH_TRIGGER, "run"))
+_NOTIFY_DDLS = (DBT_READY_DDL, RUN_FINISH_DDL)
+
+
+# How long the trigger-only migration may WAIT for its table before it gives up for this start.
+# A shipper transaction holds RowExclusive on control.event / control.run; CREATE TRIGGER needs
+# ShareRowExclusive and must queue behind it. Bounded so a writer's startup is delayed seconds at
+# worst, never stalled -- and never part of a lock cycle, because each trigger is installed in its
+# OWN transaction that takes no other table lock (#3884). Installing both in one transaction would
+# lock control.event then control.run while a replaying shipper locks control.run (run_start) then
+# control.event (events): a cycle, reproduced in the review of #4025 as DeadlockDetected.
+_TRIGGER_LOCK_TIMEOUT = "5s"
+
+
+def _schema_state(conn: psycopg.Connection) -> str:
+    """'current', 'trigger_missing' (every table and column present, a notification trigger --
+    #3884's on control.event or #4024's on control.run -- absent) or 'stale' -- pure catalog
+    reads, no lock on any control table."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'control'")
+        tables = {r[0] for r in cur.fetchall()}
+        if not set(_REQUIRED_TABLES) <= tables:
+            return "stale"
+        cur.execute(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = 'control' AND table_name = ANY(%s)",
+            ([t for t, _ in _REQUIRED_COLUMNS],))
+        columns = {(r[0], r[1]) for r in cur.fetchall()}
+        if not set(_REQUIRED_COLUMNS) <= columns:
+            return "stale"
+        for trigger, table in _NOTIFY_TRIGGERS:
+            cur.execute(
+                "SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'control' AND c.relname = %s AND t.tgname = %s",
+                (table, trigger))
+            if cur.fetchone() is None:
+                return "trigger_missing"
+        return "current"
+
+
+def _schema_is_current(conn: psycopg.Connection) -> bool:
+    """True when every table, migrated column and both dbt-ready triggers exist — no locks.
+
+    This is the steady state on a live control plane, so the common path of ensure_schema() must
+    reach exactly here and stop: no CREATE, no ALTER, nothing that can block another session."""
+    return _schema_state(conn) == "current"
+
+
+def ensure_schema(conn: psycopg.Connection) -> None:
+    """Create the control schema if it is not already there. Safe to call concurrently.
+
+    Called at the start of EVERY run by every writer, so its steady-state cost is the thing that
+    matters: a single catalog read and no lock at all. Before #3091 it ran `CREATE TABLE IF NOT
+    EXISTS` + two `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` unconditionally, and because the ALTER
+    takes an AccessExclusiveLock whether or not the column is missing, two writers starting in the
+    same moment deadlocked -- each holding the CREATE's weaker lock while requesting the exclusive
+    one. Postgres killed them, and under ADR 0028's hard dependency that aborts the run BEFORE it
+    reads its source: on 04-Sep-2026 two of PTP's three instances did not load at all, killed by
+    the featherbase drainer's startup 27 seconds earlier. With featherbase ticking every 5 minutes
+    that was a dice-roll at every startup, fleet-wide.
+    """
+    state = _schema_state(conn)
+    if state == "current":  # @spec schema_ensured_without_locks
+        conn.rollback()   # end the read's implicit transaction; hold no locks on the way out
+        return
+    if state == "trigger_missing":
+        # Every live plane on first start after #3884 (and again after #4024). NOT the full DDL
+        # path below: its CREATE INDEX (ShareLock on control.run) then ALTERs (AccessExclusive on
+        # control.event) form a cycle with a shipper holding control.event and updating
+        # control.run -- the #3091 deadlock again, reproduced 4/4 in review. Only the triggers,
+        # lock-bounded, each created only if absent (the one already there costs a catalog read
+        # and no table lock), and each in its OWN transaction so this path never holds two table
+        # locks at once (see _TRIGGER_LOCK_TIMEOUT); a start that cannot get a lock in time, or
+        # loses a deadlock race, carries on without that trigger and a later start installs it.
+        conn.rollback()
+        for trigger, ddl in zip((t for t, _ in _NOTIFY_TRIGGERS), _NOTIFY_DDLS):
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_ADVISORY_LOCK,))
+                    cur.execute(f"SET LOCAL lock_timeout = '{_TRIGGER_LOCK_TIMEOUT}'")
+                    cur.execute(ddl)
+                conn.commit()
+            except (psycopg.errors.LockNotAvailable, psycopg.errors.DeadlockDetected) as exc:
+                conn.rollback()
+                print(f"[control_plane] trigger {trigger} not installed this start "
+                      f"({type(exc).__name__}: its table was busy > {_TRIGGER_LOCK_TIMEOUT}); "
+                      "a later start will.", flush=True)
+        return
+
+    with conn.cursor() as cur:
+        # First run, or a genuine migration. Serialize the DDL so concurrent first-runs queue
+        # instead of deadlocking; the lock is released with the transaction below.
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_ADVISORY_LOCK,))
+        cur.execute(SCHEMA_DDL)
+        # Migration for control planes created before control.event.extra existed (e.g. the
+        # live GoFrugal table): CREATE TABLE IF NOT EXISTS above won't add a column to it.
+        cur.execute("ALTER TABLE control.event ADD COLUMN IF NOT EXISTS extra JSONB")
+        # Same for control.run.extra, added for dbt (#2640): dbt's run row carries fields no
+        # extractor has -- bronze_watermark, action, dbt_rc -- and bolting five dbt-specific
+        # columns onto the table five writers share would be worse than one JSONB bag.
+        cur.execute("ALTER TABLE control.run ADD COLUMN IF NOT EXISTS extra JSONB")
+        for ddl in _NOTIFY_DDLS:  # #3884, #4024 — created only if absent, so a re-run takes no lock
+            cur.execute(ddl)
+    conn.commit()
+
+
+# --- WAL-record projection (the shipper calls apply() per record, in file order) ---
+
+def apply(cur: psycopg.Cursor, rec: dict) -> None:  # @spec shipping_idempotent
+    """Project one WAL record into Postgres. Idempotent; dispatched by `kind`."""
+    kind = rec["kind"]
+    if kind == "run_start":
+        run_extra = rec.get("extra")
+        cur.execute(
+            "INSERT INTO control.run "
+            "(run_id, extractor, mode, host, pid, started_at, status, wal_path, extra) "
+            "VALUES (%s,%s,%s,%s,%s,%s::timestamptz,%s,%s,%s) ON CONFLICT (run_id) DO NOTHING",
+            (rec["run_id"], rec["extractor"], rec.get("mode"), rec.get("host"),
+             rec.get("pid"), rec["started_at"], rec["status"], rec.get("wal_path"),
+             Json(run_extra) if run_extra is not None else None),
+        )
+    elif kind == "run_finish":
+        # Upsert: if PG was down at start (no run_start row landed), still record the run.
+        fin_extra = rec.get("extra")
+        cur.execute(
+            "INSERT INTO control.run "
+            "(run_id, extractor, started_at, finished_at, status, stop_reason, n_ok, n_err, n_skipped, extra) "
+            "VALUES (%s,%s,%s::timestamptz,%s::timestamptz,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (run_id) DO UPDATE SET "
+            "finished_at=EXCLUDED.finished_at, status=EXCLUDED.status, "  # @spec died_overwritten_by_late_finish
+            "stop_reason=EXCLUDED.stop_reason, n_ok=EXCLUDED.n_ok, n_err=EXCLUDED.n_err, "
+            "n_skipped=EXCLUDED.n_skipped, "
+            # COALESCE, not overwrite: a finish that carries no extra must never erase what
+            # run_start recorded (dbt's bronze_watermark lands at start).
+            "extra=COALESCE(EXCLUDED.extra, control.run.extra)",  # @spec run_extra_preserved_on_finish
+            (rec["run_id"], rec["extractor"], rec.get("started_at", rec["finished_at"]),
+             rec["finished_at"], rec["status"], rec.get("stop_reason"),
+             rec.get("n_ok"), rec.get("n_err"), rec.get("n_skipped"),
+             Json(fin_extra) if fin_extra is not None else None),
+        )
+    elif kind == "event":
+        extra = rec.get("extra")
+        cur.execute(
+            "INSERT INTO control.event "
+            "(extractor, run_id, seq, ran_at, entity, unit, business_date, status, "
+            " http_status, rows, source_attempts, sink_attempts, pull_ms, load_ms, error_detail, extra) "
+            "VALUES (%s,%s,%s,%s::timestamptz,%s,%s,%s::date,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (extractor, run_id, seq) DO NOTHING",
+            (rec["extractor"], rec["run_id"], rec["seq"], rec["ran_at"], rec.get("entity"),
+             rec.get("unit"), rec.get("business_date"), rec["status"], rec.get("http_status"),
+             rec.get("rows"), rec.get("source_attempts"), rec.get("sink_attempts"),
+             rec.get("pull_ms"), rec.get("load_ms"), rec.get("error_detail"),
+             Json(extra) if extra is not None else None),
+        )
+    elif kind == "budget":
+        cur.execute(
+            "INSERT INTO control.budget_usage "
+            "(run_id, extractor, budget_name, limit_val, used, remaining, hit, ran_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s::timestamptz) "
+            "ON CONFLICT (run_id, extractor, budget_name) DO UPDATE SET "  # @spec budget_recorded_every_run
+            "limit_val=EXCLUDED.limit_val, used=EXCLUDED.used, remaining=EXCLUDED.remaining, "
+            "hit=EXCLUDED.hit, ran_at=EXCLUDED.ran_at",
+            (rec["run_id"], rec["extractor"], rec["budget_name"], rec.get("limit_val"),
+             rec.get("used"), rec.get("remaining"), rec.get("hit"), rec.get("ran_at")),
+        )
+    else:
+        raise ValueError(f"unknown WAL record kind: {kind!r}")
+
+
+def apply_events_batch(cur: psycopg.Cursor, recs: list[dict]) -> None:
+    """Batch form of apply() for a homogeneous list of kind='event' records.
+
+    Same SQL and same idempotency key as the per-record path -- executemany just sends it in
+    one pipelined batch instead of one round-trip per row. Added for #2640: dbt's run_results
+    projection can carry tens of thousands of nodes in a catch-up window, and at ~250ms RTT over
+    the public proxy the per-record path turns 28k rows into two hours. executemany does it in
+    seconds, and on Railway's private network the difference is merely large.
+    """
+    if not recs:
+        return
+    bad = [r["kind"] for r in recs if r.get("kind") != "event"]
+    if bad:
+        raise ValueError(f"apply_events_batch only takes kind='event' records, got {bad[:3]}")
+    cur.executemany(
+        "INSERT INTO control.event "
+        "(extractor, run_id, seq, ran_at, entity, unit, business_date, status, "
+        " http_status, rows, source_attempts, sink_attempts, pull_ms, load_ms, error_detail, extra) "
+        "VALUES (%s,%s,%s,%s::timestamptz,%s,%s,%s::date,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+        "ON CONFLICT (extractor, run_id, seq) DO NOTHING",
+        [(r["extractor"], r["run_id"], r["seq"], r["ran_at"], r.get("entity"),
+          r.get("unit"), r.get("business_date"), r["status"], r.get("http_status"),
+          r.get("rows"), r.get("source_attempts"), r.get("sink_attempts"),
+          r.get("pull_ms"), r.get("load_ms"), r.get("error_detail"),
+          Json(r["extra"]) if r.get("extra") is not None else None)
+         for r in recs],
+    )
+
+
+# --- the liveness lease (the deterministic death-detection primitive) ---
+
+def lease_acquire(conn: psycopg.Connection, extractor: str, run_id: str, ttl_s: int) -> bool:
+    """Acquire this extractor's lease. Steal-only-if-expired: the ON CONFLICT UPDATE fires
+    *only* when the existing lease has lapsed, so a genuinely-live run is never displaced.
+    Returns True if acquired (no live prior run), False if another run holds a fresh lease.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO control.lease (extractor, run_id, lease_expires_at) "
+            "VALUES (%s, %s, now() + make_interval(secs => %s)) "
+            "ON CONFLICT (extractor) DO UPDATE SET "
+            "run_id = EXCLUDED.run_id, lease_expires_at = EXCLUDED.lease_expires_at "
+            "WHERE control.lease.lease_expires_at < now() "  # @spec lease_steal_only_if_expired
+            "RETURNING run_id",
+            (extractor, run_id, ttl_s),
+        )
+        acquired = cur.fetchone() is not None
+    conn.commit()
+    return acquired
+
+
+def lease_renew(conn: psycopg.Connection, extractor: str, run_id: str, ttl_s: int) -> bool:
+    """Push the lease forward (renewer thread). Returns False if we no longer own it."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE control.lease SET lease_expires_at = now() + make_interval(secs => %s) "
+            "WHERE extractor = %s AND run_id = %s",
+            (ttl_s, extractor, run_id),
+        )
+        ok = cur.rowcount > 0
+    conn.commit()
+    return ok
+
+
+def lease_release(conn: psycopg.Connection, extractor: str, run_id: str) -> None:
+    """Expire our lease immediately so the next run can reclaim without waiting out the TTL."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE control.lease SET lease_expires_at = now() "
+            "WHERE extractor = %s AND run_id = %s",
+            (extractor, run_id),
+        )
+    conn.commit()
+
+
+def reconcile_dead(conn: psycopg.Connection, extractor: str, run_id: str) -> int:
+    """Mark every unfinished prior run of this extractor as `died`. Safe to call only after
+    we hold the lease (⇒ no other run of this extractor is alive). The dead run's cause is
+    already in control.event via WAL replay. Returns the number reconciled."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE control.run SET status = 'died', stop_reason = 'died', "
+            "finished_at = now(), reconciled_by = %s "
+            "WHERE extractor = %s AND finished_at IS NULL AND run_id <> %s",  # @spec unfinished_prior_runs_marked_died
+            (run_id, extractor, run_id),
+        )
+        n = cur.rowcount
+    conn.commit()
+    return n
