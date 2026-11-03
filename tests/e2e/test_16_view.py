@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import cli_text
+
 
 def _forbid_sync(*args, **kwargs):
     raise AssertionError("view should not call sync_viewer_html directly")
@@ -67,7 +69,10 @@ def test_invalid_path_fails(cli, project):
     result = cli("view", str(project.root / "missing"), config=False)
 
     assert result.exit_code != 0
-    assert "does not exist" in result.output
+    # cli_text, not result.output: Typer wraps this message inside a Rich panel,
+    # and the wrap point depends on the temp path's length — so the raw assertion
+    # passed on macOS and failed on Linux CI. See helpers.cli_text.
+    assert "does not exist" in cli_text(result.output)
 
 
 def test_help_mentions_existing_directory(cli):
