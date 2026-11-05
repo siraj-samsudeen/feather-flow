@@ -17,9 +17,9 @@ from feather_cdc_postgres import cli, destination as dest_mod, manifest as mf, r
 from feather_cdc_postgres.destination import Destination, DestinationSpec
 
 TOKEN = "eyJhbGciOiJI-not-a-real-token-4426"
-REGISTRATIONS = pathlib.Path(__file__).resolve().parents[1] / "registrations"
-PROD = mf.load(str(REGISTRATIONS / "featherbase.yml"))
-DEV = mf.load(str(REGISTRATIONS / "featherbase_dev.yml"))
+REGISTRATIONS = pathlib.Path(__file__).parent / "fixtures" / "registrations"
+PROD = mf.load(str(REGISTRATIONS / "demo_app.yml"))
+DEV = mf.load(str(REGISTRATIONS / "demo_app_dev.yml"))
 
 
 class _FakeCon:
@@ -44,7 +44,7 @@ class _FakeCon:
 
 
 class _Log(list):
-    user = "featherbase_cdc_service_account"   # what `select current_user()` answers
+    user = "demo_app_cdc_service_account"   # what `select current_user()` answers
 
 
 @pytest.fixture
@@ -60,7 +60,7 @@ def connects(monkeypatch):
     return log
 
 
-def _md(monkeypatch, database="bronze_x", owner="featherbase_cdc_service_account"):
+def _md(monkeypatch, database="bronze_x", owner="demo_app_cdc_service_account"):
     monkeypatch.setenv("PG_MD_CDC_TEST_TOKEN", TOKEN)
     return Destination(DestinationSpec(kind="motherduck", database=database,
                                        token_env="PG_MD_CDC_TEST_TOKEN", owner=owner))
@@ -168,7 +168,7 @@ def _wire_runner(monkeypatch, log):
 def test_run_creates_the_database_before_it_executes(monkeypatch, connects):
     _wire_runner(monkeypatch, connects)
     assert runner.run(DEV) == 0
-    create = connects.index(("sql", 'create database if not exists "bronze_featherbase_dev"'))
+    create = connects.index(("sql", 'create database if not exists "bronze_demo_app_dev"'))
     assert connects[create - 1] == ("connect", "md:", {"motherduck_token": TOKEN})
     assert create < connects.index(("execute",))
 
@@ -177,7 +177,7 @@ def test_resnapshot_creates_the_database_before_its_runtime_tables(monkeypatch, 
     _wire_runner(monkeypatch, connects)
     with pytest.raises(RuntimeError, match="stop here"):
         runner.resnapshot(DEV, yes=True)
-    create = connects.index(("sql", 'create database if not exists "bronze_featherbase_dev"'))
+    create = connects.index(("sql", 'create database if not exists "bronze_demo_app_dev"'))
     assert create < connects.index(("ensure_runtime_tables",))
 
 
@@ -202,18 +202,18 @@ def test_a_failed_create_in_run_is_recorded_as_a_failed_tick(monkeypatch, connec
 def _dev_pointing_at(tmp_path, database: str) -> str:
     for p in REGISTRATIONS.glob("*.yml"):
         (tmp_path / p.name).write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
-    dev = tmp_path / "featherbase_dev.yml"
+    dev = tmp_path / "demo_app_dev.yml"
     dev.write_text(dev.read_text(encoding="utf-8").replace(
-        "database: bronze_featherbase_dev", f"database: {database}"), encoding="utf-8")
+        "database: bronze_demo_app_dev", f"database: {database}"), encoding="utf-8")
     return str(dev)
 
 
 def _prod_db_in_dev(tmp_path):
     """A dev registration whose (validly _dev-suffixed) database is also a production one's."""
-    path = _dev_pointing_at(tmp_path, "bronze_featherbase_dev")
-    prod = tmp_path / "featherbase.yml"
+    path = _dev_pointing_at(tmp_path, "bronze_demo_app_dev")
+    prod = tmp_path / "demo_app.yml"
     prod.write_text(prod.read_text(encoding="utf-8").replace(
-        "database: bronze_featherbase\n", "database: bronze_featherbase_dev\n"), encoding="utf-8")
+        "database: bronze_demo_app\n", "database: bronze_demo_app_dev\n"), encoding="utf-8")
     return mf.load(path)
 
 
@@ -228,7 +228,7 @@ def test_a_refused_registration_creates_nothing(entry, case, tmp_path, monkeypat
     elif case == "production_database":
         m = _prod_db_in_dev(tmp_path)
     else:
-        m = mf.load(_dev_pointing_at(tmp_path, '"bronze_featherbase?x=1_dev"'))
+        m = mf.load(_dev_pointing_at(tmp_path, '"bronze_demo_app?x=1_dev"'))
     call = (lambda: runner.run(m)) if entry == "run" else (lambda: runner.resnapshot(m, yes=True))
     with pytest.raises(SystemExit):
         call()
@@ -242,11 +242,11 @@ def test_a_refused_registration_creates_nothing(entry, case, tmp_path, monkeypat
 def test_validate_and_plan_never_create(command, monkeypatch, connects):
     """The read-only commands never construct a destination connection at all. The source DSN is
     unset here; the PG-backed proof that `plan` mutates nothing is test_cli_plan_pg.py."""
-    monkeypatch.delenv("FEATHERBASE_PG_DSN", raising=False)
+    monkeypatch.delenv("DEMO_APP_PG_DSN", raising=False)
     monkeypatch.setenv("MOTHERDUCK_TOKEN", TOKEN)
     called = []
     monkeypatch.setattr(Destination, "ensure_database", lambda self: called.append(1))
-    cli.main([command, str(REGISTRATIONS / "featherbase_dev.yml")])
+    cli.main([command, str(REGISTRATIONS / "demo_app_dev.yml")])
     assert called == [] and connects == []
 
 
@@ -264,7 +264,7 @@ def test_a_mismatched_owner_names_both_accounts_and_never_the_token(monkeypatch,
     with pytest.raises(dest_mod.WrongOwner) as info:
         _md(monkeypatch).verify_owner()
     text = str(info.value)
-    assert "featherbase_cdc_service_account" in text and "dbt_dev_service_account" in text
+    assert "demo_app_cdc_service_account" in text and "dbt_dev_service_account" in text
     assert TOKEN not in text
 
 
@@ -294,7 +294,7 @@ def test_run_with_the_declared_owner_proceeds_to_create_and_execute(monkeypatch,
     _wire_runner(monkeypatch, connects)
     assert runner.run(DEV) == 0
     check = connects.index(("sql", "select current_user()"))
-    create = connects.index(("sql", 'create database if not exists "bronze_featherbase_dev"'))
+    create = connects.index(("sql", 'create database if not exists "bronze_demo_app_dev"'))
     assert check < create < connects.index(("execute",))
 
 
@@ -306,7 +306,7 @@ def test_a_token_for_another_account_refuses_before_any_create_or_write(entry, m
     with pytest.raises(SystemExit) as info:
         call()
     text = str(info.value)
-    assert "featherbase_cdc_service_account" in text and "dbt_dev_service_account" in text
+    assert "demo_app_cdc_service_account" in text and "dbt_dev_service_account" in text
     assert TOKEN not in text
     assert _creates(connects) == []
     assert not any(e[0] in ("execute", "ensure_runtime_tables", "event", "finish") for e in connects)
@@ -325,24 +325,24 @@ def test_an_unreachable_owner_check_is_recorded_and_creates_nothing(monkeypatch,
     assert ("event", "owner_check") in connects and ("execute",) not in connects
 
 
-@pytest.mark.parametrize("owner", [None, "", "featherbase cdc", "x;drop"])
+@pytest.mark.parametrize("owner", [None, "", "demo app cdc", "x;drop"])
 def test_validation_requires_a_well_formed_owner(owner, tmp_path):
-    raw = (REGISTRATIONS / "featherbase_dev.yml").read_text(encoding="utf-8")
-    line = "  owner: featherbase_cdc_service_account\n"
+    raw = (REGISTRATIONS / "demo_app_dev.yml").read_text(encoding="utf-8")
+    line = "  owner: demo_app_cdc_service_account\n"
     assert line in raw
     new = "" if owner is None else f"  owner: {owner!r}\n"
-    path = tmp_path / "featherbase_dev.yml"
+    path = tmp_path / "demo_app_dev.yml"
     path.write_text(raw.replace(line, new), encoding="utf-8")
     codes = {p.code for p in mf.errors(mf.validate_static(mf.load(str(path))))}
     assert "destination_owner" in codes
 
 
-def test_every_shipped_registration_declares_its_registry_owner():
-    """Owners as recorded in seeds layer_access_registry.csv (the MotherDuck username)."""
+def test_every_registration_declares_the_account_its_token_must_be():
+    """`destination.owner` is not optional and not inferred: a deployer records the MotherDuck
+    username in the manifest, and the first connection of run/resnapshot refuses any other."""
     owners = {mf.load(str(p)).source_id: mf.load(str(p)).destination.owner
               for p in sorted(REGISTRATIONS.glob("*.yml"))}
     assert owners == {"control_plane": "control_plane_cdc_service_account",
-                      "featherbase": "featherbase_cdc_service_account",
-                      "featherbase_dev": "featherbase_cdc_service_account",
-                      "featherbase_staging": "featherbase_cdc_service_account",
-                      "petpooja_webhook": "petpooja_extract"}
+                      "demo_app": "demo_app_cdc_service_account",
+                      "demo_app_dev": "demo_app_cdc_service_account",
+                      "demo_app_staging": "demo_app_cdc_service_account"}

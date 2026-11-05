@@ -20,9 +20,6 @@ from . import discovery, generate_dbt, manifest as mf
 from .adapters import AdapterRelation, get as get_adapter, known as known_adapters
 from .selectors import CompiledPlan, compile as compile_selection
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-
-
 def _env(name: str) -> Optional[str]:
     val = os.environ.get(name)
     return val or None
@@ -153,7 +150,7 @@ def cmd_generate_dbt(args) -> int:
     if plan is None or mf.errors(problems):
         _emit({"problems": [p.__dict__ for p in problems]}, _problem_lines(problems), args.json)
         return 1
-    out = pathlib.Path(args.out) if args.out else generate_dbt.default_out_path(m, REPO_ROOT)
+    out = pathlib.Path(args.out)
     generate_dbt.write(m, plan, out)
     _emit(
         {"out": str(out), "tables": len(plan.relations)},
@@ -203,7 +200,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("generate-dbt", help="write dbt source declarations for this registration")
     s.add_argument("manifest")
-    s.add_argument("--out", help="output path (default dbt_runner/dbt/models/<source_id>/_<source_id>_sources.yml)")
+    # REQUIRED, and it has no default on purpose: the default used to be
+    # `<repo root>/dbt_runner/dbt/models/<source_id>/...`, resolved four parents up from this
+    # file. That is one warehouse's directory layout, and a runtime installed from a wheel sits
+    # in site-packages, where four parents up is somebody's virtualenv. The caller owns the path.
+    s.add_argument("--out", required=True, help="output path for the generated sources YAML")
     s.set_defaults(func=cmd_generate_dbt)
 
     s = sub.add_parser("run", help="reconcile, snapshot and drain one tick")

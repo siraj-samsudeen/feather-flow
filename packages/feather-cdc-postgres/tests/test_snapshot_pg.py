@@ -29,7 +29,11 @@ def test_set_transaction_snapshot_must_precede_closing_the_exporter(seeded, name
     handle.close()
     with psycopg.connect(seeded) as conn:
         conn.execute("begin isolation level repeatable read")
-        with pytest.raises(psycopg.errors.UndefinedObject):
+        # Two SQLSTATEs for one fact. PG 17+ answers 42704 undefined_object ("the snapshot is
+        # gone"); PG 16 answers 22023 invalid_parameter_value ("that is not a snapshot id"),
+        # because the exporting backend's slot number is what makes the id parseable at all.
+        # Either way the snapshot did not survive the exporter, which is the ordering under test.
+        with pytest.raises((psycopg.errors.UndefinedObject, psycopg.errors.InvalidParameterValue)):
             conn.execute(f"set transaction snapshot '{handle.snapshot_name}'")
 
 
@@ -108,7 +112,7 @@ def test_column_types_come_from_the_catalog_not_from_the_values(seeded, names):
     assert hints["payload"]["data_type"] == "json"
     assert hints["ts"]["data_type"] == "timestamp" and hints["ts"]["timezone"] is True
     # int4 and int8 must compile IDENTICALLY here and on the CDC path — the live
-    # BIGINT-vs-INTEGER split in bronze_featherbase came from two different mappers.
+    # BIGINT-vs-INTEGER split in bronze_demo_app came from two different mappers.
     assert hints["id"]["data_type"] == hints["big"]["data_type"] == "bigint"
     from pg_replication.decoders import ColumnType
     from pg_replication.schema_types import _to_dlt_column_schema

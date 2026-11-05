@@ -30,7 +30,7 @@ def test_type_matrix(oid, typmod, dest, mapping):
 
 
 def test_the_integer_family_is_pinned_to_bigint_not_integer():
-    """Catches the live discrepancy in #3079 Appendix A: bronze_featherbase.public.comment.position
+    """Catches the live discrepancy in #3079 Appendix A: bronze_demo_app.public.comment.position
     is BIGINT while its staging twin is INTEGER, because dlt renders precision 32 as INTEGER.
     Dropping precision makes the snapshot and CDC paths agree, widening rather than narrowing."""
     for oid in (21, 23, 20, 26):

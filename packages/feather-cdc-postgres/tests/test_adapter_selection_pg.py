@@ -1,9 +1,9 @@
-"""The shipped Featherbase registration against the live catalog shape (#3079 D-13, #3894).
+"""The Featherbase discovery adapter against a real catalog shape.
 
-Two-way selection (Siraj, 05-Sep-2026): every user-created table flows with no manifest edit;
-Featherbase's own platform tables flow only when named. Compiled against the fixture (the
-live `table_def` rows, `"system"` flag included) the desired set must be exactly 14 relations
-in four bronze schemas — and the navigation, scheduler and `version` tables must NOT be in it.
+Two-way selection: every user-created table flows with no manifest edit; the platform's own
+tables flow only when named. Compiled against the fixture catalog (real `table_def` rows,
+`"system"` flag included) the set must be exactly 14 relations in four bronze schemas — and the
+navigation, scheduler and `version` tables must NOT be in it.
 """
 from __future__ import annotations
 
@@ -17,9 +17,9 @@ from feather_cdc_postgres import cli, manifest as mf, runner
 from feather_cdc_postgres.adapters import NAMED_SYSTEM, USER_CREATED
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "featherbase_namespaced_schema.sql"
-MANIFEST = pathlib.Path(__file__).resolve().parents[1] / "registrations" / "featherbase.yml"
-# #4340: the dev mirror must compile the same set from the same catalog shape.
-DEV_MANIFEST = MANIFEST.with_name("featherbase_dev.yml")
+MANIFEST = pathlib.Path(__file__).parent / "fixtures" / "registrations" / "demo_app.yml"
+# the dev mirror must compile the same set from the same catalog shape.
+DEV_MANIFEST = MANIFEST.with_name("demo_app_dev.yml")
 
 EXPECTED = {
     "catalog": {"table_def", "column_def"},
@@ -39,7 +39,7 @@ def featherbase_db(fresh_db, monkeypatch):
         c.execute(FIXTURE.read_text(encoding="utf-8"))
         assert c.execute('select count(*) from featherbase.table_def where "system"').fetchone()[0] == 16
         assert c.execute('select count(*) from featherbase.table_def where not "system"').fetchone()[0] == 2
-    monkeypatch.setenv("FEATHERBASE_PG_DSN", fresh_db)
+    monkeypatch.setenv("DEMO_APP_PG_DSN", fresh_db)
     return fresh_db
 
 
@@ -140,9 +140,11 @@ def test_an_identity_table_named_in_system_tables_fails_validate_not_replicates(
         c.execute('insert into featherbase.table_def (name, module, kind, "system") '
                   "values (%s, 'Core', 'table', true) on conflict (name) do nothing",
                   (table.replace("_", " ").title(),))
-    text = MANIFEST.read_text(encoding="utf-8").replace(
-        "        - identifier_system ", f"        - {table}\n        - identifier_system ")
-    path = tmp_path / "featherbase.yml"
+    anchor = "        - identifier_system\n"
+    text = MANIFEST.read_text(encoding="utf-8")
+    assert anchor in text, "the fixture moved; this test edits it by line"
+    text = text.replace(anchor, f"        - {table}\n" + anchor)
+    path = tmp_path / "demo_app.yml"
     path.write_text(text, encoding="utf-8")
     plan, problems, _ = cli._compile(mf.load(str(path)), with_publication=False)
     assert f"featherbase.{table}" in plan.denied_hits

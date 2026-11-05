@@ -1,8 +1,8 @@
-"""The staging Featherbase registration is a bounded copy of production's, like dev's (#4617).
+"""A `staging` registration is bounded the same way a `dev` one is.
 
-Staging is where business users validate master data before production (#4588). Its mirror may
-select what dev selects; nothing else may differ from production, and nothing may let staging
-data reach a production or dev database, slot or alarm. No database needed.
+Staging is where business users validate master data before production. Its mirror may select
+what dev selects; nothing else may differ from production, and nothing may let staging data
+reach a production or dev database, slot or alarm. No database needed.
 """
 from __future__ import annotations
 
@@ -11,12 +11,12 @@ import pathlib
 import pytest
 
 from feather_cdc_postgres import manifest as mf, runner
-from test_featherbase_dev_registration import _without_selection_and_identity
+from test_dev_registration import _without_selection_and_identity
 
-REGISTRATIONS = pathlib.Path(__file__).resolve().parents[1] / "registrations"
-PROD = mf.load(str(REGISTRATIONS / "featherbase.yml"))
-DEV = mf.load(str(REGISTRATIONS / "featherbase_dev.yml"))
-STAGING = mf.load(str(REGISTRATIONS / "featherbase_staging.yml"))
+REGISTRATIONS = pathlib.Path(__file__).parent / "fixtures" / "registrations"
+PROD = mf.load(str(REGISTRATIONS / "demo_app.yml"))
+DEV = mf.load(str(REGISTRATIONS / "demo_app_dev.yml"))
+STAGING = mf.load(str(REGISTRATIONS / "demo_app_staging.yml"))
 
 
 def test_staging_validates_and_is_marked_staging():
@@ -26,7 +26,7 @@ def test_staging_validates_and_is_marked_staging():
 
 def test_staging_writes_only_its_own_database(monkeypatch):
     monkeypatch.delenv("PG_MD_CDC_DESTINATION", raising=False)
-    assert runner._destination(STAGING).spec.database == "bronze_featherbase_staging"
+    assert runner._destination(STAGING).spec.database == "bronze_demo_app_staging"
     assert STAGING.destination.database not in {PROD.destination.database, DEV.destination.database}
 
 
@@ -43,7 +43,7 @@ def test_staging_matches_production_outside_its_selection():
 
 
 def test_staging_reads_the_same_env_names_as_production():
-    assert (STAGING.source.dsn_env, STAGING.destination.token_env) == ("FEATHERBASE_PG_DSN", "MOTHERDUCK_TOKEN")
+    assert (STAGING.source.dsn_env, STAGING.destination.token_env) == ("DEMO_APP_PG_DSN", "MOTHERDUCK_TOKEN")
 
 
 @pytest.mark.parametrize("railway_env,refused", [

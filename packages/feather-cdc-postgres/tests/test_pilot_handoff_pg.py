@@ -26,7 +26,7 @@ from pg_replication import replication_resource
 from pg_replication.helpers import init_replication
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "featherbase_public_schema.sql"
-MANIFEST = pathlib.Path(__file__).resolve().parents[1] / "registrations" / "featherbase.yml"
+MANIFEST = pathlib.Path(__file__).parent / "fixtures" / "registrations" / "demo_app.yml"
 
 
 def q(dsn, sql, *args):
@@ -65,7 +65,7 @@ def test_the_pilot_hands_its_slot_and_destination_to_the_runtime_without_re_snap
         featherbase_db, names, duckdb_path, tmp_path, monkeypatch):
     dsn = featherbase_db
     monkeypatch.setenv("DLT_DATA_DIR", str(tmp_path / "dlt"))
-    monkeypatch.setenv("FEATHERBASE_PG_DSN", dsn)
+    monkeypatch.setenv("DEMO_APP_PG_DSN", dsn)
     slot, pub = names["slot"], names["publication"]
     tables = pilot_tables(dsn)
     assert len(tables) > 40, "the fixture must carry the real catalog, not a stub"
@@ -127,7 +127,7 @@ def test_the_pilot_hands_its_slot_and_destination_to_the_runtime_without_re_snap
     assert len(plan.relations) == 12
     assert {r.target_schema for r in plan.relations} == {"public"}
 
-    destination = Destination(DestinationSpec(kind="duckdb", database="bronze_featherbase",
+    destination = Destination(DestinationSpec(kind="duckdb", database="bronze_demo_app",
                                               path=duckdb_path,
                                               pipelines_dir=str(tmp_path / "dlt2")))
     cfg = runner.config_from_manifest(m, dsn=dsn, destination=destination)

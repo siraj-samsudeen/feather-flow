@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import pathlib
 
+import pytest
 import yaml
 
-from feather_cdc_postgres import generate_dbt, selectors as sel
+from feather_cdc_postgres import cli, generate_dbt, selectors as sel
 from feather_cdc_postgres.adapters import NAMED_SYSTEM, USER_CREATED, AdapterRelation
 from feather_cdc_postgres.discovery import SourceColumn, SourceRelation
 from feather_cdc_postgres.manifest import load, parse
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
-REGISTRATIONS = pathlib.Path(__file__).resolve().parents[1] / "registrations"
+REGISTRATIONS = pathlib.Path(__file__).parent / "fixtures" / "registrations"
 
 PLATFORM_TABLES = ["column_def", "comment", "has_role", "role", "table_def", "user"]
 APP_TABLES = ["task"]
@@ -26,7 +26,7 @@ def _rel(schema, table):
 
 
 def _featherbase_plan():
-    m = load(str(REGISTRATIONS / "featherbase.yml"))
+    m = load(str(REGISTRATIONS / "demo_app.yml"))
     discovered = (
         [_rel("featherbase", t) for t in PLATFORM_TABLES]
         + [_rel("tasker", t) for t in APP_TABLES]
@@ -53,15 +53,15 @@ def test_generated_featherbase_file_has_one_source_per_target_schema():
     m, plan = _featherbase_plan()
     doc = yaml.safe_load(generate_dbt.render(m, plan))
     assert [s["name"] for s in doc["sources"]] == [
-        "bronze_featherbase__access", "bronze_featherbase__activity",
-        "bronze_featherbase__application", "bronze_featherbase__catalog"]
+        "bronze_demo_app__access", "bronze_demo_app__activity",
+        "bronze_demo_app__application", "bronze_demo_app__catalog"]
     assert {s["schema"] for s in doc["sources"]} == {"access", "activity", "application", "catalog"}
-    assert {s["database"] for s in doc["sources"]} == {"bronze_featherbase"}
+    assert {s["database"] for s in doc["sources"]} == {"bronze_demo_app"}
     by = _tables_by_source(doc)
-    assert set(by["bronze_featherbase__catalog"]) == {"table_def", "column_def", "_dlt_loads"}
-    assert set(by["bronze_featherbase__access"]) == {"user", "role", "has_role", "_dlt_loads"}
-    assert set(by["bronze_featherbase__activity"]) == {"comment", "_dlt_loads"}
-    assert set(by["bronze_featherbase__application"]) == {"task", "_dlt_loads"}
+    assert set(by["bronze_demo_app__catalog"]) == {"table_def", "column_def", "_dlt_loads"}
+    assert set(by["bronze_demo_app__access"]) == {"user", "role", "has_role", "_dlt_loads"}
+    assert set(by["bronze_demo_app__activity"]) == {"comment", "_dlt_loads"}
+    assert set(by["bronze_demo_app__application"]) == {"task", "_dlt_loads"}
     every = {t for tables in by.values() for t in tables}
     assert set(PLATFORM_TABLES + APP_TABLES) <= every
 
@@ -69,8 +69,8 @@ def test_generated_featherbase_file_has_one_source_per_target_schema():
 def test_meta_blocks_carry_class_module_and_source_identity():
     m, plan = _featherbase_plan()
     by = _tables_by_source(yaml.safe_load(generate_dbt.render(m, plan)))
-    app, cat, act = (by["bronze_featherbase__application"], by["bronze_featherbase__catalog"],
-                     by["bronze_featherbase__activity"])
+    app, cat, act = (by["bronze_demo_app__application"], by["bronze_demo_app__catalog"],
+                     by["bronze_demo_app__activity"])
     assert app["task"]["meta"]["table_class"] == "application"
     assert app["task"]["meta"]["source_schema"] == "tasker"
     assert cat["table_def"]["meta"]["table_class"] == "source_system"
@@ -91,17 +91,17 @@ def test_dlt_loads_keeps_the_24h_warn_only_freshness_backstop():
 
 
 def test_adapter_description_wins_over_the_default():
-    m = load(str(REGISTRATIONS / "featherbase.yml"))
+    m = load(str(REGISTRATIONS / "demo_app.yml"))
     plan = sel.compile(m, [_rel("public", "comment")], [AdapterRelation("public", "comment", "Core", "Threaded notes.")])
     doc = yaml.safe_load(generate_dbt.render(m, plan))
     assert doc["sources"][0]["tables"][0]["description"] == "Threaded notes."
 
 
 def test_default_description_names_the_module():
-    m = load(str(REGISTRATIONS / "featherbase.yml"))
+    m = load(str(REGISTRATIONS / "demo_app.yml"))
     plan = sel.compile(m, [_rel("public", "comment")], [AdapterRelation("public", "comment", "Core", None)])
     doc = yaml.safe_load(generate_dbt.render(m, plan))
-    assert doc["sources"][0]["tables"][0]["description"] == "Featherbase native table (module: Core)."
+    assert doc["sources"][0]["tables"][0]["description"] == "Demo App native table (module: Core)."
 
 
 def test_two_target_schemas_produce_two_disambiguated_sources():
@@ -117,7 +117,7 @@ def test_two_target_schemas_produce_two_disambiguated_sources():
             "api_version": "pg-md-cdc/v1",
             "source_id": "featherbase",
             "source": {"dsn_env": "DEMO_PG_DSN", "include": {"schemas": ["*"]}},
-            "destination": {"token_env": "MOTHERDUCK_TOKEN", "owner": "demo_cdc_service_account", "database": "bronze_featherbase"},
+            "destination": {"token_env": "MOTHERDUCK_TOKEN", "owner": "demo_cdc_service_account", "database": "bronze_demo_app"},
             "replication": {"slot": "s", "publication": "p"},
             "control": {"extractor": "featherbase"},
         }
@@ -125,7 +125,7 @@ def test_two_target_schemas_produce_two_disambiguated_sources():
     plan2 = sel.compile(m2, [_rel("a", "t"), _rel("b", "t")], None)
     doc2 = yaml.safe_load(generate_dbt.render(m2, plan2))
     names = [s["name"] for s in doc2["sources"]]
-    assert names == ["bronze_featherbase__a", "bronze_featherbase__b"] and len(set(names)) == 2
+    assert names == ["bronze_demo_app__a", "bronze_demo_app__b"] and len(set(names)) == 2
 
 
 def test_control_plane_tables_classify_as_warehouse_control():
@@ -138,12 +138,16 @@ def test_control_plane_tables_classify_as_warehouse_control():
 
 
 def test_output_is_valid_yaml_even_with_quotes_in_a_description():
-    m = load(str(REGISTRATIONS / "featherbase.yml"))
+    m = load(str(REGISTRATIONS / "demo_app.yml"))
     plan = sel.compile(m, [_rel("public", "comment")], [AdapterRelation("public", "comment", "Core", 'a "quoted" note')])
     doc = yaml.safe_load(generate_dbt.render(m, plan))
     assert doc["sources"][0]["tables"][0]["description"] == "a 'quoted' note"
 
 
-def test_default_out_path():
-    m = load(str(REGISTRATIONS / "featherbase.yml"))
-    assert generate_dbt.default_out_path(m, REPO) == REPO / "dbt_runner/dbt/models/featherbase/_featherbase_sources.yml"
+def test_the_output_path_is_the_callers_and_has_no_default():
+    """It used to default to `<four parents up>/dbt_runner/dbt/models/<source_id>/...` — one
+    warehouse's directory layout, baked into a runtime that now installs from a wheel into
+    site-packages. `--out` is required; there is nothing left to default to."""
+    assert not hasattr(generate_dbt, "default_out_path")
+    with pytest.raises(SystemExit):
+        cli.main(["generate-dbt", str(REGISTRATIONS / "demo_app.yml")])

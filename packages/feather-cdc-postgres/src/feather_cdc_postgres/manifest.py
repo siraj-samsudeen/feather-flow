@@ -567,7 +567,7 @@ def owner_problem(owner: str) -> Optional[str]:
     """Why `owner` is not a usable MotherDuck account name, or None (#4427)."""
     if not owner:
         return ("destination.owner is required: the MotherDuck account the token must sign in "
-                "as (dbt_runner/dbt/seeds/access_control/layer_access_registry.csv)")
+                "as, as recorded in your warehouse's layer access registry")
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@+-]*", owner) or len(owner) > 255:
         return f"destination.owner must be a MotherDuck account name, got {owner!r}"
     return None

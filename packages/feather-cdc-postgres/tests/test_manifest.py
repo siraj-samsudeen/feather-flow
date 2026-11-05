@@ -7,7 +7,7 @@ import pytest
 
 from feather_cdc_postgres import manifest as mf
 
-REGISTRATIONS = pathlib.Path(__file__).resolve().parents[1] / "registrations"
+REGISTRATIONS = pathlib.Path(__file__).parent / "fixtures" / "registrations"
 
 BASE = {
     "api_version": "pg-md-cdc/v1",
@@ -113,8 +113,8 @@ def test_pipeline_name_defaults_per_schema_and_honours_the_override():
     assert mf.pipeline_name(_m(destination={"pipeline_name": "featherbase_cdc"}), "public") == "featherbase_cdc"
 
 
-@pytest.mark.parametrize("name", ["featherbase", "featherbase_dev", "control_plane"])
-def test_shipped_registrations_validate_with_zero_errors(name):
+@pytest.mark.parametrize("name", ["demo_app", "demo_app_dev", "control_plane"])
+def test_the_fixture_registrations_validate_with_zero_errors(name):
     m = mf.load(str(REGISTRATIONS / f"{name}.yml"))
     problems = mf.validate_static(m)
     assert [p for p in problems if p.severity == "error"] == []
@@ -183,11 +183,11 @@ def test_a_pinned_pipeline_name_cannot_serve_several_target_schemas():
     assert "pipeline_name_ambiguous" in _codes(problems, "error")
 
 
-def test_the_featherbase_registration_is_a_clean_run_with_per_table_targets():
-    """The pilot's `pipeline_name: featherbase_cdc` pin is gone (the cutover is a clean run and
-    there are several datasets now); the three named groups route to their own schemas and
-    everything else — every user-created table — falls back to `application`."""
-    m = mf.load(str(REGISTRATIONS / "featherbase.yml"))
+def test_a_registration_with_per_table_targets_pins_no_pipeline_name():
+    """Several target schemas means several dlt pipelines, so `pipeline_name` must be unset; the
+    three named groups route to their own schemas and everything else — every user-created
+    table — falls back to `application`."""
+    m = mf.load(str(REGISTRATIONS / "demo_app.yml"))
     assert m.destination.pipeline_name is None
     assert m.destination.schema_mapping == "preserve_source"
     assert m.source.discovery.options["schema"] == "featherbase"
@@ -203,8 +203,8 @@ def test_the_featherbase_registration_is_a_clean_run_with_per_table_targets():
                       "person": "access", "identifier_system": "access", "role": "access", "has_role": "access", "permission": "access",
                       "data_scope": "access", "share": "access", "activity_log": "activity",
                       "user_event": "activity", "comment": "activity"}
-    # every named table is routed; `user` keeps its rule only as the RETIRED name (#4338), so
-    # WAL written before featherbase 0101 renamed it still lands in the frozen access.user
+    # every named table is routed; `user` keeps its rule only as the RETIRED name, so WAL
+    # written before the platform renamed it still lands in the frozen access.user copy
     assert set(routed) == set(m.source.discovery.options["system_tables"]) | {"user"}
     assert "user" not in m.source.discovery.options["system_tables"]
     assert m.destination.target_schema("tasker", "anything_the_app_made") == "application"
@@ -248,8 +248,8 @@ def test_an_unknown_key_in_the_deny_block_is_still_refused():
         _m(source={"dsn_env": "DEMO_PG_DSN", "deny": {"tables": [], "colums": {}}})
 
 
-def test_the_shipped_featherbase_registration_denies_the_password_hash():
-    m = mf.load(str(REGISTRATIONS / "featherbase.yml"))
+def test_a_registration_can_withhold_a_column_under_both_names_of_a_renamed_table():
+    m = mf.load(str(REGISTRATIONS / "demo_app.yml"))
     assert m.source.deny_columns["featherbase.person"] == ["password_hash"]
     assert m.source.deny_columns["featherbase.user"] == ["password_hash"]
     assert _codes(mf.validate_static(m), "error") == set()

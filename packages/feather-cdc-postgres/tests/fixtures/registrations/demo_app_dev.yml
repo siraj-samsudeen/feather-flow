@@ -1,0 +1,108 @@
+# TEST FIXTURE — the `dev` sibling of demo_app.yml (see that file's header first).
+#
+# A deliberate copy, because dev LEADS production: a release reaches dev first, so this file's
+# SELECTION (system_tables, table_schemas) may change before production's. Everything else must
+# match production, and every identity key — source_id, database, slot, publication, extractor —
+# must differ from every other registration. test_dev_registration.py enforces both, and that
+# this deny list covers production's.
+api_version: pg-md-cdc/v1
+source_id: demo_app_dev
+environment: dev
+
+source:
+  dsn_env: DEMO_APP_PG_DSN
+  include:
+    # The adapter is the allow-list: platform tables live in `featherbase`, while each installed
+    # app can own its physical schema (`tasker` here). Relations that are not catalog-declared
+    # cannot enter the compiled set at all.
+    schemas: ["*"]
+  exclude:
+    tables:
+      # persist_snapshots leaves these in the SOURCE schema; never replicate them.
+      - "public._dlt_*"
+  deny:
+    tables:
+      # Credential/PII tables. Not catalog-declared, so the adapter never offers them — this is
+      # the tripwire that makes a future catalog change fail `validate` instead of leaking.
+      - "featherbase.access_token"
+      - "featherbase.password_reset"
+      - "featherbase.user_settings"
+      - "featherbase.sign_in_identity"
+      - "featherbase.person_id_map"
+      - "featherbase.service_account"
+      - "featherbase.person_identifier"
+      - "featherbase.person_identifier_fingerprint"
+      - "featherbase.person_merge"
+    columns:
+      # Never leaves the CDC process: dropped from the baseline select list, from every decoded
+      # record and from the dlt hints; a copy at the destination fails the run. NOT a publication
+      # column list — under replica_identity: full that list must name every column, or every
+      # UPDATE/DELETE of the table fails at the source.
+      "featherbase.person": [password_hash]
+      # The frozen pre-rename copy: projects any queued WAL still written under the old name.
+      "featherbase.user": [password_hash]
+  discovery:
+    adapter: featherbase
+    options:
+      schema: featherbase
+      modules: null          # null = every module; a list narrows and DROPS the rest from the pub
+      # The two-way rule: every user-created table (`table_def."system" = false`) flows with no
+      # edit here; the platform's own tables flow ONLY when named below. Navigation (home_page*),
+      # the scheduler (background_job, job_execution) and `version` are deliberately out.
+      system_tables:
+        - table_def
+        - column_def
+        - person
+        - identifier_system
+        - role
+        - has_role
+        - permission
+        - data_scope
+        - share
+        - activity_log
+        - user_event
+        - comment
+
+destination:
+  token_env: MOTHERDUCK_TOKEN
+  # The MotherDuck account the token must sign in as; run/resnapshot refuse otherwise.
+  owner: demo_app_cdc_service_account
+  database: bronze_demo_app_dev
+  schema_mapping: preserve_source
+  # Per-table bronze schemas, first match wins. Platform tables live in `featherbase`; app tables
+  # retain their physical source schema until this final domain routing step.
+  table_schemas:
+    - {match: "featherbase.table_def", schema: catalog}
+    - {match: "featherbase.column_def", schema: catalog}
+    # `user` is RETIRED (renamed to `person`). The rule stays so WAL written under the old name
+    # before the rename lands in the frozen access.user copy, not in `application`.
+    - {match: "featherbase.user", schema: access}
+    - {match: "featherbase.person", schema: access}
+    - {match: "featherbase.identifier_system", schema: access}
+    - {match: "featherbase.role", schema: access}
+    - {match: "featherbase.has_role", schema: access}
+    - {match: "featherbase.permission", schema: access}
+    - {match: "featherbase.data_scope", schema: access}
+    - {match: "featherbase.share", schema: access}
+    - {match: "featherbase.activity_log", schema: activity}
+    - {match: "featherbase.user_event", schema: activity}
+    - {match: "featherbase.comment", schema: activity}
+    # Adapter-selected relations not named above are catalog-declared app/user tables.
+    - {match: "*.*", schema: application}
+  retirement_policy: freeze
+
+replication:
+  slot: demo_app_dev_cdc_slot
+  publication: demo_app_dev_cdc_pub
+  cadence_minutes: 5
+  tables_without_key: reject
+  # Unchanged TOASTed values only ride the WAL under FULL; without it a large unchanged column is
+  # undecodable on UPDATE. Cost: the whole old row is written on every UPDATE/DELETE.
+  replica_identity: full
+  slot_loss_policy: resnapshot
+  target_batch_size: 1000
+
+control:
+  extractor: demo_app_dev
+  availability_policy: pause_if_control_unreachable
+  event_durability: direct_postgres
