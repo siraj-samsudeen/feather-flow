@@ -46,22 +46,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 3.10 is advertised (requires-python ">=3.10" + a 3.10 classifier) but
-          # is NOT green: 22 failed / 1028 passed / 15 skipped, all of them
-          # `tests/unit/sources/test_sqlserver.py` raising
-          # `AttributeError: module 'feather_flow.sources' has no attribute
-          # 'sqlserver'`. That file passes alone on 3.10 and fails when
-          # `tests/unit/sources/` runs as a directory, so it is import-order
-          # pollution between test modules, not a 3.10 language incompatibility.
+          # 3.12 and 3.13 only, since #85. 3.10 was advertised but never green
+          # (22 failures from import-order pollution in tests/unit/sources), and
+          # the floor was raised rather than the pollution fixed.
           #
-          # Non-blocking rather than removed: dropping a published PyPI support
-          # claim is the owner's call. Non-blocking rather than required-and-red:
-          # a check that is always red trains people to ignore every check (#83).
-          # Delete `experimental` to promote it once the pollution is fixed.
-          - python-version: "3.10"
-            experimental: true
-          - python-version: "3.11"
-            experimental: false
+          # 3.12 is the FLOOR and must stay tested: every service in
+          # JeyaramaGroup/data-warehouse that consumes `feather-control-plane`
+          # declares `>=3.12`, and that repo is capped `>=3.12,<3.13`. Dropping
+          # 3.12 here would mean publishing a package nobody downstream can
+          # install, untested.
+          #
+          # 3.14 is the CEILING: `ssl.PROTOCOL_TLSv1` was removed, so
+          # `mysql-connector-python` cannot import and pytest cannot collect.
+          # That is a feather-flow-core limit — the control-plane member passes
+          # on 3.14 — so revisit when that dependency does.
           - python-version: "3.12"
             experimental: false
           - python-version: "3.13"
