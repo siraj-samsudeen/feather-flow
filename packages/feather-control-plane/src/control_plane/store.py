@@ -295,6 +295,20 @@ def ensure_schema(conn: psycopg.Connection) -> None:
 
 # --- WAL-record projection (the shipper calls apply() per record, in file order) ---
 
+class RunIdClash(ValueError):
+    """A run record met a `control.run` row of the same run_id owned by another extractor."""
+
+
+def _refuse_other_extractors_run(cur: psycopg.Cursor, rec: dict) -> None:  # @spec run_id_clash_refused
+    """Raise, rolling the shipper's transaction back, rather than drop this run's start or fold
+    its finish into another extractor's row: both hid a finished GoFrugal load from the build gate
+    (#4614). The record stays in the WAL, so nothing is lost."""
+    cur.execute("SELECT extractor FROM control.run WHERE run_id = %s", (rec["run_id"],))
+    row = cur.fetchone()
+    if row is not None and row[0] != rec["extractor"]:
+        raise RunIdClash(f"run_id {rec['run_id']!r} of {rec['extractor']!r} is already "
+                         f"{row[0]!r}'s run; refusing to {rec['kind']} over it")
+
 def apply(cur: psycopg.Cursor, rec: dict) -> None:  # @spec shipping_idempotent
     """Project one WAL record into Postgres. Idempotent; dispatched by `kind`."""
     kind = rec["kind"]
@@ -308,6 +322,8 @@ def apply(cur: psycopg.Cursor, rec: dict) -> None:  # @spec shipping_idempotent
              rec.get("pid"), rec["started_at"], rec["status"], rec.get("wal_path"),
              Json(run_extra) if run_extra is not None else None),
         )
+        if cur.rowcount == 0:
+            _refuse_other_extractors_run(cur, rec)
     elif kind == "run_finish":
         # Upsert: if PG was down at start (no run_start row landed), still record the run.
         fin_extra = rec.get("extra")
@@ -321,12 +337,15 @@ def apply(cur: psycopg.Cursor, rec: dict) -> None:  # @spec shipping_idempotent
             "n_skipped=EXCLUDED.n_skipped, "
             # COALESCE, not overwrite: a finish that carries no extra must never erase what
             # run_start recorded (dbt's bronze_watermark lands at start).
-            "extra=COALESCE(EXCLUDED.extra, control.run.extra)",  # @spec run_extra_preserved_on_finish
+            "extra=COALESCE(EXCLUDED.extra, control.run.extra) "  # @spec run_extra_preserved_on_finish
+            "WHERE control.run.extractor = EXCLUDED.extractor",
             (rec["run_id"], rec["extractor"], rec.get("started_at", rec["finished_at"]),
              rec["finished_at"], rec["status"], rec.get("stop_reason"),
              rec.get("n_ok"), rec.get("n_err"), rec.get("n_skipped"),
              Json(fin_extra) if fin_extra is not None else None),
         )
+        if cur.rowcount == 0:
+            _refuse_other_extractors_run(cur, rec)
     elif kind == "event":
         extra = rec.get("extra")
         cur.execute(

@@ -47,13 +47,19 @@ def test_the_documented_public_api_is_importable():
     `from control_plane import ControlPlane` is the exact import that failed in CI, so it is the
     exact import worth asserting.
     """
-    from control_plane import ControlPlane, ControlPlaneError, RunContext, status
+    from control_plane import ControlPlane, ControlPlaneError, RunContext, new_run_id, status
 
-    assert control_plane.__all__ == ["ControlPlane", "ControlPlaneError", "RunContext", "status"]
+    assert control_plane.__all__ == [
+        "ControlPlane", "ControlPlaneError", "RunContext", "new_run_id", "status",
+    ]
     assert ControlPlane.__name__ == "ControlPlane"
     assert issubclass(ControlPlaneError, RuntimeError)
     assert RunContext.__name__ == "RunContext"
     assert status.EV_OK == "ok"
+    # `new_run_id` is public because services call it directly to mint an id before the run
+    # (ax_retail_bronze/load.py, gofrugal_extract/__main__.py). Reachable through the lazy
+    # __getattr__ like the rest of the facade — it lives in .run, which imports psycopg.
+    assert new_run_id("gofrugal").startswith(("1", "2"))  # <UTC second>-<extractor>-<hex>
 
 
 def test_unknown_attributes_still_raise_attribute_error():

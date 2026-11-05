@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
+import secrets
 import socket
 import threading
 from contextlib import contextmanager
@@ -31,9 +32,11 @@ def _now() -> _dt.datetime:
     return _dt.datetime.now(_dt.timezone.utc)
 
 
-def _gen_run_id() -> str:
-    # Matches gofrugal's existing scheme so run_ids stay comparable across the migration.
-    return _now().strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
+def new_run_id(extractor: str) -> str:  # @spec run_id_unique_across_extractors
+    """`<UTC second>-<extractor>-<6 hex>`. `control.run` is keyed on run_id alone, and every Railway
+    container is pid 1, so the old `<second>-<pid>` gave two services starting in the same second
+    one id (#4614). The timestamp stays first: SAP names backups `run_id[:8]`."""
+    return f"{_now().strftime('%Y%m%dT%H%M%SZ')}-{extractor}-{secrets.token_hex(3)}"
 
 
 class ControlPlaneError(RuntimeError):
@@ -167,7 +170,7 @@ class ControlPlane:
 
     @contextmanager
     def run(self, mode: str, *, run_id: str | None = None):
-        run_id = run_id or _gen_run_id()
+        run_id = run_id or new_run_id(self.extractor)
         self._started_at = _now().isoformat()
         wal = Wal(os.path.join(self.wal_dir, self.extractor, run_id + ".jsonl"))
         conn: psycopg.Connection | None = None

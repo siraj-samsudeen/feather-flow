@@ -63,3 +63,18 @@ def test_status_vocab_partitions():
     # API-extractor split vs DB-extractor fused leg are distinct words
     assert status.EV_SOURCE_ERROR != status.EV_SINK_ERROR != status.EV_ERROR
     assert status.ERROR_DETAIL_CAP == 2000
+
+
+def test_run_ids_differ_across_extractors_in_the_same_second(monkeypatch):
+    """Two services starting in one UTC second, both pid 1 on Railway, got one run_id and shared a
+    control.run row (#4614).
+
+    @spec run_id_unique_across_extractors"""
+    from control_plane import run as runmod
+    second = dt.datetime(2026, 11, 2, 23, 30, 42, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(runmod, "_now", lambda: second)
+    ids = [runmod.new_run_id("gofrugal"), runmod.new_run_id("petpooja_webhook_cdc"),
+           runmod.new_run_id("gofrugal")]
+    assert len(set(ids)) == 3
+    assert ids[0].startswith("20261102T233042Z-gofrugal-")
+    assert ids[0][:8] == "20261102"   # SAP names backups run_id[:8]
