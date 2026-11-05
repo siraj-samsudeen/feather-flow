@@ -252,8 +252,9 @@ request and on every push to `main`.
 | Job | Runs | Blocking? |
 |---|---|---|
 | `Interpreter pin is a version we claim` | `scripts/check_pinned_python_version.py` | Yes |
-| `pytest (Python 3.11 / 3.12 / 3.13)` | `uv sync --all-extras` + `uv run pytest -q` | Yes |
-| `pytest (Python 3.10) - non-blocking` | same | **No** — `continue-on-error` |
+| `pytest (Python 3.12 / 3.13)` | `uv sync --all-extras` + `uv run pytest -q` | Yes |
+| `pytest (feather-control-plane)` | the member's suite against a `postgres:16` service container | Yes |
+| `pytest (feather-cdc-postgres)` | the member's suite against a `postgres:17` service container with `wal_level=logical` | Yes |
 
 **Why 3.10 is non-blocking.** The package advertises 3.10 (`requires-python = ">=3.10"`
 plus a 3.10 classifier) but the suite is not green there: 22 failures, all in
@@ -277,9 +278,18 @@ uv run --no-project --python 3.13 scripts/check_pinned_python_version.py
 **Bumping `.python-version`** therefore means widening the classifiers in the same
 commit, which is the deliberate decision the guard exists to force.
 
-**Not covered yet:** per-member workspace jobs. `packages/` does not exist on `main`; it
-arrives with #82, which brings its own member job and the PostgreSQL service container
-its tests need.
+**Workspace members are gated separately.** They version and release on their own cadence, and
+most of their tests need a real database, which feather-flow's own suite does not. Two rules
+learned the hard way, both written into the workflow as comments:
+
+- Each member job uses `working-directory: packages/<member>`, **not** `uv run --package …
+  pytest` from the repo root. `--package` picks the environment, not the tests: pytest reads its
+  config from the nearest `pyproject.toml` above the working directory, so from the root it
+  collects feather-flow's own suite and reports green having tested nothing of the member.
+- A database-gated suite that cannot find a database *skips and exits 0*. `feather-cdc-postgres`
+  needs `wal_level=logical`, which a service container cannot be given by `command` — it goes in
+  through `POSTGRES_INITDB_ARGS` — so the job asserts the setting took effect before running the
+  suite rather than trusting 522 collected tests to mean 522 executed ones.
 
 ---
 
