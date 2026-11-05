@@ -1,66 +1,76 @@
-# `pg_md_cdc` — declarative PostgreSQL → MotherDuck CDC runtime (#3079)
+# feather-cdc-postgres
 
-One code artifact. One **registration** (`registrations/<source_id>.yml`) per source database,
-one Railway service instance per registration. A reviewed declaration is sufficient to mirror a
-PostgreSQL database into MotherDuck at bronze fidelity — no per-source extractor.
+Mirror a PostgreSQL database into MotherDuck from one declaration file, with no extractor
+written for it.
 
-Plan: `docs/plans/issue_3079_pg_md_cdc_runtime.md`. It generalizes the #2851 Featherbase pilot
-(`featherbase_extract/`) — cut over to this runtime on 05-Sep-2026 and deleted from the repo
-the same day (#3156).
-**Operator runbook (activation, status, pause, slot-fuse recovery, resnapshot, declaration
-changes, rollback, decommission, the Featherbase cutover and control-plane activation
-checklists): `docs/agents/deployment.md`'s `pg-md-cdc` row + `docs/agents/pg-md-cdc-runbook.md`.**
-This README covers the code; the runbook covers running it.
+Point it at a source database and a destination, say which relations you want, and it does the
+rest: creates the replication slot and publication, takes a consistent baseline of every
+selected table, then drains the write-ahead log on a schedule. A table with a primary key is
+merged; a table with none is kept as an append-only history. Schema changes, renames and
+`TRUNCATE` are followed. Columns you name are withheld before they ever leave the process.
 
-## Deploying (one Railway service instance per registration)
+One code artifact, one **registration** per source database, one service instance per
+registration. Adding a source is a reviewed YAML file, not a new codebase.
 
-One image serves every registration — the instance is selected entirely by env, Root Directory
-is always `pg_md_cdc`. Env vars, matching `registrations/*.yml`:
+## Install
 
-| var | set to | source |
-|---|---|---|
-| `CDC_REGISTRATION` | the registration id, e.g. `featherbase`, `featherbase_dev` (the dev mirror, runbook §m), `control_plane` or `petpooja_webhook` | selects `registrations/<id>.yml` |
-| `<manifest source.dsn_env>` | the source Postgres DSN (`FEATHERBASE_PG_DSN` / `CONTROL_PG_DSN` / `WEBHOOK_PG_DSN`) | Railway reference var |
-| `<manifest destination.token_env>` | the MotherDuck token (`MOTHERDUCK_TOKEN` in both shipped manifests) | Railway reference var |
-| `CDC_LOG_PG_DSN` | the customer's **CDC log DB** (Railway `<customer>-cdc-log-db` in project `<customer>-cdc`, e.g. `jeyarama-cdc-log-db`) — where its runs and events are logged (#4078) | Railway reference var — hard dependency unless `--dev`. `CONTROL_PG_DSN` is accepted for one release; for the control-plane CDC it is also the source, so set `CDC_LOG_PG_DSN` |
-| `CONTROL_WAL_DIR` | a mounted (non-ephemeral) path | only needed if `control.event_durability: persistent_local_wal`; neither shipped manifest uses it |
-
-Cron: `*/5 * * * *`, set on the **service instance** (`railway api` `serviceInstanceUpdate`, or
-the dashboard) — `railway.json` is NOT honoured on these instances and must not be cited as the
-schedule (`docs/agents/gotchas/railway-status-stale-cron-schedule.md`). Details, health-check queries and the destructive-command
-confirmations live in the runbook, not here.
+```bash
+pip install feather-cdc-postgres
+```
 
 ## Commands
 
 ```bash
-python -m pg_md_cdc validate     registrations/featherbase.yml   # static + read-only checks
-python -m pg_md_cdc plan         registrations/featherbase.yml   # every change a run would make
-python -m pg_md_cdc generate-dbt registrations/featherbase.yml [--out PATH]
-python -m pg_md_cdc run|status|resnapshot registrations/featherbase.yml
+python -m feather_cdc_postgres validate     <registration>.yml   # static + read-only checks
+python -m feather_cdc_postgres plan         <registration>.yml   # every change a run would make
+python -m feather_cdc_postgres generate-dbt <registration>.yml --out PATH
+python -m feather_cdc_postgres run|status|resnapshot <registration>.yml
 ```
 
-`validate` and `plan` **mutate nothing** — they open read-only connections and print. `plan` is
-safe to run against production; `tests/test_cli_plan_pg.py` fingerprints the source catalog
-before and after to keep that claim true. `--json` on any command gives machine output.
+`feather-cdc-postgres <command> ...` is installed as a console script and does the same thing.
+
+`validate` and `plan` **mutate nothing** — they open read-only connections and print.
+`plan` is safe to run against production; `tests/test_cli_plan_pg.py` fingerprints the source
+catalog before and after to keep that claim true. `--json` on any command gives machine output.
 `run`/`status`/`resnapshot` apply the same static validation first and refuse — before opening
 any connection — on an error-severity problem (an unknown `api_version`, say).
 
+`generate-dbt --out` is **required**: the runtime has no opinion about where your dbt project
+lives.
+
 Exit codes: `0` clean, `1` at least one error-severity problem or an unexpected failure (printed
 redacted, never as a raw traceback), `2` a malformed manifest.
+
+## Running one instance
+
+Registrations are **yours**, not this package's: none ship here. Each instance is selected
+entirely by environment:
+
+| var | set to |
+|---|---|
+| `<manifest source.dsn_env>` | the source PostgreSQL DSN |
+| `<manifest destination.token_env>` | the MotherDuck token |
+| `CDC_LOG_PG_DSN` | the PostgreSQL database this mirror's runs and events are logged to. A hard dependency unless `--dev`; `CONTROL_PG_DSN` is accepted as a fallback |
+| `CONTROL_WAL_DIR` | a mounted (non-ephemeral) path — only needed when `control.event_durability: persistent_local_wal` |
+| `RAILWAY_ENVIRONMENT_NAME` | where set, must equal the registration's `environment`, or `run`/`resnapshot` exit before any connection |
+
+The source needs `wal_level = logical` and a role with `REPLICATION`.
 
 ## What a registration declares
 
 | Block | Decides |
 |---|---|
-| `environment` | `production` (default) or `dev`: must equal Railway's `RAILWAY_ENVIRONMENT_NAME` where it is set, or `run`/`resnapshot` exit before any connection (#4340) |
+| `environment` | `production` (default), `staging` or `dev` |
 | `source` | which relations: `include`/`exclude`/`deny` globs on `schema.table`, plus an optional catalog `discovery.adapter` |
-| `destination` | MotherDuck database, **`owner`** (required: the MotherDuck account the token must sign in as, from `layer_access_registry.csv`; `run`/`resnapshot` check `current_user()` against it before creating the database on a first run or writing anything, #4426/#4427), `schema_mapping` (default: source schemas preserved), **`table_schemas`** (per-table target schema, `[{match: "schema.table" glob, schema: target}]`, first match wins, unmatched → `schema_mapping`; D-13), dlt pipeline name (only with a single target schema), retirement policy |
-| `replication` | slot, publication, cadence (generated from `config/schedules.yml`), key policy for unkeyed tables, replica identity, batch size |
-| `control` | the extractor identity, control-plane availability policy, event durability, `reconcile_exclude` |
+| `destination` | MotherDuck database, **`owner`** (required: the MotherDuck account the token must sign in as; `run`/`resnapshot` check `current_user()` against it before creating the database on a first run or writing anything), `schema_mapping` (default: source schemas preserved), **`table_schemas`** (per-table target schema, `[{match: "schema.table" glob, schema: target}]`, first match wins), dlt pipeline name (only with a single target schema), retirement policy |
+| `replication` | slot, publication, cadence, key policy for unkeyed tables, replica identity, batch size |
+| `control` | the extractor identity, run-log availability policy, event durability, `reconcile_exclude` |
 | `classification` | optional first-match rules overriding the default `table_class` |
 
 Secrets are **references**: `dsn_env` and `token_env` name environment variables. A manifest
 carrying a value is rejected, and no environment value is ever printed or written into an event.
+
+`tests/fixtures/registrations/` holds four worked examples.
 
 ## Selection semantics
 
@@ -69,30 +79,30 @@ carrying a value is rejected, and no environment value is ever printed or writte
   conjunction (schema **and**, when given, table pattern); `exclude` and `deny` are disjunctions.
 - **`deny` is evaluated on the compiled set**, after the adapter narrows it — a deny rule is a
   tripwire that fires only when something really would have been replicated.
-- **`deny.columns`** (`{"schema.table": [column, ...]}`, exact names, #4346) withholds columns:
+- **`deny.columns`** (`{"schema.table": [column, ...]}`, exact names) withholds columns:
   they are left out of the baseline select list, dropped by name from every decoded record and
   from dlt's hints, and kept out of the drift signature. The deny follows the table's OID and
   the column's attnum, so a table or column rename cannot release it. Every decoded description
   of a table that carries a deny must match, exactly, the column layout its baseline recorded;
-  any column DDL there (an added column included) quarantines the table until a resnapshot
-  (runbook §f2). Every run checks the destination (and each `_staging` twin) and
-  reports a denied column found there as an error. It is a projection *inside the CDC process*,
-  not a publication column list: under `replica_identity: full` that list must name every
-  column, or every UPDATE/DELETE of the table fails at the source.
+  any column DDL there (an added column included) quarantines the table until a resnapshot.
+  Every run checks the destination (and each `_staging` twin) and reports a denied column found
+  there as an error. It is a projection *inside the CDC process*, not a publication column list:
+  under `replica_identity: full` that list must name every column, or every UPDATE/DELETE of the
+  table fails at the source.
 - A discovery adapter supplies policy only ("which relations, and what does the source call
   them"). It never supplies types, keys or load behaviour. The Featherbase adapter's
   `options.system_tables` switches on the **two-way rule**: a `table_def."system" = true` table
-  (Featherbase's own) is offered only when named there, a `"system" = false` (user-created)
+  (the platform's own) is offered only when named there, a `"system" = false` (user-created)
   table always is — so a new user table flows with no manifest edit. `plan` prints each
   relation's `origin=` (`user_created` / `named_system`); user-created relations classify as
-  `application` whatever they are called. Absent, the adapter offers everything (legacy).
+  `application` whatever they are called. Absent, the adapter offers everything.
 - One dlt pipeline per **target** schema (`<source_id>_cdc__<target_schema>`), never per
-  source schema: `_cdc_runtime.*`, lifecycle and `control.event` entities keep the **source**
+  source schema: `_cdc_runtime.*`, lifecycle and control events keep the **source**
   identity `schema.table`; the destination side is the relation's compiled `target_schema`.
 - `selection_hash` covers the relation set **and** each table's key policy, so a table that
   silently dropped from merge to append-only changes the hash.
 
-## Key policy (D6)
+## Key policy
 
 Primary key → merge. Otherwise a **NOT NULL** non-partial, non-expression unique index → merge on
 its **key** columns (`INCLUDE` columns carry no uniqueness and are never part of the key;
@@ -112,8 +122,8 @@ re-init) therefore REPLACES the destination copy: a snapshot row has no `lsn` to
 nothing below its consistent point is ever streamed. Every later baseline — a table added
 mid-life, a resumed snapshot, a resnapshot — reads a table the publication already carries, so
 it overlaps the WAL; `snapshot.consistent_baseline` takes it from a throwaway slot `<slot>_bl`
-whose consistent point PG guarantees matches its snapshot ("in the snapshot" ⟺ "commit LSN <
-boundary", with in-flight transactions waited out), stores that boundary per relation in
+whose consistent point PostgreSQL guarantees matches its snapshot ("in the snapshot" ⟺ "commit
+LSN < boundary", with in-flight transactions waited out), stores that boundary per relation in
 `_cdc_runtime.baseline`, and the drain drops that relation's transactions below it. That is what
 makes the overlap exact for `append_only`, where no key could dedup it.
 
@@ -122,17 +132,16 @@ the truncate load (batch order preserved); an `append_only` history keeps every 
 emit a `truncate` control event. **Partitioned tables** replicate as their partitions (`relkind
 'r'`); the parent is a named `partitioned_parent_skipped` warning, never a relation.
 
-**Run outcome**: `control.run.status` is `ok` only when every selected relation drained with no
+**Run outcome**: the run's status is `ok` only when every selected relation drained with no
 error-class event; `partial` when a table is drift-blocked or a reconcile count did not tie;
 `failed` when nothing drained (slot lost under `slot_loss_policy: pause`, or a selection that
 compiled to nothing — which `run` refuses rather than leaving an undrained slot behind).
 
 `control.reconcile_exclude` names `schema.table` globs the reconcile counts skip — for relations
-this drainer writes while it runs (`control.run`, `control.event`, `control.budget_usage`), which
-can never tie source-now against destination-now. `append_only` relations are skipped too
-(`extra.append_only`): their destination keeps every row version, so a count can never tie once
-the source is edited. Both still emit a `reconcile` event with `skipped` and a reason, so the gap
-is visible rather than silently passed.
+written while this mirror runs, which can never tie source-now against destination-now.
+`append_only` relations are skipped too (`extra.append_only`): their destination keeps every row
+version, so a count can never tie once the source is edited. Both still emit a `reconcile` event
+with `skipped` and a reason, so the gap is visible rather than silently passed.
 
 Merging on a unique index needs the source to publish those columns on DELETE — set
 `replica_identity: full` or `ALTER TABLE ... REPLICA IDENTITY USING INDEX`. The compiler warns
@@ -140,23 +149,64 @@ when neither is in place.
 
 ## Type matrix
 
-`schema_registry.compile_column` maps every OID in use on the two live sources exactly, and
+`schema_registry.compile_column` maps every OID in use on the sources it has met exactly, and
 labels how faithful the mapping is: `exact`, `widened`, `exact_as_text` (uuid, name),
 `lossy_text` (interval, timetz), `text_fallback`. Arrays and undeclared OIDs land as text and
 **always** raise a warning naming `schema.table.column` and the OID — never silently.
 
 The integer family (`int2/int4/int8/oid`) compiles to plain `BIGINT`. dlt renders
 `{"data_type": "bigint", "precision": 32}` as `INTEGER` on duckdb while the snapshot path
-reflects every integer as `BIGINT`; `bronze_featherbase.public.comment.position` carries both
-spellings today. Dropping the precision hint pins one, in the widening direction.
+reflects every integer as `BIGINT`, so dropping the precision hint pins one spelling, in the
+widening direction.
+
+## The run log
+
+Runs, per-relation events and budget telemetry go to
+[`feather-control-plane`](../feather-control-plane), a hard dependency of this package, writing
+to whatever `CDC_LOG_PG_DSN` points at — deliberately **not** the database being mirrored. Pass
+`--dev` for a local, WAL-only run that writes no run rows at all.
+
+## Vendored code
+
+`src/pg_replication/` is the `pg_replication` verified source from
+[dlt-hub/verified-sources](https://github.com/dlt-hub/verified-sources), Apache-2.0, **modified**.
+Upstream is a `dlt init` template rather than a distribution, so there is nothing on PyPI to pin.
+See `src/pg_replication/README.md` for the attribution and `src/pg_replication/LICENSE` for the
+licence text.
 
 ## Tests
 
 ```bash
-cd pg_md_cdc && .venv/bin/pytest tests -q
+cd packages/feather-cdc-postgres && uv run --package feather-cdc-postgres pytest -q
 ```
 
-Integration tests start a throwaway Postgres 17 (`wal_level=logical`) and skip when no binary is
-available. `PG_MD_CDC_TEST_PORT` picks the port (default 54331) so parallel sessions do not
-collide; `PG_MD_CDC_TEST_DSN` points at a Postgres you own instead — never a production one, the
-suite creates and drops slots, publications, schemas and tables.
+`--package` picks the *environment*; it does not pick the tests. pytest takes its config from the
+nearest `pyproject.toml` above the working directory, so a bare `pytest` run from the repo root
+collects feather-flow's own suite no matter what `--package` says. Either `cd` in or name the
+path.
+
+522 tests. 275 are pure logic and run anywhere; **247 need a real PostgreSQL with
+`wal_level = logical`** and are skipped without one — they create and drop replication slots,
+publications, schemas and tables, so never point them at a database you care about. The suite
+finds a server in this order:
+
+1. `PG_MD_CDC_TEST_DSN` — a superuser DSN for a server you own.
+2. a local PostgreSQL binary (`pg_ctl` on `PATH`, else Homebrew's keg-only `postgresql@N`),
+   `initdb`'d into a temp directory on a throwaway port and torn down afterwards.
+   `PG_MD_CDC_TEST_PORT` picks the port (default 54331) so parallel sessions do not collide.
+3. otherwise skip.
+
+A container works for (1):
+
+```bash
+docker run -d -p 55432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=cdc_test \
+  -e POSTGRES_INITDB_ARGS="-c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20" \
+  postgres:17
+PG_MD_CDC_TEST_DSN=postgresql://postgres:postgres@127.0.0.1:55432/cdc_test uv run pytest -q
+```
+
+Three tests additionally need PostgreSQL 18 (`publish_generated_columns`) and skip below it.
+
+The destination in tests is dlt's `duckdb` destination (a temp file) — the same load path
+MotherDuck takes minus credentials, so merge, hard-delete and schema-evolution behaviour is
+exercised for real.

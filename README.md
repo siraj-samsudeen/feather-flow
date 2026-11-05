@@ -94,6 +94,7 @@ The repo is a [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspa
 | Package | Import as | What it is |
 |---|---|---|
 | [`packages/feather-control-plane`](packages/feather-control-plane/README.md) | `control_plane` | Durable failure observability for an extractor fleet — write-ahead log, Postgres control plane, liveness lease. |
+| [`packages/feather-cdc-postgres`](packages/feather-cdc-postgres/README.md) | `feather_cdc_postgres` | Mirror a PostgreSQL database into MotherDuck from one declaration file — logical replication, consistent baselines, column deny-lists. Depends on `feather-control-plane` for its run log. |
 
 Run a sibling's tests with `uv run --package <name> pytest packages/<dir>/tests`; `uv run pytest` at the root is feather-flow's own suite. `--package` selects the environment, not the tests — a bare `pytest` from the root always collects `tests/`, so name the path or `cd` into the member.
 
