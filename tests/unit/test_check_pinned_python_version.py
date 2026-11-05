@@ -130,11 +130,21 @@ class TestReadDeclaredSupport:
         assert guard.read_declared_support(path).requires_python is None
 
     def test_fallback_reader_matches_tomllib_on_the_real_pyproject(self):
-        """The 3.10 path must agree with the 3.11+ path on this repo's own file."""
+        """The no-tomllib path must agree with the tomllib path on this repo's own file.
+
+        Both keys are compared against the other READER, never against a literal. This
+        assertion used to hardcode `">=3.10"`, so raising the floor in #85 failed a test
+        about reader equivalence for a reason that had nothing to do with it.
+
+        (`tomllib` arrived in 3.11 and the project now requires >=3.12, so the fallback is
+        unreachable in normal use — kept because the guard must still run when the project's
+        own dependencies are the thing that is broken, which is the case it exists for.)
+        """
         real = REPO_ROOT / "pyproject.toml"
         fallback = guard._project_table_without_tomllib(real)
-        assert fallback["requires-python"] == ">=3.10"
-        assert fallback["classifiers"] == guard._read_project_table(real)["classifiers"]
+        canonical = guard._read_project_table(real)
+        assert fallback["requires-python"] == canonical["requires-python"]
+        assert fallback["classifiers"] == canonical["classifiers"]
 
 
 class TestCheckPinnedVersion:

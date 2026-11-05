@@ -10,19 +10,19 @@ authors = [
 # The distribution is `feather-control-plane`; the IMPORT name stays `control_plane`.
 # ~40 call sites across nine services already say `from control_plane import ControlPlane`, so
 # keeping the import name makes adopting this package a dependency substitution with no code edits.
-# `>=3.10`, matching feather-flow, NOT the `>=3.12` this carried in its old home. That pin was the
-# host repo's interpreter, not a constraint of this code — nothing here uses 3.11+ syntax, and the
-# suite passes on 3.10 through 3.13. It matters because uv locks a workspace at the INTERSECTION of
-# its members' ranges, so a `>=3.12` here would silently strip 3.10/3.11 out of feather-flow's lock.
-requires-python = ">=3.10"
+# `>=3.12` is a CONSUMER constraint, not a language one: this code runs fine on 3.12, 3.13 and 3.14
+# (44 passed on each). Every service in JeyaramaGroup/data-warehouse that will depend on this package
+# declares `>=3.12`, and that repo's root is capped `>=3.12,<3.13` — so a floor of 3.13 here would
+# make the package uninstallable by the nine services it exists to serve. Raise this only in step
+# with them. uv locks a workspace at the INTERSECTION of its members' ranges, so this and
+# feather-flow's own floor must move together (#85).
+requires-python = ">=3.12"
 keywords = ["observability", "etl", "postgres", "write-ahead-log", "control-plane"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Database",
