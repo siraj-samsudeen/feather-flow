@@ -1,0 +1,55 @@
+# TEST FIXTURE — a registration that mirrors a warehouse control plane into bronze.
+#
+# `source_id: control_plane` is not decoration: `selectors.table_class` special-cases it, so
+# relations in the `control` schema classify as `warehouse_control` rather than `source_system`.
+# That rule is exercised here and in tests/test_selectors.py.
+#
+# It also carries the two shapes no other fixture has: `append_only` key overrides (a relation
+# with neither a primary key nor a unique index) and a `reconcile_exclude` list (relations this
+# drainer's own fleet writes while it runs, so a source-now vs destination-now count can never
+# tie).
+api_version: pg-md-cdc/v1
+source_id: control_plane
+environment: production
+
+source:
+  dsn_env: CONTROL_PG_DSN
+  include:
+    schemas: [control]
+  exclude:
+    tables:
+      # A heartbeat row UPDATEd every minute per extractor: no history worth mirroring.
+      - "control.lease"
+
+destination:
+  token_env: MOTHERDUCK_TOKEN
+  owner: control_plane_cdc_service_account
+  database: bronze_control_plane
+  schema_mapping: preserve_source
+  retirement_policy: freeze
+
+replication:
+  slot: control_plane_cdc_slot
+  publication: control_plane_cdc_pub
+  cadence_minutes: 5
+  tables_without_key: reject
+  key_overrides:
+    # No primary key at the source and no unique index; both are append-only fact streams.
+    # append_only means the CDC path merges on `lsn` (unique per WAL record) so a replayed batch
+    # is exact, an UPDATE lands as an additional row version, and a DELETE removes nothing.
+    control.sap_reconcile: append_only
+    control.zakya_quarantine: append_only
+  replica_identity: full
+  slot_loss_policy: resnapshot
+  target_batch_size: 1000
+
+control:
+  # Distinct from the extractors it mirrors: this drainer's own run rows are ordinary source
+  # changes here.
+  extractor: control_plane_cdc
+  availability_policy: pause_if_control_unreachable
+  event_durability: direct_postgres
+  reconcile_exclude:
+    - "control.run"
+    - "control.event"
+    - "control.budget_usage"

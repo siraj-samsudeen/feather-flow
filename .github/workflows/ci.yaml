@@ -126,3 +126,57 @@ jobs:
         env:
           CONTROL_PG_DSN: postgresql://postgres:postgres@localhost:5432/control_plane_test
         run: uv run --package feather-control-plane pytest -q
+
+  feather-cdc-postgres:
+    name: pytest (feather-cdc-postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # 17, not the control plane's 16. This package decodes the write-ahead log, so the
+        # server version is part of what is under test, and 17 is what its sources run. Three
+        # tests want `publish_generated_columns` (PostgreSQL 18) and skip here, by name.
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cdc_test
+          # Logical decoding is the whole mechanism: without `wal_level=logical` the source
+          # cannot create a replication slot and 247 of the 522 tests have nothing to run
+          # against. A service container takes no `command`, so the setting goes in through
+          # initdb — `initdb -c name=value` writes postgresql.conf, and the official image
+          # passes POSTGRES_INITDB_ARGS straight to it. The slot and sender limits are raised
+          # off their default 10 because every integration test takes its own slot.
+          POSTGRES_INITDB_ARGS: "-c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20"
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      # Checked BEFORE the suite, because the failure it guards against is silent: with
+      # `wal_level` left at its `replica` default the source cannot create a replication slot,
+      # 247 of the 522 tests skip, and the job still exits 0 having proved nothing.
+      - name: The service container really did come up with logical decoding
+        run: |
+          level=$(docker exec "$(docker ps -q --filter ancestor=postgres:17)" \
+            psql -U postgres -d cdc_test -tAc 'show wal_level')
+          echo "wal_level=$level"
+          test "$level" = logical
+
+      # `working-directory`, for the same reason as the job above: from the repo root pytest
+      # reads feather-flow's pyproject.toml and runs feather-flow's suite, green, having tested
+      # none of this.
+      #
+      # PG_MD_CDC_TEST_DSN is the first of the three routes conftest.py tries. Without it the
+      # suite looks for a local `pg_ctl`, finds none on the runner, and skips the lot.
+      - name: Run the package's suite against a real PostgreSQL
+        working-directory: packages/feather-cdc-postgres
+        env:
+          PG_MD_CDC_TEST_DSN: postgresql://postgres:postgres@localhost:5432/cdc_test
+        run: uv run --package feather-cdc-postgres pytest -q
