@@ -1,3 +1,23 @@
+<!--
+VENDORED THIRD-PARTY CODE — read this before editing anything in this directory.
+
+Origin: the `pg_replication` verified source of https://github.com/dlt-hub/verified-sources
+Licence: Apache License 2.0, "Copyright 2023 The Contributors" — the full text is in
+         ./LICENSE, distributed with this package as section 4(a) requires.
+
+MODIFIED. Section 4(b) of the licence asks that changed files carry a prominent notice,
+so: `helpers.py` and `decoders.py` here are not upstream's. They carry the column
+deny-list projection, the reviewed-layout quarantine, mid-transaction rename handling,
+consistent baseline boundaries and generated-column publication that this runtime needs.
+
+It is vendored rather than depended on because upstream is a `dlt init` TEMPLATE, not a
+published distribution: there is no `pg_replication` on PyPI to pin. Upstream's own
+requirements are incomplete (dlt-hub/verified-sources#685), which is why this package
+declares `dlt[sql_database]` explicitly.
+
+The README below is upstream's, kept for the protocol and set-up notes it carries.
+-->
+
 # Postgres replication
 [Postgres](https://www.postgresql.org/) is one of the most popular relational database management systems. This verified source uses Postgres' replication functionality to efficiently process changes in tables (a process often referred to as _Change Data Capture_ or CDC). It uses [logical decoding](https://www.postgresql.org/docs/current/logicaldecoding.html) and the standard built-in `pgoutput` [output plugin](https://www.postgresql.org/docs/current/logicaldecoding-output-plugin.html).
 
