@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-__all__ = ["ControlPlane", "ControlPlaneError", "RunContext", "status"]
+__all__ = ["ControlPlane", "ControlPlaneError", "RunContext", "new_run_id", "status"]
 
 # Name -> the submodule that defines it. `status` is absent deliberately: `from control_plane
 # import status` is a submodule import, which Python's import machinery already resolves on its
@@ -35,6 +35,7 @@ _LAZY = {
     "ControlPlane": ".run",
     "ControlPlaneError": ".run",
     "RunContext": ".run",
+    "new_run_id": ".run",
 }
 
 if TYPE_CHECKING:  # the lazy names, visible to type checkers and IDEs
@@ -42,6 +43,7 @@ if TYPE_CHECKING:  # the lazy names, visible to type checkers and IDEs
     from .run import ControlPlane as ControlPlane
     from .run import ControlPlaneError as ControlPlaneError
     from .run import RunContext as RunContext
+    from .run import new_run_id as new_run_id
 
 
 def __getattr__(name: str):

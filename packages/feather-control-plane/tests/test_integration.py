@@ -100,6 +100,52 @@ def test_run_extra_is_replaced_when_the_finish_carries_one(fresh_schema):
     assert _q(dsn, "SELECT extra->>'dbt_rc' FROM control.run WHERE run_id='D2'") == [("0",)]
 
 
+
+def _run_start(run_id, extractor, started_at="2026-11-02T23:30:42+00:00"):
+    return {"kind": "run_start", "run_id": run_id, "extractor": extractor, "mode": "nightly",
+            "host": "h", "pid": 1, "started_at": started_at, "status": "running"}
+
+
+def _run_finish(run_id, extractor, n_ok):
+    return {"kind": "run_finish", "run_id": run_id, "extractor": extractor,
+            "started_at": "2026-11-02T23:30:42+00:00", "finished_at": "2026-11-03T00:17:16+00:00",
+            "status": "ok", "stop_reason": "clean", "n_ok": n_ok, "n_err": 0, "n_skipped": 0}
+
+
+@pytest.mark.parametrize("kind", ["run_start", "run_finish"])
+def test_a_clashing_run_record_is_refused_and_leaves_the_other_row_alone(fresh_schema, kind):
+    """#4614: GoFrugal's start was dropped and its finish overwrote the Petpooja webhook row.
+
+    @spec run_id_clash_refused"""
+    dsn = fresh_schema
+    with psycopg.connect(dsn) as c:
+        with c.cursor() as cur:
+            store.apply(cur, _run_start("R-CLASH", "petpooja_webhook_cdc"))
+            store.apply(cur, _run_finish("R-CLASH", "petpooja_webhook_cdc", 1))
+        c.commit()
+    rec = (_run_start("R-CLASH", "gofrugal") if kind == "run_start"
+           else _run_finish("R-CLASH", "gofrugal", 289))
+    with psycopg.connect(dsn) as c:
+        with c.cursor() as cur, pytest.raises(store.RunIdClash):
+            store.apply(cur, rec)
+        c.rollback()
+    assert _q(dsn, "SELECT extractor, n_ok FROM control.run WHERE run_id='R-CLASH'") == [
+        ("petpooja_webhook_cdc", 1)]
+
+
+def test_a_replayed_run_record_of_the_same_extractor_still_applies(fresh_schema):
+    """The guard must not break at-least-once replay or the late finish over `died`.
+
+    @spec run_id_clash_refused"""
+    dsn = fresh_schema
+    with psycopg.connect(dsn) as c:
+        with c.cursor() as cur:
+            for rec in (_run_start("R-SAME", EXT), _run_start("R-SAME", EXT),
+                        _run_finish("R-SAME", EXT, 5), _run_finish("R-SAME", EXT, 5)):
+                store.apply(cur, rec)
+        c.commit()
+    assert _q(dsn, "SELECT status, n_ok FROM control.run WHERE run_id='R-SAME'") == [("ok", 5)]
+
 def test_shipper_tails_and_resumes(fresh_schema, tmp_path):
     """@spec whole_tail_one_transaction"""
     dsn = fresh_schema
