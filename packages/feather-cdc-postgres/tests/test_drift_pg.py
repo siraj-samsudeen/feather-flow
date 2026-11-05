@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import duckdb
 import psycopg
-from pg_md_cdc import publication
-from pg_md_cdc.lifecycle import DRIFT_REVIEW, RESNAPSHOT_REQUIRED, STREAMING
+from feather_cdc_postgres import publication
+from feather_cdc_postgres.lifecycle import DRIFT_REVIEW, RESNAPSHOT_REQUIRED, STREAMING
 
 from test_e2e_pg import make, rel, sql, tick
 

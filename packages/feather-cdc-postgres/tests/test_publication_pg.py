@@ -4,7 +4,7 @@ from __future__ import annotations
 import psycopg
 import pytest
 
-from pg_md_cdc import publication
+from feather_cdc_postgres import publication
 
 
 @pytest.fixture

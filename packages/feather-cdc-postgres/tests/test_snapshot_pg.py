@@ -5,8 +5,8 @@ import duckdb
 import psycopg
 import pytest
 
-from pg_md_cdc import publication, snapshot, stream
-from pg_md_cdc.destination import Destination, DestinationSpec
+from feather_cdc_postgres import publication, snapshot, stream
+from feather_cdc_postgres.destination import Destination, DestinationSpec
 
 
 def _dest(duckdb_path, tmp_path):

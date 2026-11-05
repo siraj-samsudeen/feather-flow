@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from pg_md_cdc.lifecycle import (
+from feather_cdc_postgres.lifecycle import (
     CATCHING_UP, DISCOVERED, DRIFT_REVIEW, IllegalTransition, Lifecycle, RESNAPSHOT_REQUIRED,
     RETIRED, SNAPSHOTTING, STREAMING,
 )
@@ -112,7 +112,7 @@ def test_every_live_state_can_be_re_baselined(lc, current):
     """A vanished slot re-baselines EVERY selected relation, whatever state it was in — and an
     operator `resnapshot` runs on a registration whose lifecycle table may still be empty.
     `drift_review` and `None` both used to raise IllegalTransition and abort the whole tick."""
-    from pg_md_cdc.runner import _to_snapshotting
+    from feather_cdc_postgres.runner import _to_snapshotting
     if current is not None:
         for step in {CATCHING_UP: [DISCOVERED, CATCHING_UP],
                      DRIFT_REVIEW: [SNAPSHOTTING, CATCHING_UP, DRIFT_REVIEW],

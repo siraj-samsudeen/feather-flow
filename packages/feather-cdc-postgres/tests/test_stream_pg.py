@@ -6,7 +6,7 @@ import itertools
 import psycopg
 import pytest
 
-from pg_md_cdc import publication, snapshot, stream
+from feather_cdc_postgres import publication, snapshot, stream
 
 
 def _slot(dsn, slot):

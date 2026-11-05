@@ -1,9 +1,9 @@
 """The Featherbase cutover proof (#3079 Phase 4, #2851 pilot → this runtime).
 
-This is the test that says it is safe to point the Railway service at `pg_md_cdc`: the pilot
+This is the test that says it is safe to point the Railway service at `feather_cdc_postgres`: the pilot
 (`featherbase_extract`'s dlt calls, verbatim — `init_replication(persist_snapshots=True)` +
 `replication_resource`, pipeline `featherbase_cdc`, dataset `public`) runs first and builds the
-destination, then `pg_md_cdc` takes over the SAME slot, publication and destination file and
+destination, then `feather_cdc_postgres` takes over the SAME slot, publication and destination file and
 must converge without re-snapshotting, without duplicating, and without splitting dlt's state
 into a second schema name. Local PG + duckdb stand in for featherbase-db-prod + MotherDuck;
 that is the same load path minus credentials.
@@ -20,8 +20,8 @@ import pytest
 from dlt.sources.credentials import ConnectionStringCredentials
 
 from control_plane import ControlPlane
-from pg_md_cdc import manifest as mf, runner
-from pg_md_cdc.destination import Destination, DestinationSpec
+from feather_cdc_postgres import manifest as mf, runner
+from feather_cdc_postgres.destination import Destination, DestinationSpec
 from pg_replication import replication_resource
 from pg_replication.helpers import init_replication
 

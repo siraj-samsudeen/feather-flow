@@ -11,7 +11,7 @@ import pathlib
 import duckdb
 import psycopg
 
-from pg_md_cdc import cli
+from feather_cdc_postgres import cli
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "featherbase_namespaced_schema.sql"
 DEV_MANIFEST = str(pathlib.Path(__file__).resolve().parents[1] / "registrations" / "featherbase_dev.yml")

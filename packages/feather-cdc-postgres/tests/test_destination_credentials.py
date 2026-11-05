@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from pg_md_cdc.destination import Destination, DestinationSpec, q
+from feather_cdc_postgres.destination import Destination, DestinationSpec, q
 
 TOKEN = "eyJhbGciOiJI-not-a-real-token-3079"
 

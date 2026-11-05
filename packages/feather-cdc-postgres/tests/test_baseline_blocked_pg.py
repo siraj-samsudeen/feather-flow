@@ -13,7 +13,7 @@ import time
 import psycopg
 import pytest
 
-from pg_md_cdc import snapshot
+from feather_cdc_postgres import snapshot
 
 
 @pytest.fixture

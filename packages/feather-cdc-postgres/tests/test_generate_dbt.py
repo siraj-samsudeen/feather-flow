@@ -5,10 +5,10 @@ import pathlib
 
 import yaml
 
-from pg_md_cdc import generate_dbt, selectors as sel
-from pg_md_cdc.adapters import NAMED_SYSTEM, USER_CREATED, AdapterRelation
-from pg_md_cdc.discovery import SourceColumn, SourceRelation
-from pg_md_cdc.manifest import load, parse
+from feather_cdc_postgres import generate_dbt, selectors as sel
+from feather_cdc_postgres.adapters import NAMED_SYSTEM, USER_CREATED, AdapterRelation
+from feather_cdc_postgres.discovery import SourceColumn, SourceRelation
+from feather_cdc_postgres.manifest import load, parse
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 REGISTRATIONS = pathlib.Path(__file__).resolve().parents[1] / "registrations"

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pg_md_cdc.destination import Destination, DestinationSpec
+from feather_cdc_postgres.destination import Destination, DestinationSpec
 from pg_replication.decoders import ColumnType
 from pg_replication.helpers import MessageConsumer, ReviewedLayout
 

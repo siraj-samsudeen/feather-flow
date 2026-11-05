@@ -5,8 +5,8 @@ import datetime as _dt
 
 import psycopg
 
-from pg_md_cdc import publication, snapshot, telemetry
-from pg_md_cdc.destination import Destination, DestinationSpec
+from feather_cdc_postgres import publication, snapshot, telemetry
+from feather_cdc_postgres.destination import Destination, DestinationSpec
 
 SWEEP_KEYS = {"slot", "active", "wal_status", "restart_lsn", "confirmed_flush_lsn", "lag_bytes"}
 

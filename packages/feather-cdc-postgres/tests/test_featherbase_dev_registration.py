@@ -11,7 +11,7 @@ import pathlib
 
 import pytest
 
-from pg_md_cdc import manifest as mf, runner
+from feather_cdc_postgres import manifest as mf, runner
 
 REGISTRATIONS = pathlib.Path(__file__).resolve().parents[1] / "registrations"
 PROD = mf.load(str(REGISTRATIONS / "featherbase.yml"))

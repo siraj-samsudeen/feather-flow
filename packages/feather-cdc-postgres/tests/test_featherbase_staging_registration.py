@@ -10,7 +10,7 @@ import pathlib
 
 import pytest
 
-from pg_md_cdc import manifest as mf, runner
+from feather_cdc_postgres import manifest as mf, runner
 from test_featherbase_dev_registration import _without_selection_and_identity
 
 REGISTRATIONS = pathlib.Path(__file__).resolve().parents[1] / "registrations"

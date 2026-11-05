@@ -13,8 +13,8 @@ import pathlib
 import psycopg
 import pytest
 
-from pg_md_cdc import cli, manifest as mf, runner
-from pg_md_cdc.adapters import NAMED_SYSTEM, USER_CREATED
+from feather_cdc_postgres import cli, manifest as mf, runner
+from feather_cdc_postgres.adapters import NAMED_SYSTEM, USER_CREATED
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "featherbase_namespaced_schema.sql"
 MANIFEST = pathlib.Path(__file__).resolve().parents[1] / "registrations" / "featherbase.yml"

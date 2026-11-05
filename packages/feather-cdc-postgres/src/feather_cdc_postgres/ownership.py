@@ -9,6 +9,11 @@ from __future__ import annotations
 
 import psycopg
 
+# NOT renamed with the module. This string is hashed into the advisory-lock key on the SOURCE
+# database: two drainers of one slot exclude each other only while they agree on it. A deployment
+# mid-cutover runs the old tree and this one against the same source, so changing it here would
+# let both hold "the" lock at once. It changes when every drainer changes, not when the import
+# name does.
 KEY_PREFIX = "pg_md_cdc:"
 
 # `pg_try_advisory_lock(bigint)` splits its key across pg_locks: classid = the high 32 bits,

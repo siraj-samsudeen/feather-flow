@@ -4,7 +4,7 @@ from __future__ import annotations
 import psycopg
 import pytest
 
-from pg_md_cdc.ownership import OwnerSession, OwnershipLost
+from feather_cdc_postgres.ownership import OwnerSession, OwnershipLost
 
 
 def _backend_pids(dsn: str, key: str) -> list[int]:
@@ -78,7 +78,7 @@ def test_holding_some_OTHER_advisory_lock_is_not_holding_ours(fresh_db, names):
     owner = OwnerSession(fresh_db, names["slot"])
     assert owner.acquire() is True
     try:
-        owner._conn.execute("select pg_advisory_lock(hashtext('pg_md_cdc:someone_else')::bigint)")
+        owner._conn.execute("select pg_advisory_lock(hashtext('feather_cdc_postgres:someone_else')::bigint)")
         owner.assert_held()  # still ours: the real lock is still held
         owner._conn.execute("select pg_advisory_unlock(hashtext(%s)::bigint)", (owner.key,))
         with pytest.raises(OwnershipLost):

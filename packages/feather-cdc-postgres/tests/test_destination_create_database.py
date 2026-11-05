@@ -13,8 +13,8 @@ import types
 
 import pytest
 
-from pg_md_cdc import cli, destination as dest_mod, manifest as mf, runner
-from pg_md_cdc.destination import Destination, DestinationSpec
+from feather_cdc_postgres import cli, destination as dest_mod, manifest as mf, runner
+from feather_cdc_postgres.destination import Destination, DestinationSpec
 
 TOKEN = "eyJhbGciOiJI-not-a-real-token-4426"
 REGISTRATIONS = pathlib.Path(__file__).resolve().parents[1] / "registrations"

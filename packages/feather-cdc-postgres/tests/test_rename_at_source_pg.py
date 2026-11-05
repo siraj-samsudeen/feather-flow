@@ -13,7 +13,7 @@ import pathlib
 import duckdb
 import psycopg
 
-from pg_md_cdc import cli, manifest as mf, runner
+from feather_cdc_postgres import cli, manifest as mf, runner
 
 MANIFEST = """\
 api_version: pg-md-cdc/v1

@@ -35,7 +35,7 @@ BASELINE_PENDING = frozenset({SNAPSHOTTING, RETIRED, DISCOVERED})
 
 
 def remedy(manifest_path: str, qualified: str) -> str:
-    return f"python -m pg_md_cdc resnapshot {manifest_path} --tables {qualified} --yes"
+    return f"python -m feather_cdc_postgres resnapshot {manifest_path} --tables {qualified} --yes"
 
 
 @dataclass

@@ -87,7 +87,7 @@ class RuntimeConfig:
 
 
 def _log(msg: str) -> None:
-    print(f"[pg_md_cdc] {msg}", flush=True)
+    print(f"[feather_cdc_postgres] {msg}", flush=True)
 
 
 def _denied(cfg: RuntimeConfig, relations=()) -> dict:

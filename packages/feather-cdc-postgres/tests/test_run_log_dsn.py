@@ -6,7 +6,7 @@ being mirrored.
 """
 import pytest
 
-from pg_md_cdc import runner
+from feather_cdc_postgres import runner
 
 
 @pytest.fixture(autouse=True)

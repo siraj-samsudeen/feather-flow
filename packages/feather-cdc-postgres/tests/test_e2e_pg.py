@@ -14,11 +14,11 @@ import psycopg
 import pytest
 
 from control_plane import ControlPlane
-from pg_md_cdc import publication, runner, stream, telemetry
-from pg_md_cdc.destination import Destination, DestinationSpec
-from pg_md_cdc.lifecycle import RETIRED, STREAMING
-from pg_md_cdc.ownership import OwnershipLost, OwnerSession
-from pg_md_cdc.selectors import Relation
+from feather_cdc_postgres import publication, runner, stream, telemetry
+from feather_cdc_postgres.destination import Destination, DestinationSpec
+from feather_cdc_postgres.lifecycle import RETIRED, STREAMING
+from feather_cdc_postgres.ownership import OwnershipLost, OwnerSession
+from feather_cdc_postgres.selectors import Relation
 
 
 class FakeRun:
@@ -1342,7 +1342,7 @@ def test_a_resnapshot_removes_a_column_that_has_just_become_denied(
         fresh_db, names, duckdb_path, tmp_path, monkeypatch):
     """The purge path for `person` (memo §3.3): does dlt's stored schema bring a column back
     after the table is rebuilt without it? Proved through the operator's own entry points."""
-    from pg_md_cdc import cli, manifest as mf
+    from feather_cdc_postgres import cli, manifest as mf
 
     path = tmp_path / "demo.yml"
 
@@ -1516,7 +1516,7 @@ def test_a_resnapshot_discards_a_stale_pending_package_and_still_purges(
         fresh_db, names, duckdb_path, tmp_path, monkeypatch):
     """dlt's `run` loads a pending package and returns WITHOUT extracting what it was handed —
     a resnapshot would load the stale hash and skip the safe baseline."""
-    from pg_md_cdc import cli, manifest as mf
+    from feather_cdc_postgres import cli, manifest as mf
     path = tmp_path / "demo.yml"
     path.write_text(DENY_MANIFEST.format(
         deny='  deny:\n    columns:\n      "public.person": [password_hash]',
@@ -1904,7 +1904,7 @@ def test_a_denied_column_renamed_before_a_baseline_is_withheld_by_its_attnum(
 
 def test_a_resnapshot_after_a_column_rename_keeps_it_out(
         fresh_db, names, duckdb_path, tmp_path, monkeypatch):
-    from pg_md_cdc import cli, manifest as mf
+    from feather_cdc_postgres import cli, manifest as mf
     path = tmp_path / "demo.yml"
     path.write_text(DENY_MANIFEST.format(
         deny='  deny:\n    columns:\n      "public.person": [password_hash]',
@@ -1940,7 +1940,7 @@ def test_a_denied_column_dropped_and_re_added_under_the_same_name_is_still_denie
 
 
 def _deny_manifest(tmp_path, names, fresh_db, duckdb_path, monkeypatch):
-    from pg_md_cdc import manifest as mf
+    from feather_cdc_postgres import manifest as mf
     path = tmp_path / "demo.yml"
     path.write_text(DENY_MANIFEST.format(
         deny='  deny:\n    columns:\n      "public.person": [password_hash]',
@@ -1959,7 +1959,7 @@ def test_any_added_column_on_a_denied_table_quarantines_until_a_resnapshot(
     """Codex round 17 (#4346): an added column changes the description, so the table carrying a
     deny is quarantined — not withheld column by column — and stays so, even once the column is
     denied too, until a resnapshot re-reviews it."""
-    from pg_md_cdc import cli
+    from feather_cdc_postgres import cli
     path, m = _deny_manifest(tmp_path, names, fresh_db, duckdb_path, monkeypatch)
     _person_hashed(fresh_db)
     assert cli.main(["run", str(path), "--dev"]) == 0
@@ -2026,7 +2026,7 @@ def test_r17_a_mark_of_a_dropped_table_is_cleared_when_its_name_is_rebuilt(
         fresh_db, names, duckdb_path, tmp_path, monkeypatch):
     """A quarantined table dropped at the source can emit nothing more; when the name it fed is
     rebuilt by a resnapshot, its mark goes too (clearing by OID alone would keep it for ever)."""
-    from pg_md_cdc import cli
+    from feather_cdc_postgres import cli
     path, m = _deny_manifest(tmp_path, names, fresh_db, duckdb_path, monkeypatch)
     _person_hashed(fresh_db)
     assert cli.main(["run", str(path), "--dev"]) == 0
@@ -2046,7 +2046,7 @@ def test_r17_a_quarantined_table_renamed_and_resnapshotted_is_cleared_by_its_oid
         fresh_db, names, duckdb_path, tmp_path, monkeypatch):
     """Codex round 17 finding 3: clearing was by the CURRENT name, so a quarantined table
     renamed and rebuilt under its new name kept its OID quarantined, and its mirror stale."""
-    from pg_md_cdc import cli
+    from feather_cdc_postgres import cli
     path, m = _deny_manifest(tmp_path, names, fresh_db, duckdb_path, monkeypatch)
     _person_hashed(fresh_db)
     assert cli.main(["run", str(path), "--dev"]) == 0
@@ -2134,7 +2134,7 @@ def test_a_quarantine_is_reported_every_tick_until_a_resnapshot_clears_it(
     """Codex round 14 (#4346): quarantined changes are skipped and the checkpoint moves on, so
     the relation is marked persistently and reported on every later tick (the alarm stays red)
     until a resnapshot rebuilds it."""
-    from pg_md_cdc import cli, manifest as mf
+    from feather_cdc_postgres import cli, manifest as mf
     path = tmp_path / "demo.yml"
     path.write_text(DENY_MANIFEST.format(
         deny='  deny:\n    columns:\n      "public.person": [password_hash]',
@@ -2375,7 +2375,7 @@ def test_r16_wal_older_than_a_resnapshot_does_not_re_quarantine_it(
     """A quarantine is raised by a CHANGE past the relation's baseline, never by a description
     alone: WAL queued before a resnapshot still carries the pre-rename description, and its rows
     are below the new boundary — so the rebuilt table streams, unflagged."""
-    from pg_md_cdc import cli, manifest as mf
+    from feather_cdc_postgres import cli, manifest as mf
     path = tmp_path / "demo.yml"
     path.write_text(DENY_MANIFEST.format(
         deny='  deny:\n    columns:\n      "public.person": [password_hash]',

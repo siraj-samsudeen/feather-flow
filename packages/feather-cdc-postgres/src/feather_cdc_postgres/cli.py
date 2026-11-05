@@ -1,4 +1,4 @@
-"""`python -m pg_md_cdc <command> <manifest>` (#3079 D1).
+"""`python -m feather_cdc_postgres <command> <manifest>` (#3079 D1).
 
 Constraints:
   - `validate` and `plan` MUTATE NOTHING — they open read-only connections and print. Anything
@@ -189,7 +189,7 @@ def cmd_resnapshot(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="pg_md_cdc", description="Declarative PostgreSQL → MotherDuck CDC runtime")
+    p = argparse.ArgumentParser(prog="feather_cdc_postgres", description="Declarative PostgreSQL → MotherDuck CDC runtime")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     sub = p.add_subparsers(dest="command", required=True)
 

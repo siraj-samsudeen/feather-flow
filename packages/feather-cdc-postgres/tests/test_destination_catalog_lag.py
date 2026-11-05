@@ -9,7 +9,7 @@ from __future__ import annotations
 import duckdb
 import pytest
 
-from pg_md_cdc.destination import Destination, DestinationSpec
+from feather_cdc_postgres.destination import Destination, DestinationSpec
 
 
 def _dest(duckdb_path):

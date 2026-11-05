@@ -4,8 +4,8 @@ from __future__ import annotations
 import psycopg
 import pytest
 
-from pg_md_cdc import discovery, schema_registry as sr, selectors as sel
-from pg_md_cdc.manifest import parse
+from feather_cdc_postgres import discovery, schema_registry as sr, selectors as sel
+from feather_cdc_postgres.manifest import parse
 
 
 def _ddl(dsn, *statements):
@@ -145,7 +145,7 @@ def test_featherbase_adapter_reproduces_the_pilot_catalog_rules(fresh_db):
     """Every filter the #2851 drainer applies, exercised at once: physical name derivation,
     kind filter, data_source filter, module allow-list, the always-on catalog tables, and the
     declared-but-not-materialised skip. A regression here silently changes what gets replicated."""
-    from pg_md_cdc.adapters.featherbase import select
+    from feather_cdc_postgres.adapters.featherbase import select
 
     _ddl(
         fresh_db,
@@ -225,8 +225,8 @@ def test_featherbase_adapter_two_way_rule_selects_user_tables_and_only_named_sys
     """D-13 (Siraj, 05-Sep-2026): `table_def."system" = false` (user-created) always flows,
     `"system" = true` (Featherbase's own) only when named in `options.system_tables` — the
     catalog tables included. Without the option, today's behaviour (everything) is unchanged."""
-    from pg_md_cdc.adapters import NAMED_SYSTEM, USER_CREATED
-    from pg_md_cdc.adapters.featherbase import select
+    from feather_cdc_postgres.adapters import NAMED_SYSTEM, USER_CREATED
+    from feather_cdc_postgres.adapters.featherbase import select
 
     _ddl(
         fresh_db,
@@ -271,7 +271,7 @@ def test_featherbase_adapter_two_way_rule_selects_user_tables_and_only_named_sys
 def test_featherbase_adapter_refuses_system_tables_without_the_system_column(fresh_db):
     """With no flag every row would read as user-created and the allow-list would admit every
     platform table — the opposite of what the option promises. Fail, never leak."""
-    from pg_md_cdc.adapters.featherbase import select
+    from feather_cdc_postgres.adapters.featherbase import select
 
     _ddl(fresh_db,
          'create table public.table_def (id serial primary key, "name" text, module text, '
@@ -284,8 +284,8 @@ def test_featherbase_adapter_refuses_system_tables_without_the_system_column(fre
 def test_featherbase_adapter_uses_catalog_physical_relations_across_schemas(fresh_db):
     """#3894: platform Tables moved with the catalog to `featherbase`, while installed apps
     declare their own physical schema/relation. The catalog remains the authority for both."""
-    from pg_md_cdc.adapters import NAMED_SYSTEM, USER_CREATED
-    from pg_md_cdc.adapters.featherbase import select
+    from feather_cdc_postgres.adapters import NAMED_SYSTEM, USER_CREATED
+    from feather_cdc_postgres.adapters.featherbase import select
 
     _ddl(
         fresh_db,
@@ -338,7 +338,7 @@ def test_featherbase_adapter_refuses_incomplete_current_physical_metadata(
 ):
     """A current non-system catalog row cannot fall back to name derivation: that would look
     for `featherbase.tasker_task` and silently omit the real `tasker.task`."""
-    from pg_md_cdc.adapters.featherbase import select
+    from feather_cdc_postgres.adapters.featherbase import select
 
     _ddl(
         fresh_db,

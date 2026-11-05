@@ -273,7 +273,7 @@ class Destination:
                 if time.monotonic() >= deadline:
                     raise
                 attempt += 1
-                print(f"[pg_md_cdc] _cdc_runtime metadata read retry {attempt} "
+                print(f"[feather_cdc_postgres] _cdc_runtime metadata read retry {attempt} "
                       f"(motherduck-catalog-lags-a-write): {msg}")
                 time.sleep(backoff_s)
 

@@ -1,4 +1,4 @@
-"""Test fixtures for pg_md_cdc (#3079).
+"""Test fixtures for feather_cdc_postgres (#3079).
 
 Integration tests need a real Postgres with wal_level=logical. Resolution order:
 

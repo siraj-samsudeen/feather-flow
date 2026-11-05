@@ -7,7 +7,7 @@ import pathlib
 import psycopg
 import pytest
 
-from pg_md_cdc import cli
+from feather_cdc_postgres import cli
 
 MANIFEST = """\
 api_version: pg-md-cdc/v1
@@ -160,7 +160,7 @@ def test_an_unreachable_source_exits_1_with_a_redacted_message_and_no_traceback(
 
     # positive control for the redaction: an exception that really does carry the DSN (dlt's
     # config errors echo the value they resolved), through the --json path.
-    from pg_md_cdc import discovery
+    from feather_cdc_postgres import discovery
 
     def _leak(dsn, **kw):
         raise RuntimeError(f"could not read the catalog of {dsn}")

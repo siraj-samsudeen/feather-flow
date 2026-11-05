@@ -12,7 +12,7 @@ import duckdb
 import psycopg
 import pytest
 
-from pg_md_cdc import cli, manifest as mf, runner
+from feather_cdc_postgres import cli, manifest as mf, runner
 
 MANIFEST = """\
 api_version: pg-md-cdc/v1
@@ -240,7 +240,7 @@ def test_a_failed_destination_drop_aborts_resnapshot_before_it_touches_the_sourc
     dest.write_lifecycle("demo", "public", "t", "resnapshot_required", "hand-set")
     signature_before = dest.read_signatures("demo")[("public", "t")]
 
-    from pg_md_cdc.destination import Destination
+    from feather_cdc_postgres.destination import Destination
 
     def refused(self, schema, table):
         raise RuntimeError("permission denied for table t")

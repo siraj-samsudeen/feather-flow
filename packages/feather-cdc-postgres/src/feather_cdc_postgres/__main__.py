@@ -1,4 +1,4 @@
-"""`python -m pg_md_cdc` entry point."""
+"""`python -m feather_cdc_postgres` entry point."""
 from __future__ import annotations
 
 import sys

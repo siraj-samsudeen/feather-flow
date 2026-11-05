@@ -4,8 +4,8 @@ from __future__ import annotations
 import duckdb
 import pytest
 
-from pg_md_cdc import schema_registry as sr
-from pg_md_cdc.discovery import SourceColumn, SourceRelation
+from feather_cdc_postgres import schema_registry as sr
+from feather_cdc_postgres.discovery import SourceColumn, SourceRelation
 
 # Every OID observed on the two live sources, plus the ones the pilot silently text-ed.
 MATRIX = [

@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import pytest
 
-from pg_md_cdc import selectors as sel
-from pg_md_cdc.adapters import AdapterRelation
-from pg_md_cdc.discovery import SourceColumn, SourceRelation, UniqueIndex
-from pg_md_cdc.manifest import parse
+from feather_cdc_postgres import selectors as sel
+from feather_cdc_postgres.adapters import AdapterRelation
+from feather_cdc_postgres.discovery import SourceColumn, SourceRelation, UniqueIndex
+from feather_cdc_postgres.manifest import parse
 
 BASE = {
     "api_version": "pg-md-cdc/v1",
@@ -205,7 +205,7 @@ def test_two_relations_routed_to_one_target_schema_and_table_collide():
 
 def test_a_user_created_relation_is_application_whatever_it_is_called():
     """A Featherbase user's own table named `share` is not the platform's `share`."""
-    from pg_md_cdc.adapters import NAMED_SYSTEM, USER_CREATED
+    from feather_cdc_postgres.adapters import NAMED_SYSTEM, USER_CREATED
     m = _m(source={"dsn_env": "DEMO_PG_DSN", "discovery": {"adapter": "featherbase", "options": {}}})
     disc = [rel("public", "share", pk=["id"]), rel("public", "role", pk=["id"]), rel("public", "test", pk=["id"])]
     plan = sel.compile(m, disc, [
