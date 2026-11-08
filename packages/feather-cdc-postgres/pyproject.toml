@@ -33,7 +33,11 @@ dependencies = [
     # constants and a `ControlPlane` factory with four call sites in runner.py. What #4078
     # decoupled was the DATABASE (this logs to its own CDC log DB via CDC_LOG_PG_DSN), not the
     # client library; a different DSN satisfies that.
-    "feather-control-plane[postgres]",
+    # Bounded below 0.2 deliberately. `[tool.uv.sources]` makes this the local member in-repo, but
+    # uv strips sources from published metadata, so an unbounded spec would let a released CDC pick
+    # up any future control plane. This uses its internals — ~50 `cp_status.*` constants and the
+    # `ControlPlane` factory — and pre-1.0 a minor is where breakage is allowed to land.
+    "feather-control-plane[postgres]>=0.1.0,<0.2",
     # sql_database extra is a real requirement of the vendored pg_replication source
     # (upstream dlt-hub/verified-sources#685 — `dlt init` ships incomplete requirements).
     "dlt[motherduck,sql_database]>=1.0.0",
