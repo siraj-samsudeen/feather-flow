@@ -35,7 +35,11 @@ def _now() -> _dt.datetime:
 def new_run_id(extractor: str) -> str:  # @spec run_id_unique_across_extractors
     """`<UTC second>-<extractor>-<6 hex>`. `control.run` is keyed on run_id alone, and every Railway
     container is pid 1, so the old `<second>-<pid>` gave two services starting in the same second
-    one id (#4614). The timestamp stays first: SAP names backups `run_id[:8]`."""
+    one id (#4614). The timestamp stays first: SAP names backups `run_id[:8]`.
+
+    NOT chronologically sortable. The timestamp resolves to the second, so two runs inside one
+    second sort by the random suffix — a coin flip. Order runs by `started_at`/`finished_at`,
+    never by run_id or by the name of the `<run_id>.jsonl` WAL file (feather-flow#89)."""
     return f"{_now().strftime('%Y%m%dT%H%M%SZ')}-{extractor}-{secrets.token_hex(3)}"
 
 

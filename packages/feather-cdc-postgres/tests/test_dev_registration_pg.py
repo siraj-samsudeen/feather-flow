@@ -28,7 +28,7 @@ def _rows(path, sql):
 
 def test_the_first_dev_tick_baselines_person_and_the_next_drains(fresh_db, duckdb_path, tmp_path,
                                                                   monkeypatch):
-    from test_e2e_pg import finish_record
+    from conftest import finish_record
 
     with psycopg.connect(fresh_db, autocommit=True) as c:
         c.execute(FIXTURE.read_text(encoding="utf-8"))

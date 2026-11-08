@@ -13,6 +13,7 @@ import duckdb
 import psycopg
 import pytest
 
+from conftest import finish_record
 from control_plane import ControlPlane
 from feather_cdc_postgres import publication, runner, stream, telemetry
 from feather_cdc_postgres.destination import Destination, DestinationSpec
@@ -945,19 +946,6 @@ def test_load_events_carry_the_schema_qualified_entity(fresh_db, names, duckdb_p
 
 
 # --------------------------------------------------------------------------- review: outcome
-
-
-def finish_record(wal_dir, extractor="test_cdc"):
-    """The `run_finish` record a WAL-only ControlPlane wrote — what control.run would hold."""
-    import json
-    import pathlib
-    records = []
-    for path in sorted(pathlib.Path(wal_dir, extractor).glob("*.jsonl")):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            rec = json.loads(line)
-            if rec.get("kind") == "run_finish":
-                records.append(rec)
-    return records[-1]
 
 
 def test_a_paused_registration_does_not_finish_its_run_ok(
