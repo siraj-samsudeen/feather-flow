@@ -78,12 +78,26 @@ class Source:
     deny_columns: Dict[str, List[str]] = field(default_factory=dict)
 
 
+def module_schema(module: Optional[str]) -> Optional[str]:
+    """The bronze schema for a module name, or None when the name cannot be one."""
+    name = re.sub(r"[^a-z0-9]+", "_", (module or "").lower()).strip("_")
+    if not _PG_IDENT.match(name) or len(name) > 63:
+        return None
+    if name in RESERVED_TARGET_SCHEMAS or name.endswith("_staging"):
+        return None
+    return name
+
+
 @dataclass(frozen=True)
 class TableSchema:
     """One per-table routing rule: relations matching `match` land in target `schema`."""
 
     match: str  # "schema.table" fnmatch glob
     schema: str
+    # True: land in the schema named after the table's module (`Store Layout` -> store_layout), read
+    # from the source's own catalog, so a Table made later needs no edit here. `schema` is then
+    # where a table with no usable module goes.
+    from_module: bool = False
 
 
 @dataclass(frozen=True)
@@ -100,12 +114,13 @@ class Destination:
     # resnapshot check `current_user()` against it before creating or writing anything.
     owner: str = ""
 
-    def target_schema(self, source_schema: str, table: Optional[str] = None) -> str:
+    def target_schema(self, source_schema: str, table: Optional[str] = None,
+                      module: Optional[str] = None) -> str:
         if table is not None:
             qualified = f"{source_schema}.{table}"
             for rule in self.table_schemas:
                 if fnmatch.fnmatchcase(qualified, rule.match):
-                    return rule.schema
+                    return (rule.from_module and module_schema(module)) or rule.schema
         if self.schema_mapping == "preserve_source":
             return source_schema
         if isinstance(self.schema_mapping, dict):
@@ -235,8 +250,9 @@ def parse(raw: Dict[str, Any], *, path: Optional[str] = None) -> Manifest:
     for entry in dest.get("table_schemas") or []:
         if not isinstance(entry, dict):
             raise ManifestError("destination.table_schemas entries must be mappings {match, schema}")
-        _reject_unknown(entry, {"match", "schema"}, "destination.table_schemas[]")
-        table_schemas.append(TableSchema(match=str(entry.get("match", "")), schema=str(entry.get("schema", ""))))
+        _reject_unknown(entry, {"match", "schema", "from_module"}, "destination.table_schemas[]")
+        table_schemas.append(TableSchema(match=str(entry.get("match", "")), schema=str(entry.get("schema", "")),
+                                         from_module=bool(entry.get("from_module", False))))
     rep = raw.get("replication") or {}
     _reject_unknown(
         rep,
@@ -417,9 +433,16 @@ def validate_static(m: Manifest) -> List[Problem]:
         if not _QUALIFIED.match(rule.match):
             err("table_schema_match", f"destination.table_schemas[{i}].match {rule.match!r} must be a 'schema.table' glob")
         _check_target_schema(p, f"destination.table_schemas[{i}].schema", rule.schema)
+    # A denied column is watched by its table's target schema, and a module-routed target is known
+    # only after discovery: a denied table must have a rule that names its schema outright.
+    for qualified in m.source.deny_columns:
+        rule = next((r for r in m.destination.table_schemas if fnmatch.fnmatchcase(qualified, r.match)), None)
+        if rule is not None and rule.from_module:
+            err("deny_on_module_rule", f"source.deny.columns names {qualified}, which only a from_module rule routes; "
+                                       "give it a rule of its own")
     if m.destination.table_schemas and m.destination.pipeline_name:
         n_targets = len({r.schema for r in m.destination.table_schemas})
-        if n_targets > 1:
+        if n_targets > 1 or any(r.from_module for r in m.destination.table_schemas):
             err(
                 "pipeline_name_ambiguous",
                 "destination.pipeline_name pins ONE dlt pipeline, but table_schemas name "

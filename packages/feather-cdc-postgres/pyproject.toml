@@ -1,6 +1,6 @@
 [project]
 name = "feather-cdc-postgres"
-version = "0.1.0"
+version = "0.2.0"
 description = "Declarative PostgreSQL -> MotherDuck CDC runtime: one registration file per source database, no per-source extractor"
 readme = "README.md"
 license = "MIT"

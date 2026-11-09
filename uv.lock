@@ -454,7 +454,7 @@ wheels = [
 
 [[package]]
 name = "feather-cdc-postgres"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/feather-cdc-postgres" }
 dependencies = [
     { name = "dlt", extra = ["motherduck", "sql-database"] },

@@ -210,6 +210,38 @@ def test_a_registration_with_per_table_targets_pins_no_pipeline_name():
     assert m.destination.target_schema("tasker", "anything_the_app_made") == "application"
 
 
+# --------------------------------------------------------------------------- schema from a module (#4588)
+
+
+@pytest.mark.parametrize("module,target", [
+    ("Organisation", "organisation"), ("Store Layout", "store_layout"), ("Warehouse Config", "warehouse_config"),
+    ("People", "people"), ("  Odd--Name! ", "odd_name"),
+    (None, "application"), ("", "application"),                       # no module
+    ("2026 Plans", "application"), ("Load Staging", "application"),   # not usable as a schema
+])
+def test_a_from_module_rule_names_the_schema_after_the_module(module, target):
+    rule = [{"match": "featherbase.*", "schema": "application", "from_module": True}]
+    m = _m(destination={"table_schemas": rule})
+    assert m.destination.target_schema("featherbase", "site_master", module) == target
+
+
+def test_a_named_rule_above_a_from_module_rule_still_wins():
+    rules = [{"match": "featherbase.person", "schema": "access"},
+             {"match": "featherbase.*", "schema": "application", "from_module": True}]
+    m = _m(destination={"table_schemas": rules})
+    assert m.destination.target_schema("featherbase", "person", "People") == "access"
+    assert m.destination.target_schema("tasker", "task", "People") == "tasker"
+
+
+def test_a_denied_table_needs_a_rule_that_names_its_schema():
+    rule = {"match": "featherbase.*", "schema": "application", "from_module": True}
+    bad = _m(destination={"table_schemas": [rule]}, source={"deny": {"columns": {"featherbase.person": ["password_hash"]}}})
+    assert "deny_on_module_rule" in _codes(mf.validate_static(bad), "error")
+    good = _m(destination={"table_schemas": [{"match": "featherbase.person", "schema": "access"}, rule]},
+              source={"deny": {"columns": {"featherbase.person": ["password_hash"]}}})
+    assert "deny_on_module_rule" not in _codes(mf.validate_static(good), "error")
+
+
 # --------------------------------------------------------------------------- deny.columns (#4346)
 
 

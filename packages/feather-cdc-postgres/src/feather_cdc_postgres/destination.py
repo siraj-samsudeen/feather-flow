@@ -250,6 +250,7 @@ class Destination:
             con.execute(f'''create table if not exists "{RUNTIME_SCHEMA}".baseline (
                 registration varchar, "schema" varchar, "table" varchar,
                 boundary_lsn bigint, taken_at timestamptz)''')
+            con.execute(f'alter table "{RUNTIME_SCHEMA}".baseline add column if not exists target_schema varchar')
         self._ensured = True
 
     def _read_metadata_with_retry(self, read_fn, *, max_wait_s: float = 40.0,
@@ -298,9 +299,11 @@ class Destination:
             con.execute(f'insert into "{RUNTIME_SCHEMA}".checkpoint values (?, ?, ?, ?, ?)',
                         [registration, slot, int(lsn), ids, _dt.datetime.now(_dt.timezone.utc)])
 
-    def write_baseline_lsns(self, registration: str, boundaries: dict) -> None:
+    def write_baseline_lsns(self, registration: str, boundaries: dict, targets=None) -> None:
         """{(schema, table): boundary_lsn} — one row per relation, replaced in place, one
-        transaction (a MotherDuck round trip per relation would make a 50-table init slow)."""
+        transaction (a MotherDuck round trip per relation would make a 50-table init slow).
+        `targets(schema, table)` names the schema the baseline landed in: a later run compares it
+        with where the table routes now (#4588)."""
         if not boundaries:
             return
         self.ensure_runtime_tables()
@@ -312,8 +315,11 @@ class Destination:
                     con.execute(f'delete from "{RUNTIME_SCHEMA}".baseline '
                                 'where registration = ? and "schema" = ? and "table" = ?',
                                 [registration, schema, table])
-                    con.execute(f'insert into "{RUNTIME_SCHEMA}".baseline values (?, ?, ?, ?, ?)',
-                                [registration, schema, table, int(lsn), now])
+                    con.execute(f'insert into "{RUNTIME_SCHEMA}".baseline '
+                                '(registration, "schema", "table", boundary_lsn, taken_at, target_schema) '
+                                'values (?, ?, ?, ?, ?, ?)',
+                                [registration, schema, table, int(lsn), now,
+                                 targets(schema, table) if targets else None])
                 con.execute("commit")
             except Exception:
                 con.execute("rollback")
@@ -451,6 +457,30 @@ class Destination:
             for oid in oids:
                 con.execute(f'delete from "{RUNTIME_SCHEMA}".deny_quarantine '
                             "where registration = ? and oid = ?", [registration, oid])
+
+    def read_baseline_targets(self, registration: str) -> dict[tuple[str, str], str | None]:
+        """{(schema, table): the schema its last baseline landed in}; None for one taken before
+        this was recorded."""
+        self.ensure_runtime_tables()
+
+        def _read():
+            with self.connect() as con:
+                rows = con.execute(f'select "schema", "table", target_schema from "{RUNTIME_SCHEMA}".baseline '
+                                   'where registration = ?', [registration]).fetchall()
+            return {(r[0], r[1]): r[2] for r in rows}
+        return self._read_metadata_with_retry(_read)
+
+    def record_baseline_target(self, registration: str, schema: str, table: str, target: str) -> None:
+        """Where a table's copy is, for one with no recorded target: an older baseline keeps its
+        boundary, and an adopted table gets a row with none (read_baseline_lsns skips those)."""
+        with self.connect() as con:
+            have = con.execute(f'update "{RUNTIME_SCHEMA}".baseline set target_schema = ? '
+                               'where registration = ? and "schema" = ? and "table" = ? returning 1',
+                               [target, registration, schema, table]).fetchall()
+            if not have:
+                con.execute(f'insert into "{RUNTIME_SCHEMA}".baseline '
+                            '(registration, "schema", "table", target_schema) values (?, ?, ?, ?)',
+                            [registration, schema, table, target])
 
     def read_baseline_lsns(self, registration: str) -> dict[tuple[str, str], int]:
         self.ensure_runtime_tables()

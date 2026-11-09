@@ -255,7 +255,7 @@ def compile(
                 key_policy=policy,
                 table_class=table_class(m, rel.schema, rel.table, meta.origin if meta else None),
                 module=meta.module if meta else None,
-                target_schema=m.destination.target_schema(rel.schema, rel.table),
+                target_schema=m.destination.target_schema(rel.schema, rel.table, meta.module if meta else None),
                 key_index=idx_name,
                 description=meta.description if meta else None,
                 origin=meta.origin if meta else None,

@@ -62,7 +62,7 @@ The source needs `wal_level = logical` and a role with `REPLICATION`.
 |---|---|
 | `environment` | `production` (default), `staging` or `dev` |
 | `source` | which relations: `include`/`exclude`/`deny` globs on `schema.table`, plus an optional catalog `discovery.adapter` |
-| `destination` | MotherDuck database, **`owner`** (required: the MotherDuck account the token must sign in as; `run`/`resnapshot` check `current_user()` against it before creating the database on a first run or writing anything), `schema_mapping` (default: source schemas preserved), **`table_schemas`** (per-table target schema, `[{match: "schema.table" glob, schema: target}]`, first match wins), dlt pipeline name (only with a single target schema), retirement policy |
+| `destination` | MotherDuck database, **`owner`** (required: the MotherDuck account the token must sign in as; `run`/`resnapshot` check `current_user()` against it before creating the database on a first run or writing anything), `schema_mapping` (default: source schemas preserved), **`table_schemas`** (per-table target schema, `[{match: "schema.table" glob, schema: target}]`, first match wins; add `from_module: true` to name the schema after the relation's catalog module instead, with `schema` as the fallback), dlt pipeline name (only with a single target schema), retirement policy |
 | `replication` | slot, publication, cadence, key policy for unkeyed tables, replica identity, batch size |
 | `control` | the extractor identity, run-log availability policy, event durability, `reconcile_exclude` |
 | `classification` | optional first-match rules overriding the default `table_class` |
@@ -99,6 +99,11 @@ carrying a value is rejected, and no environment value is ever printed or writte
 - One dlt pipeline per **target** schema (`<source_id>_cdc__<target_schema>`), never per
   source schema: `_cdc_runtime.*`, lifecycle and control events keep the **source**
   identity `schema.table`; the destination side is the relation's compiled `target_schema`.
+  A table whose target changes — a `table_schemas` edit, or a `from_module` rule following a
+  module rename — is **re-baselined in the new schema** on the next run, so its existing rows
+  move with it; the copy it left is frozen, like any retired mirror. A table waiting for a
+  resnapshot (`drift_review`, `resnapshot_required`) stays where its rows are until the operator
+  resnapshots it, and nothing else may land on that held copy.
 - `selection_hash` covers the relation set **and** each table's key policy, so a table that
   silently dropped from merge to append-only changes the hash.
 

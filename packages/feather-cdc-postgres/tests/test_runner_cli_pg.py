@@ -352,6 +352,36 @@ def _rows(duckdb_path, qualified, cols="id, v"):
         con.close()
 
 
+def test_a_streaming_table_moved_to_a_new_target_brings_its_rows_with_it(
+        fresh_db, routed_registration, duckdb_path, capsys):
+    """A routing change baselines the table in its new target (#4588; until then #4662 needed a
+    resnapshot for this), a resnapshot still works, and the old copy stays frozen."""
+    sql(fresh_db, "create table public.test (id int primary key, v text)",
+        "insert into public.test values (1, 'one'), (2, 'two')")
+    assert cli.main(["run", routed_registration, "--dev"]) == 0
+    assert _rows(duckdb_path, "application.test") == [(1, "one"), (2, "two")]
+
+    path = pathlib.Path(routed_registration)
+    rule = '    - {match: "public.user", schema: access}\n'
+    path.write_text(path.read_text(encoding="utf-8").replace(
+        rule, rule + '    - {match: "public.test", schema: tasker}\n'), encoding="utf-8")
+
+    sql(fresh_db, "update public.test set v = 'TWO' where id = 2", "insert into public.test values (3, 'three')")
+    assert cli.main(["run", routed_registration, "--dev"]) == 0
+    assert _rows(duckdb_path, "tasker.test") == [(1, "one"), (2, "TWO"), (3, "three")], "row 1 moved too"
+
+    m = mf.load(routed_registration)
+    assert runner.resnapshot(m, tables=["public.test"], yes=True, dev=True) == 0
+    capsys.readouterr()
+    assert _rows(duckdb_path, "tasker.test") == [(1, "one"), (2, "TWO"), (3, "three")]
+    assert runner._destination(m).read_lifecycle("demo")[("public", "test")] == "streaming"
+
+    sql(fresh_db, "delete from public.test where id = 1")
+    assert cli.main(["run", routed_registration, "--dev"]) == 0
+    assert _rows(duckdb_path, "tasker.test") == [(2, "TWO"), (3, "three")]
+    assert _rows(duckdb_path, "application.test") == [(1, "one"), (2, "two")], "the old copy stays frozen"
+
+
 def test_two_tables_of_one_source_schema_land_in_their_own_target_schemas_end_to_end(
         fresh_db, routed_registration, duckdb_path, tmp_path, capsys):
     """Snapshot, CDC and resnapshot all honour `table_schemas`: `public.table_def` → catalog,
