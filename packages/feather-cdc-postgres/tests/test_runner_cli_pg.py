@@ -12,6 +12,7 @@ import duckdb
 import psycopg
 import pytest
 
+from conftest import finish_record, wal_records
 from feather_cdc_postgres import cli, manifest as mf, runner
 
 MANIFEST = """\
@@ -216,10 +217,7 @@ def test_an_empty_compiled_selection_fails_closed_and_records_the_run(
     m = mf.load(registration)
     assert _slot_and_publication(fresh_db, m) == (True, {"t"}), "nothing was touched"
 
-    import json
-    records = []
-    for path in sorted((tmp_path / "wal" / "demo_cdc").glob("*.jsonl")):
-        records += [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()]
+    records = wal_records(str(tmp_path / "wal"), "demo_cdc")
     finishes = [r for r in records if r.get("kind") == "run_finish"]
     assert finishes[-1]["status"] == "failed" and finishes[-1]["n_err"] == 1
     assert any(r.get("kind") == "event" and r.get("entity") == "_selection"
@@ -288,7 +286,6 @@ def test_an_unreachable_source_still_leaves_a_failed_run_row(registration, tmp_p
     fired". An outage must be a `failed` row, like every other way a tick can die."""
     monkeypatch.setenv("DEMO_PG_DSN", "postgresql://cdc@127.0.0.1:1/nowhere?connect_timeout=1")
     assert cli.main(["run", registration, "--dev"]) != 0
-    from test_e2e_pg import finish_record
     rec = finish_record(str(tmp_path / "wal"), extractor="demo_cdc")
     assert rec["status"] == "failed" and rec["stop_reason"] == "error"
 

@@ -14,6 +14,8 @@ exercised for real. Pattern borrowed from control_plane/tests/conftest.py (PR #3
 """
 from __future__ import annotations
 
+import datetime as _dt
+import json
 import os
 import pathlib
 import shutil
@@ -96,17 +98,28 @@ def pg_dsn():
 @pytest.fixture
 def fresh_db(pg_dsn):
     """A brand-new database per test (slots are cluster-wide, so tests must also use unique
-    slot/publication names — use the `names` fixture). Dropped afterwards."""
+    slot/publication names — use the `names` fixture). Dropped afterwards.
+
+    A tick is *meant* to leave its slot alive — that is how the next tick resumes — so the
+    teardown drops this database's slots itself. What it refuses to tolerate is a slot that
+    outlives the database it belongs to: nothing drops it afterwards, and it retains WAL for
+    the whole cluster until `max_replication_slots=20` is exhausted. That one fails here,
+    loudly, on the test that caused it."""
     import psycopg
     name = "t_" + uuid.uuid4().hex[:10]
     with psycopg.connect(pg_dsn, autocommit=True) as c:
+        pre_existing = {r[0] for r in c.execute("select slot_name from pg_replication_slots")}
         c.execute(f'create database "{name}"')
     yield pg_dsn.rsplit("/", 1)[0] + "/" + name
     with psycopg.connect(pg_dsn, autocommit=True) as c:
-        # drop any slot the test left behind (a leaked slot retains WAL for the whole cluster)
+        # this database's own slots: expected, and they must go before `drop database` can run
         for (slot,) in c.execute("select slot_name from pg_replication_slots where database = %s", (name,)).fetchall():
             c.execute("select pg_drop_replication_slot(%s)", (slot,))
         c.execute(f'drop database if exists "{name}" with (force)')
+        strays = {r[0] for r in c.execute("select slot_name from pg_replication_slots")} - pre_existing
+    assert not strays, (f"replication slot(s) {sorted(strays)} outlived the database they were "
+                        f"created for — nothing will ever drop them, and the cluster retains "
+                        f"WAL for each until max_replication_slots is exhausted")
 
 
 @pytest.fixture
@@ -119,3 +132,51 @@ def names():
 @pytest.fixture
 def duckdb_path(tmp_path):
     return str(tmp_path / "dest.duckdb")
+
+
+# --------------------------------------------------------------- reading a WAL-only run log
+
+_EPOCH = _dt.datetime.min.replace(tzinfo=_dt.timezone.utc)
+
+
+def _ran_at(records: list[dict]) -> _dt.datetime:
+    """When this run finished (or started, if it never recorded a finish)."""
+    for kind, field in (("run_finish", "finished_at"), ("run_start", "started_at")):
+        for rec in records:
+            if rec.get("kind") == kind and rec.get(field):
+                return _dt.datetime.fromisoformat(rec[field])
+    return _EPOCH
+
+
+def wal_runs(wal_dir, extractor) -> list[tuple[str, list[dict]]]:
+    """`(run_id, records)` per run in one extractor's WAL directory, oldest run FIRST.
+
+    Ordered by the `finished_at` the run recorded — never by filename. A WAL file is named
+    `<run_id>.jsonl` and `new_run_id` is `<UTC second>-<extractor>-<6 random hex>`, so the two
+    runs a test makes back-to-back normally share a timestamp and sort by the coin flip in
+    their suffix (#89): `sorted(glob(...))[-1]` returned the FIRST run's outcome half the time.
+    """
+    runs = []
+    for path in pathlib.Path(wal_dir, extractor).glob("*.jsonl"):
+        records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                   if line.strip()]
+        if records:
+            runs.append((_ran_at(records), path.stem, records))
+    runs.sort(key=lambda run: run[0])
+    stamps = [ran_at for ran_at, _, _ in runs]
+    assert len(set(stamps)) == len(stamps), (
+        "two runs share a timestamp, so which one is 'the last run' is a guess: "
+        + ", ".join(f"{run_id}@{ran_at.isoformat()}" for ran_at, run_id, _ in runs))
+    return [(run_id, records) for _, run_id, records in runs]
+
+
+def wal_records(wal_dir, extractor) -> list[dict]:
+    """Every record in one extractor's WAL, run by run, oldest run first."""
+    return [rec for _, records in wal_runs(wal_dir, extractor) for rec in records]
+
+
+def finish_record(wal_dir, extractor="test_cdc") -> dict:
+    """The `run_finish` the LAST run wrote — what `control.run` would hold for it."""
+    finishes = [r for r in wal_records(wal_dir, extractor) if r.get("kind") == "run_finish"]
+    assert finishes, f"no run finished in {wal_dir}/{extractor}"
+    return finishes[-1]

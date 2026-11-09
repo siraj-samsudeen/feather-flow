@@ -109,7 +109,7 @@ def _tables(duckdb_path) -> set:
 
 
 def _status(tmp_path) -> str:
-    from test_e2e_pg import finish_record
+    from conftest import finish_record
     return finish_record(str(tmp_path / "wal"), extractor="fb_demo_cdc")["status"]
 
 
@@ -316,7 +316,7 @@ def test_a_retired_relation_with_no_recorded_key_is_reported_not_merged_silently
     _sql(fresh_db, "update featherbase.\"user\" set full_name = 'Asha K' where row_id = 'E001'")
     _sql(fresh_db, *MIGRATION_0101, transaction=True)
     assert cli.main(["run", new, "--dev"]) == 0
-    from test_e2e_pg import finish_record
+    from conftest import finish_record
     rec = finish_record(str(tmp_path / "wal"), extractor="fb_demo_cdc")
     assert rec["status"] == "partial"
     assert runner._destination(mf.load(new)).read_lifecycle("fb_demo")[
