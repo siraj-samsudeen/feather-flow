@@ -18,6 +18,8 @@ import dlt
 import duckdb
 from dlt.destinations.impl.motherduck.configuration import MotherDuckCredentials
 
+from .timing import TimedConnection
+
 RUNTIME_SCHEMA = "_cdc_runtime"
 
 
@@ -38,6 +40,11 @@ class DestinationSpec:
 
 class WrongOwner(RuntimeError):
     """The token signs in as a different MotherDuck account than the registration declares."""
+
+
+def _chunks(items: Sequence, size: int = 500) -> list[Sequence]:
+    """Split one large statement's rows so its SQL text and parameter list stay a sensible size."""
+    return [items[i:i + size] for i in range(0, len(items), size)]
 
 
 class Destination:
@@ -112,19 +119,20 @@ class Destination:
         re-raised as a RuntimeError with the token scrubbed and no chained cause."""
         token = self._token()
         try:
-            with duckdb.connect("md:", config={"motherduck_token": token}) as con:
+            with TimedConnection(lambda: duckdb.connect("md:", config={"motherduck_token": token})) as con:
                 return fn(con)
         except Exception as exc:  # noqa: BLE001 — re-raised below without the token
             detail = f"{type(exc).__name__}: {exc}".replace(token, "***redacted***")
             # `from None`: a chained cause would carry the unredacted text into the traceback.
             raise RuntimeError(f"{what}: {detail}") from None
 
-    def connect(self) -> duckdb.DuckDBPyConnection:
+    def connect(self) -> TimedConnection:
+        """`with dest.connect() as con` yields the duckdb connection; its open time is recorded (#4708)."""
         if self.spec.kind == "duckdb":
-            return duckdb.connect(self.credentials())
+            return TimedConnection(lambda: duckdb.connect(self.credentials()))
         # config= keeps the token out of the connection string duckdb quotes in errors.
-        return duckdb.connect(f"md:{self.spec.database}",
-                              config={"motherduck_token": self._token()})
+        return TimedConnection(lambda: duckdb.connect(f"md:{self.spec.database}",
+                                                      config={"motherduck_token": self._token()}))
 
     # --- pipelines ---
     def pipeline_for_target(self, target_schema: str, pipeline_name: str | None = None, *,
@@ -522,8 +530,8 @@ class Destination:
         REPLACES each named relation's rows — the registry is current state, like `lifecycle`
         and `signature` beside it; the history of what CHANGED lives in `control.event`. Appending
         instead would add one row per column per tick: ~500 rows every 5 minutes for Featherbase,
-        50M a year, in a table nothing prunes. One transaction, so a MotherDuck load pays one
-        round trip rather than one per column."""
+        50M a year, in a table nothing prunes. Multi-row statements, because `executemany` costs
+        MotherDuck a round trip per row: 575 s of a 670 s Featherbase run (#4708)."""
         if not rows:
             return 0
         self.ensure_runtime_tables()
@@ -532,16 +540,19 @@ class Destination:
         with self.connect() as con:
             con.execute("begin transaction")
             try:
-                for registration, schema, table in pairs:
-                    con.execute(f'delete from "{RUNTIME_SCHEMA}".schema_registry '
-                                'where registration = ? and "schema" = ? and "table" = ?',
-                                [registration, schema, table])
-                con.executemany(
-                    f'insert into "{RUNTIME_SCHEMA}".schema_registry values (?,?,?,?,?,?,?,?,?,?,?)',
-                    [[r["registration"], r["schema"], r["table"], r["column"],
-                      r.get("type_oid"), r.get("typmod"), r.get("not_null"),
-                      r.get("key_role"), r.get("dest_type"), r.get("mapping"),
-                      r.get("seen_at") or now] for r in rows])
+                for chunk in _chunks(pairs):
+                    match = " or ".join(['(registration = ? and "schema" = ? and "table" = ?)'] * len(chunk))
+                    con.execute(f'delete from "{RUNTIME_SCHEMA}".schema_registry where {match}',
+                                [value for pair in chunk for value in pair])
+                for chunk in _chunks(rows):
+                    placeholders = ",".join(["(?,?,?,?,?,?,?,?,?,?,?)"] * len(chunk))
+                    con.execute(
+                        f'insert into "{RUNTIME_SCHEMA}".schema_registry values {placeholders}',
+                        [value for r in chunk for value in (
+                            r["registration"], r["schema"], r["table"], r["column"],
+                            r.get("type_oid"), r.get("typmod"), r.get("not_null"),
+                            r.get("key_role"), r.get("dest_type"), r.get("mapping"),
+                            r.get("seen_at") or now)])
                 con.execute("commit")
             except Exception:
                 con.execute("rollback")

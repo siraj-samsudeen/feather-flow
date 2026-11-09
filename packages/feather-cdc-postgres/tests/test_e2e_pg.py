@@ -2389,3 +2389,31 @@ def test_r16_wal_older_than_a_resnapshot_does_not_re_quarantine_it(
         (1, "a@x"), (2, "b@x"), (3, "c@x"), (4, "d@x")]
     con.close()
     assert _hash_rows(duckdb_path) == 0
+
+
+# --------------------------------------------------------------------------- stage timing (#4708)
+
+
+def test_a_steady_state_run_times_every_stage_and_adds_nothing_to_the_tally(fresh_db, names, duckdb_path, tmp_path):
+    from feather_cdc_postgres.timing import UNIT, StageClock
+
+    sql(fresh_db, "create table public.orders (id int primary key, status text)",
+        "insert into public.orders values (1, 'new')")
+    relations = [rel("public", "orders", "id")]
+    cfg, _ = make(fresh_db, names, duckdb_path, tmp_path)
+    tick(cfg, relations)   # the baseline
+
+    sql(fresh_db, "insert into public.orders values (2, 'new')")
+    run = FakeRun()
+    with OwnerSession(cfg.source_dsn, cfg.slot) as owner:
+        result = runner.run_relations(cfg, relations, run=run, owner=owner, clock=StageClock(run))
+    extras = [e["extra"] for e in run.units(UNIT)]
+    assert [x["stage"] for x in extras] == [
+        "runtime_tables", "resolve_denied_columns", "read_lifecycle", "probe_slot", "adopt_streaming",
+        "drift_read_signatures", "drift_read_source_catalog", "drift_write_schema_registry", "drift_scan",
+        "reconcile_selection", "resume_snapshots", "drain", "check_denied_columns", "final_probe",
+        "reconcile_counts", "total"]
+    drain = next(x for x in extras if x["stage"] == "drain")
+    assert "peek_slot_s" in drain and "read_wal_s" in drain
+    assert result["outcome"]["status"] == "ok"
+    assert len(table(duckdb_path, "public.orders", "id")) == 2

@@ -37,6 +37,7 @@ from .lifecycle import (
     Lifecycle,
 )
 from .ownership import OwnerSession, OwnershipLost
+from .timing import NO_CLOCK, StageClock
 
 
 @dataclass
@@ -753,7 +754,7 @@ def _retired_keys(cfg: RuntimeConfig, lc: Lifecycle, active) -> dict:
 
 
 def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines,
-           targets: _Targets, retired_keys: dict | None = None) -> dict:
+           targets: _Targets, retired_keys: dict | None = None, clock=NO_CLOCK) -> dict:
     """Batch loop. The slot hands over items grouped by SOURCE schema; they are regrouped by
     TARGET schema here (one dlt pipeline per dataset). The checkpoint moves only after every
     dataset in the batch committed; the slot is advanced only to a checkpointed LSN."""
@@ -807,7 +808,8 @@ def _drain(cfg: RuntimeConfig, relations, *, run, owner, pipelines: _Pipelines,
                               reviewed_layout_by_oid=layouts,
                               bound_oids=(set(cfg.deny_oids) | set(cfg.deny_attnums)
                                           if deny_on else None),
-                              quarantined_oids=held):
+                              quarantined_oids=held,
+                              note_time=clock.note):
         owner.assert_held()
         for oid, (schema, table, why) in sorted(batch.quarantined.items()):
             run.event(entity=f"{schema}.{table}", status=cp_status.EV_ERROR, unit="deny_columns",
@@ -932,15 +934,17 @@ def _outcome(relations, active, *, errors: set, paused: bool) -> dict:
             "n_skipped": skipped, "errors": sorted(errors)}
 
 
-def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
+def run_relations(cfg: RuntimeConfig, relations, *, run, owner, clock=NO_CLOCK) -> dict:
     """One full drain cycle for an already-compiled relation set. Callers hold the owner lock.
     The result carries `outcome` — status + n_ok/n_err/n_skipped — for `execute` to finish
     the control.run row with."""
     t0 = time.monotonic()
     relations = list(relations)
     run = _Tally(run)
-    cfg.destination.ensure_runtime_tables()
-    cfg = _with_inherited_denies(cfg, relations)
+    with clock.stage("runtime_tables"):
+        cfg.destination.ensure_runtime_tables()
+    with clock.stage("resolve_denied_columns"):
+        cfg = _with_inherited_denies(cfg, relations)
     refused = _refuse_denied_keys(cfg, relations)
     if refused:
         run.event(entity="_deny_columns", status=cp_status.EV_ERROR, unit="deny_columns",
@@ -960,11 +964,13 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
                   extra={"unbound": list(cfg.deny_unbound)})
         return {"paused": True,
                 "outcome": _outcome(relations, [], errors=run.errors, paused=True)}
-    lc = Lifecycle(cfg.destination, cfg.registration, run)
+    with clock.stage("read_lifecycle"):
+        lc = Lifecycle(cfg.destination, cfg.registration, run)
     targets = _Targets(cfg, relations)
     pipelines = _Pipelines(cfg, targets.all())
 
-    slot = telemetry.slot_probe(cfg.source_dsn, cfg.slot)
+    with clock.stage("probe_slot"):
+        slot = telemetry.slot_probe(cfg.source_dsn, cfg.slot)
     lost = slot is not None and slot.get("wal_status") == "lost"
     if (slot is None or lost) and cfg.slot_loss_policy == "pause" and slot is not None:
         for r in relations:
@@ -997,41 +1003,48 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
         _retire_unselected(cfg, lc, [(r.schema, r.table) for r in relations])
         active = relations
     else:
-        _adopt_streaming(lc, relations,
-                         publication.published_relations(cfg.source_dsn, cfg.publication),
-                         existing=cfg.destination.destination_tables(targets.all()),
-                         targets=targets)
-        outcome = drift.scan(cfg, relations, run=run, lc=lc, owner=owner,
-                             manifest_path=cfg.manifest_path)
+        with clock.stage("adopt_streaming"):
+            _adopt_streaming(lc, relations,
+                             publication.published_relations(cfg.source_dsn, cfg.publication),
+                             existing=cfg.destination.destination_tables(targets.all()),
+                             targets=targets)
+        with clock.stage("drift_scan"):   # includes the drift_* stages it times itself
+            outcome = drift.scan(cfg, relations, run=run, lc=lc, owner=owner,
+                                 manifest_path=cfg.manifest_path, clock=clock)
         blocked = outcome.blocked
         active = outcome.active(relations)
-        _reconcile_selection(cfg, active, run=run, owner=owner, lc=lc, pipelines=pipelines,
-                             targets=targets, blocked=blocked)
-        _resume_interrupted_snapshots(cfg, active, run=run, owner=owner, lc=lc,
-                                      pipelines=pipelines, targets=targets)
+        with clock.stage("reconcile_selection"):
+            _reconcile_selection(cfg, active, run=run, owner=owner, lc=lc, pipelines=pipelines,
+                                 targets=targets, blocked=blocked)
+        with clock.stage("resume_snapshots"):
+            _resume_interrupted_snapshots(cfg, active, run=run, owner=owner, lc=lc,
+                                          pipelines=pipelines, targets=targets)
 
-    result = _drain(cfg, active, run=run, owner=owner, pipelines=pipelines, targets=targets,
-                    retired_keys=_retired_keys(cfg, lc, active))
+    with clock.stage("drain"):
+        result = _drain(cfg, active, run=run, owner=owner, pipelines=pipelines, targets=targets,
+                        retired_keys=_retired_keys(cfg, lc, active), clock=clock)
     result["drift_blocked"] = sorted(blocked)
-    # Re-resolved: OIDs bound during this run may now sit under a name the startup map lacks.
-    cfg = _with_inherited_denies(cfg, relations)
-    for oid, (schema, table, why, since) in sorted(
-            cfg.destination.read_quarantine(cfg.registration).items()):
-        if oid in result["quarantined"]:
-            continue   # already reported by this run's drain
-        run.event(entity=f"{schema}.{table}", status=cp_status.EV_ERROR, unit="deny_columns",
-                  error_detail=(f"changes were skipped since {since} ({why}); bronze is stale "
-                                "for this table until it is resnapshotted"),
-                  extra={"action": "quarantine_pending", "oid": oid,
-                         "remedy": drift.remedy(cfg.manifest_path, f"{schema}.{table}")})
-    result["denied_columns_at_destination"] = _check_denied_columns(
-        cfg, relations, run=run, targets=targets, pipelines=pipelines)
+    with clock.stage("check_denied_columns"):
+        # Re-resolved: OIDs bound during this run may now sit under a name the startup map lacks.
+        cfg = _with_inherited_denies(cfg, relations)
+        for oid, (schema, table, why, since) in sorted(
+                cfg.destination.read_quarantine(cfg.registration).items()):
+            if oid in result["quarantined"]:
+                continue   # already reported by this run's drain
+            run.event(entity=f"{schema}.{table}", status=cp_status.EV_ERROR, unit="deny_columns",
+                      error_detail=(f"changes were skipped since {since} ({why}); bronze is stale "
+                                    "for this table until it is resnapshotted"),
+                      extra={"action": "quarantine_pending", "oid": oid,
+                             "remedy": drift.remedy(cfg.manifest_path, f"{schema}.{table}")})
+        result["denied_columns_at_destination"] = _check_denied_columns(
+            cfg, relations, run=run, targets=targets, pipelines=pipelines)
 
-    probe = telemetry.slot_probe(cfg.source_dsn, cfg.slot)
-    checkpoint = cfg.destination.read_checkpoint(cfg.registration)
-    published = publication.published_relations(cfg.source_dsn, cfg.publication)
-    dest_tables = cfg.destination.destination_tables(
-        {targets(r.schema, r.table) for r in active})
+    with clock.stage("final_probe"):
+        probe = telemetry.slot_probe(cfg.source_dsn, cfg.slot)
+        checkpoint = cfg.destination.read_checkpoint(cfg.registration)
+        published = publication.published_relations(cfg.source_dsn, cfg.publication)
+        dest_tables = cfg.destination.destination_tables(
+            {targets(r.schema, r.table) for r in active})
     telemetry.emit_probe(run, probe, {
         "selected_tables": len(active),
         "published_tables": len(published),
@@ -1043,12 +1056,14 @@ def run_relations(cfg: RuntimeConfig, relations, *, run, owner) -> dict:
     }, pull_ms=int((time.monotonic() - t0) * 1000))
 
     from .selectors import APPEND_ONLY
-    telemetry.emit_reconcile(run, telemetry.reconcile_counts(
-        cfg.source_dsn, cfg.destination, [(r.schema, r.table) for r in active],
-        targets.of, threshold=cfg.reconcile_threshold,
-        exclude=list(cfg.reconcile_exclude),
-        append_only={(r.schema, r.table) for r in active
-                     if r.key_policy == APPEND_ONLY}))
+    with clock.stage("reconcile_counts"):
+        telemetry.emit_reconcile(run, telemetry.reconcile_counts(
+            cfg.source_dsn, cfg.destination, [(r.schema, r.table) for r in active],
+            targets.of, threshold=cfg.reconcile_threshold,
+            exclude=list(cfg.reconcile_exclude),
+            append_only={(r.schema, r.table) for r in active
+                         if r.key_policy == APPEND_ONLY}))
+    clock.total()
     result["outcome"] = _outcome(relations, active, errors=run.errors, paused=False)
     return result
 
@@ -1095,9 +1110,10 @@ def _checkpoint_time(cfg: RuntimeConfig):
         return None
 
 
-def execute(cfg: RuntimeConfig, relations, *, cp: ControlPlane) -> int:
+def execute(cfg: RuntimeConfig, relations, *, cp: ControlPlane, clock=NO_CLOCK) -> int:
     """Ownership + control-plane run wrapper. A second concurrent run touches NOTHING."""
     with cp.run("cdc") as run:
+        clock.bind(run)
         owner = OwnerSession(cfg.source_dsn, cfg.slot)
         if not owner.acquire():
             _log(f"another run owns slot {cfg.slot!r} — skipping this tick")
@@ -1106,7 +1122,7 @@ def execute(cfg: RuntimeConfig, relations, *, cp: ControlPlane) -> int:
             run.finish(cp_status.RUN_OK, stop_reason=cp_status.STOP_CLEAN, n_ok=0, n_skipped=1)
             return 0
         try:
-            result = run_relations(cfg, relations, run=run, owner=owner)
+            result = run_relations(cfg, relations, run=run, owner=owner, clock=clock)
         except OwnershipLost as exc:
             # The ONE event whose text is an arbitrary driver message: psycopg wraps whatever
             # killed the owner connection. control.event is read by everyone with the plane, so
@@ -1295,13 +1311,16 @@ def _check_owner(manifest) -> BaseException | None:
 
 def run(manifest, *, dev: bool = False, manifest_path: str = "<manifest>") -> int:
     _refuse_wrong_environment(manifest)
-    owner_error = _check_owner(manifest)
+    clock = StageClock()
+    with clock.stage("check_owner"):
+        owner_error = _check_owner(manifest)
     cp = _control_plane(manifest, dev)
     if owner_error is not None:
         _record_failed_run(cp, "_destination", "owner_check", owner_error)
         raise owner_error
     try:
-        dsn, plan = _compile(manifest)
+        with clock.stage("compile_selection"):
+            dsn, plan = _compile(manifest)
     except SystemExit:
         raise   # a manifest refusal already explained itself; nothing ran
     except Exception as exc:
@@ -1316,11 +1335,12 @@ def run(manifest, *, dev: bool = False, manifest_path: str = "<manifest>") -> in
         _refuse_empty_selection(cfg, cp=cp)
     try:
         # A new registration's database may not exist yet (#4426): every refusal is behind us.
-        cfg.destination.ensure_database()
+        with clock.stage("ensure_database"):
+            cfg.destination.ensure_database()
     except Exception as exc:
         _record_failed_run(cp, "_destination", "create_database", exc)
         raise
-    return execute(cfg, plan.relations, cp=cp)
+    return execute(cfg, plan.relations, cp=cp, clock=clock)
 
 
 def _record_failed_run(cp: ControlPlane, entity: str, unit: str, exc: BaseException) -> None:

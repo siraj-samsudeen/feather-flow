@@ -171,6 +171,19 @@ Runs, per-relation events and budget telemetry go to
 to whatever `CDC_LOG_PG_DSN` points at — deliberately **not** the database being mirrored. Pass
 `--dev` for a local, WAL-only run that writes no run rows at all.
 
+Every run also logs **where its time went**: one `ok` event per stage, entity `_timing`, unit
+`stage_timing`, carrying the stage name, its seconds, and the destination connections opened in
+it with their opening and held time. `drain` splits out `peek_slot_s` and `read_wal_s`; a final
+`total` entry holds the run's connection totals. `drift_scan` CONTAINS the three `drift_*`
+stages, so reading them as additive double-counts. The status is `ok` by design — timing must
+not move `n_ok`/`n_err` or trip an error alarm — and a failure to record a stage is logged and
+swallowed, never raised (#4708).
+
+```sql
+select extra->>'stage', extra->>'seconds'
+from control.event where entity = '_timing' and run_id = %s order by seq;
+```
+
 ## Vendored code
 
 `src/pg_replication/` is the `pg_replication` verified source from

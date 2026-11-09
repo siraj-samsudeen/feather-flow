@@ -12,8 +12,9 @@ to apply BEFORE the batch's rows.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
-from typing import Iterable, Iterator, Mapping, Sequence
+from typing import Callable, Iterable, Iterator, Mapping, Sequence
 
 from dlt.sources.credentials import ConnectionStringCredentials
 
@@ -88,6 +89,7 @@ def drain(
     reviewed_layout_by_oid: Mapping[int, ReviewedLayout] | None = None,
     bound_oids: Iterable[int] | None = None,
     quarantined_oids: Iterable[int] = (),
+    note_time: Callable[[str, float], None] | None = None,
 ) -> Iterator[Batch]:
     """Iterate committed batches from `start_lsn` up to the slot's current max LSN.
 
@@ -101,11 +103,15 @@ def drain(
     entry, quarantines it at its next change. `bound_oids` (the runner's: OIDs bound at run start or by a baseline)
     quarantines any other OID met under a denied name; None leaves that check off.
     `quarantined_oids` are skipped from the first batch on.
+    `note_time(name, seconds)` is told how long reading the slot took (#4708).
     """
+    note = note_time or (lambda _name, _seconds: None)
     creds = credentials(dsn)
     options = _options(publication)
     if upto_lsn is None:
+        started = time.monotonic()
         upto_lsn = get_max_lsn(slot, options, creds)
+        note("peek_slot_s", time.monotonic() - started)
     if upto_lsn is None:
         return
     cursor_lsn = start_lsn
@@ -138,7 +144,9 @@ def drain(
             bound_relids=bound,
             quarantined_relids=quarantined,
         )
+        started = time.monotonic()
         grouped = gen.collect()
+        note("read_wal_s", time.monotonic() - started)
         if gen.last_commit_lsn is None:
             # Backstop (#4345): the consumer stops only at a commit, so this cannot happen
             # today. If it ever does, the batch is a partial transaction and there is no LSN to
