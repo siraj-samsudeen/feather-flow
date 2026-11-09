@@ -389,9 +389,17 @@ class _Targets:
         self.of: dict[tuple[str, str], str] = {
             (r.schema, r.table): (r.target_schema or cfg.target_schema(r.schema, r.table))
             for r in relations}
+        self._landed: dict | None = None
 
     def __call__(self, schema: str, table: str) -> str:
-        return self.of.get((schema, table)) or self.cfg.target_schema(schema, table)
+        known = self.of.get((schema, table))
+        if known:
+            return known
+        # Outside the compiled set: queued WAL under a name just renamed (#4338). Its module may
+        # have routed it, which the manifest cannot say, so go where its rows are (#4588).
+        if self._landed is None:
+            self._landed = self.cfg.destination.read_baseline_targets(self.cfg.registration)
+        return self._landed.get((schema, table)) or self.cfg.target_schema(schema, table)
 
     def all(self) -> set[str]:
         return set(self.of.values())
@@ -525,7 +533,7 @@ def _initialize(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
     # The exported snapshot IS the consistent point: nothing below it is ever streamed, so the
     # boundary is recorded for uniformity (every baseline has one), not because it filters.
     cfg.destination.write_baseline_lsns(
-        cfg.registration, {(r.schema, r.table): handle.consistent_point_lsn for r in relations})
+        cfg.registration, {(r.schema, r.table): handle.consistent_point_lsn for r in relations}, targets)
     cfg.destination.write_checkpoint(cfg.registration, cfg.slot, handle.consistent_point_lsn)
     # A full re-baseline IS a resnapshot: the registry is rewritten with no diff, so a key
     # change the previous signature would have blocked on is already resolved. Written BEFORE
@@ -558,7 +566,7 @@ def _take_baseline(cfg: RuntimeConfig, rel, *, run, owner, pipelines: _Pipelines
         _pending_safe(cfg, pipe, targets(rel.schema, rel.table))
         pipe.run(resource, **BASELINE_KWARGS)
     owner.assert_held()   # the load blocked for a while; the lock may be gone
-    cfg.destination.write_baseline_lsns(cfg.registration, {(rel.schema, rel.table): boundary})
+    cfg.destination.write_baseline_lsns(cfg.registration, {(rel.schema, rel.table): boundary}, targets)
     _clear_rebuilt_quarantine(cfg, bound, [rel])   # rebuilt
     _emit_table_events(run, pipe, unit, {rel.table: rel.schema}, {rel.table},
                        {**extra, "boundary_lsn": boundary})
@@ -607,6 +615,8 @@ def _reconcile_selection(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifec
                          pipelines: _Pipelines, targets: _Targets,
                          blocked: set | None = None) -> tuple[list, list]:
     owner.assert_held()
+    _hold_tables_in_drift_review(cfg, relations, run=run, lc=lc, targets=targets)
+    _refuse_overwriting_held(cfg, relations, lc=lc, targets=targets)
     desired = [(r.schema, r.table) for r in relations]
     by_key = {(r.schema, r.table): r for r in relations}
     # Mark the newcomers BEFORE the ALTER PUBLICATION. A crash in between leaves a published
@@ -624,6 +634,7 @@ def _reconcile_selection(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifec
         for key in added:
             _baseline(cfg, by_key[key], run=run, owner=owner, lc=lc, pipelines=pipelines,
                       targets=targets, detail="added to selection")
+    _settle_moved_tables(cfg, relations, run=run, owner=owner, lc=lc, pipelines=pipelines, targets=targets)
     for schema, table in dropped:
         if (schema, table) in (blocked or set()):
             continue   # out of the publication for drift, not retired from the selection
@@ -639,6 +650,71 @@ def _reconcile_selection(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifec
     _retire_unselected(cfg, lc, desired, skip=blocked or set())
     publication.ensure_replica_identity(cfg.source_dsn, desired, cfg.replica_identity)
     return added, dropped
+
+
+def _hold_tables_in_drift_review(cfg: RuntimeConfig, relations, *, run, lc: Lifecycle, targets: _Targets) -> None:
+    """A table in `drift_review` whose target changed stays put until an operator resnapshots it,
+    because a baseline would clear the review: its changes keep going to the schema holding its
+    rows. Runs before anything is written."""
+    reviewing = [r for r in relations if lc.state_of(r.schema, r.table) == DRIFT_REVIEW]
+    if not reviewing:
+        return
+    recorded = cfg.destination.read_baseline_targets(cfg.registration)
+    existing = cfg.destination.destination_tables({targets(r.schema, r.table) for r in reviewing})
+    for r in reviewing:
+        key, now = (r.schema, r.table), targets(r.schema, r.table)
+        last = recorded.get(key)
+        if last is None and (now, r.table) in existing:
+            continue  # no record, and its copy is where it routes
+        # With no record and no copy here, the manifest's static rule is the older routing.
+        stays = last or cfg.target_schema(r.schema, r.table)
+        if stays != now:
+            targets.of[key] = stays
+            run.event(entity=f"{r.schema}.{r.table}", status=cp_status.EV_ERROR, unit="target_schema",
+                      error_detail=f"routes to {now} now, but stays in {stays} until it is resnapshotted, "
+                                   "because it is in drift review",
+                      extra={"remedy": drift.remedy(cfg.manifest_path, f"{r.schema}.{r.table}")})
+
+
+def _refuse_overwriting_held(cfg: RuntimeConfig, wanted, *, lc: Lifecycle, targets: _Targets, resolving=()) -> None:
+    """A table waiting for a resnapshot (drift review or a key change) keeps the copy holding its
+    rows. Nothing else may land there. `resolving` names tables this very resnapshot moves away."""
+    recorded = cfg.destination.read_baseline_targets(cfg.registration)
+    for key, state in lc.known().items():
+        if key in resolving or state not in (DRIFT_REVIEW, RESNAPSHOT_REQUIRED):
+            continue
+        # With no record (or no row: an adopted table), the manifest's static rule is the older routing.
+        last = recorded.get(key) or cfg.target_schema(*key)
+        for w in wanted:
+            if (w.schema, w.table) != key and w.table == key[1] and targets(w.schema, w.table) == last:
+                raise RuntimeError(f"{w.schema}.{w.table} would land on {last}.{key[1]}, which holds "
+                                   f"{key[0]}.{key[1]} until it is resnapshotted. Resnapshot that one first.")
+
+
+def _settle_moved_tables(cfg: RuntimeConfig, relations, *, run, owner, lc: Lifecycle,
+                         pipelines: _Pipelines, targets: _Targets) -> list:
+    """A table whose target schema changed since its last baseline (its module was renamed or
+    changed, #4588) has its rows in the old schema, and from here only new changes would reach the
+    new one. Baseline it there, which replaces any older copy (a table returning to a schema it
+    left); the copy it left stays frozen, like any retired mirror."""
+    recorded = cfg.destination.read_baseline_targets(cfg.registration)
+    existing = cfg.destination.destination_tables({targets(r.schema, r.table) for r in relations})
+    moved = []
+    for r in relations:
+        key, now = (r.schema, r.table), targets(r.schema, r.table)
+        state = lc.state_of(r.schema, r.table)
+        if key not in recorded and state not in (STREAMING, CATCHING_UP):
+            continue  # no baseline yet: whichever path takes it records it
+        last = recorded.get(key)  # none for a table adopted without a baseline, or one from before this
+        if last is None and (now, r.table) in existing:
+            # Its copy is where it routes.
+            cfg.destination.record_baseline_target(cfg.registration, r.schema, r.table, now)
+            continue
+        if last != now and state in (STREAMING, CATCHING_UP):
+            _baseline(cfg, r, run=run, owner=owner, lc=lc, pipelines=pipelines, targets=targets,
+                      detail=f"target schema moved from {last or 'an unrecorded schema'} to {now}")
+            moved.append(key)
+    return moved
 
 
 def _retire_unselected(cfg: RuntimeConfig, lc: Lifecycle, desired, *, skip=frozenset()) -> list:
@@ -1295,8 +1371,9 @@ def status(manifest) -> int:
     checkpoint = dest.read_checkpoint(manifest.source_id)
     print(f"checkpoint: {checkpoint[0] if checkpoint else 'none'}")
     states = dest.read_lifecycle(manifest.source_id)
+    landed = dest.read_baseline_targets(manifest.source_id)
     for (schema, table), state in sorted(states.items()):
-        target = manifest.destination.target_schema(schema, table)
+        target = landed.get((schema, table)) or manifest.destination.target_schema(schema, table)
         print(f"  {schema}.{table:<40} -> {target}.{table:<40} {state}")
     return 0
 
@@ -1339,6 +1416,8 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
             lc = Lifecycle(cfg.destination, cfg.registration, run_ctx)
             targets = _Targets(cfg, plan.relations)
             pipelines = _Pipelines(cfg, targets.all())
+            _refuse_overwriting_held(cfg, wanted_relations, lc=lc, targets=targets,
+                                     resolving={(r.schema, r.table) for r in wanted_relations})
             for rel in wanted_relations:
                 owner.assert_held()
                 # Drop FIRST, in `resnapshot_required`. A drop that fails must leave the
@@ -1379,7 +1458,7 @@ def resnapshot(manifest, *, tables: Sequence[str] | None = None, yes: bool = Fal
                     pipe.run(res, **BASELINE_KWARGS)
                 owner.assert_held()
                 cfg.destination.write_baseline_lsns(cfg.registration,
-                                                    {(rel.schema, rel.table): boundary})
+                                                    {(rel.schema, rel.table): boundary}, targets)
                 _clear_rebuilt_quarantine(cfg, bound, [rel])
                 _emit_table_events(run_ctx, pipe, "snapshot", {rel.table: rel.schema}, {rel.table},
                                    {"reason": "operator resnapshot", "boundary_lsn": boundary})
