@@ -1,7 +1,7 @@
 # feather-cdc-postgres 0.3.0 — stage timing + a bulk schema-registry write
 
 Created: 2026-11-09
-Status: IN PROGRESS
+Status: VERIFIED
 Approved: Yes
 Slice: —
 Type: Fix
@@ -130,4 +130,115 @@ and the gap is stated rather than papered over.
 
 ## Results
 
-Filled in below once run.
+### Test counts
+
+| Suite | Before | After |
+|---|---|---|
+| `feather-cdc-postgres` | 550 passed | **566 passed** (+7 `test_timing.py`, +1 e2e, +8 `test_schema_registry_write.py`) |
+| feather-flow core | 1094 passed, 15 skipped | 1094 passed, 15 skipped |
+| `feather-control-plane` | 48 passed | 48 passed |
+
+`uv lock --check` clean. `uv build --package feather-cdc-postgres` →
+`dist/feather_cdc_postgres-0.3.0-py3-none-any.whl` + `.tar.gz`, with
+`feather_cdc_postgres/timing.py` inside the wheel.
+
+`ruff check` passes on every file this work touched. Two pre-existing failures remain in
+`tests/test_wal_reading.py` (F841) and `tests/test_telemetry.py` (F401) — both present on
+`origin/main`, in files this work does not touch.
+
+### The statement-count proof
+
+Three tests count what the write costs. `_round_trips` charges `executemany(sql, params)` as
+`len(params)` round trips, which is what duckdb's MotherDuck extension really charges, so the
+assertion that fires is a number rather than a method ban.
+
+Run against the **pre-#4708** `write_registry_rows` (`git show HEAD:…/destination.py`, i.e. the
+state after the timing commit and before the bulk write), all three fail:
+
+```
+FAILED test_statements_do_not_grow_with_the_number_of_columns
+  AssertionError: executemany costs MotherDuck a round trip per row
+FAILED test_a_round_trip_is_not_paid_per_row_or_per_table
+  AssertionError: 1295 round trips for 1203 columns over 90 tables — the write is paying
+                  per row or per table again
+  assert 1295 <= 10
+FAILED test_round_trips_barely_move_when_the_registry_grows_tenfold
+  assert (131, 1292) == (4, 6)
+3 failed, 5 passed
+```
+
+1,295 is exactly 90 deletes + 1,203 rows + `begin` + `commit`, so the counter is measuring the
+real thing. On 0.3.0 all eight pass, with 6 statements for the same input.
+
+### The benchmark
+
+`scripts/bench_registry_write.py`, both implementations through the real `Destination` against
+a real duckdb file, at production's registry size:
+
+```
+1400 registry rows over 90 tables (production Featherbase: about 1400 rows)
+
+implementation              round trips  local (s)      at 5 ms (s)  rows landed
+--------------------------------------------------------------------------------
+pre-#4708 (executemany)           1,492      1.097             8.95        1,400
+0.3.0 (multi-row)                     6      0.909             0.96        1,400
+
+Round trips: 1,492 -> 6 (249x fewer)
+  pre-#4708:   575.0 s   (the measured 575 s, by construction)
+  0.3.0:         2.3 s
+```
+
+Read it this way:
+
+- **Round trips, 1,492 → 6, is the measured result.** Counted on the real code path, with both
+  implementations leaving the same 1,400 rows behind.
+- **`local (s)` is the honest null result.** On a local file the fix buys 0.19 s, almost all of
+  it connection setup. That is the point: the cost was never CPU or SQL.
+- **`at 5 ms (s)` shows wall clock tracking the count.** 8.95 s vs 0.96 s ≈ the 1,492 : 6 ratio
+  once the fixed ~0.9 s of connection setup is subtracted.
+- **575 s → 2.3 s is a projection, not a measurement.** 385 ms per round trip is production's
+  own 575 s divided by the 1,492 trips the old code pays for 1,400 rows, applied linearly.
+  The 575 s line is therefore true by construction and is shown only to anchor the other.
+
+### What is NOT proven
+
+- **The ~87 s end-to-end run is not verified here.** No local test or benchmark reaches
+  MotherDuck, a production-sized source database, or a real slot. rama_dw's own PR said
+  "about 100 s instead of about 670 s" as an *expectation*, measured only by the
+  `stage_timing` events of the first run after its deploy. 674 − 575 = 99 s is the arithmetic;
+  87 s is the number reported from production after the deploy, and nothing in this repo
+  confirms it.
+- The remaining stages — `reconcile_counts` at 56 s, and the ~43 s of everything else — are
+  untouched by this work.
+- The timing instrumentation's own overhead against a real control plane is not measured. It is
+  one `control.event` insert per stage, 16 per run, which is an order the run log already
+  carries for ordinary per-relation events.
+
+### `validate` against production's registrations
+
+All three copied out of rama_dw `origin/main` into a temp dir and run against the built 0.3.0
+wheel in an isolated environment (`uv run --isolated --no-project --with <wheel>`):
+
+```
+manifest: featherbase.yml                       # also featherbase_dev.yml, featherbase_staging.yml
+source_id: featherbase
+dsn from: $FEATHERBASE_PG_DSN
+problems:
+  [warning] replica_identity_full_cost: …
+  [error] env_not_set: environment variable FEATHERBASE_PG_DSN is not set
+```
+
+`env_not_set` is the only error and is expected with no credentials present — it is the
+*runtime* check, not the structural one. Nothing is reported as an unknown key.
+
+Negative control, so the check is known to discriminate: published **0.1.0** against the same
+file still fails structurally, and published **0.2.0** gives output identical to 0.3.0's.
+
+```
+0.1.0: [error] unknown key(s) in destination.table_schemas[]: from_module
+0.2.0: (identical to 0.3.0)
+```
+
+A wheel-level smoke also confirms the ported API is really in the artifact: `run_relations` and
+`drift.scan` default `clock` to `NO_CLOCK`, `stream.drain` takes `note_time`, `connect()`
+returns a `TimedConnection`, and `write_registry_rows` lands 1,400 rows.
