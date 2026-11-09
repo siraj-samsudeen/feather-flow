@@ -18,6 +18,7 @@ from . import discovery, publication
 from .lifecycle import (
     DISCOVERED, DRIFT_REVIEW, RESNAPSHOT_REQUIRED, RETIRED, SNAPSHOTTING, Lifecycle,
 )
+from .timing import NO_CLOCK
 from .schema_registry import (
     TEXT_FALLBACK, classify_drift, compile_relation, project, project_signature, signature,
 )
@@ -117,13 +118,16 @@ def record_signature(cfg, rel, *, run=None) -> dict | None:
 
 
 def scan(cfg, relations, *, run, lc: Lifecycle, owner,
-         manifest_path: str = "<manifest>") -> DriftOutcome:
+         manifest_path: str = "<manifest>", clock=NO_CLOCK) -> DriftOutcome:
     """Compile every desired relation, persist the registry, and act on the diff vs last run."""
     cfg.destination.ensure_runtime_tables()
-    stored = cfg.destination.read_signatures(cfg.registration)
-    sources = _sources(cfg)
-    rows, sigs = _compile_all(cfg, relations, run=run, sources=sources)
-    cfg.destination.write_registry_rows(rows)
+    with clock.stage("drift_read_signatures"):
+        stored = cfg.destination.read_signatures(cfg.registration)
+    with clock.stage("drift_read_source_catalog"):
+        sources = _sources(cfg)
+        rows, sigs = _compile_all(cfg, relations, run=run, sources=sources)
+    with clock.stage("drift_write_schema_registry"):
+        cfg.destination.write_registry_rows(rows)
     out = DriftOutcome()
 
     for rel in relations:

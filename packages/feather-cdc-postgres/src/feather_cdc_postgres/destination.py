@@ -18,6 +18,8 @@ import dlt
 import duckdb
 from dlt.destinations.impl.motherduck.configuration import MotherDuckCredentials
 
+from .timing import TimedConnection
+
 RUNTIME_SCHEMA = "_cdc_runtime"
 
 
@@ -112,19 +114,20 @@ class Destination:
         re-raised as a RuntimeError with the token scrubbed and no chained cause."""
         token = self._token()
         try:
-            with duckdb.connect("md:", config={"motherduck_token": token}) as con:
+            with TimedConnection(lambda: duckdb.connect("md:", config={"motherduck_token": token})) as con:
                 return fn(con)
         except Exception as exc:  # noqa: BLE001 — re-raised below without the token
             detail = f"{type(exc).__name__}: {exc}".replace(token, "***redacted***")
             # `from None`: a chained cause would carry the unredacted text into the traceback.
             raise RuntimeError(f"{what}: {detail}") from None
 
-    def connect(self) -> duckdb.DuckDBPyConnection:
+    def connect(self) -> TimedConnection:
+        """`with dest.connect() as con` yields the duckdb connection; its open time is recorded (#4708)."""
         if self.spec.kind == "duckdb":
-            return duckdb.connect(self.credentials())
+            return TimedConnection(lambda: duckdb.connect(self.credentials()))
         # config= keeps the token out of the connection string duckdb quotes in errors.
-        return duckdb.connect(f"md:{self.spec.database}",
-                              config={"motherduck_token": self._token()})
+        return TimedConnection(lambda: duckdb.connect(f"md:{self.spec.database}",
+                                                      config={"motherduck_token": self._token()}))
 
     # --- pipelines ---
     def pipeline_for_target(self, target_schema: str, pipeline_name: str | None = None, *,

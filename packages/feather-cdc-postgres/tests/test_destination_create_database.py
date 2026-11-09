@@ -140,7 +140,7 @@ def _wire_runner(monkeypatch, log):
     monkeypatch.setattr(runner, "_compile", lambda m: ("postgresql://fake", plan))
     monkeypatch.setattr(runner, "_control_plane", lambda m, dev: _FakeCP(log))
 
-    def fake_execute(cfg, relations, *, cp):
+    def fake_execute(cfg, relations, *, cp, clock=None):
         log.append(("execute",))
         return 0
 
